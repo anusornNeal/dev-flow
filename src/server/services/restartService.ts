@@ -75,7 +75,7 @@ export function requestDevFlowRestart(
     throw createApiError(
       409,
       'RESTART_UNSUPPORTED',
-      'Safe DevFlow restart requires the DevFlow supervisor. Start DevFlow with npm run dev or npm run start:all; raw npm run dev:server is intentionally not restartable. Persistent external transport services such as zrok are outside the API restart scope and remain running.',
+      'Safe DevFlow restart requires the DevFlow supervisor. Start DevFlow with npm run dev or npm run start:all; raw npm run dev:server is intentionally not restartable. The DevFlow-managed OpenAI Tunnel is outside API-only restart scope and remains running when present.',
       {
         details: {
           requiredSupervisor: DEVFLOW_RESTART_SUPERVISOR_START_ALL,

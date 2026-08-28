@@ -636,14 +636,14 @@ test('task health is read-only across repeated orphan diagnostics', () => {
 });
 
 
-test('workflow health exposes bounded zrok supervisor evidence without provider inspector state', () => {
+test('workflow health exposes bounded OpenAI tunnel supervisor evidence', () => {
   const repo = createRepo('tunnel-evidence');
   const previousAppRoot = process.env.DEVFLOW_APP_ROOT;
   const runtimeRoot = path.join(tempRoot, 'tunnel-evidence-runtime');
   const runtimeDir = path.join(runtimeRoot, '.devflow');
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(path.join(runtimeDir, 'supervisor-state.json'), JSON.stringify({
-    version: 1,
+    version: 2,
     supervisor: 'start-all',
     mode: 'all',
     shuttingDown: false,
@@ -651,13 +651,15 @@ test('workflow health exposes bounded zrok supervisor evidence without provider 
     updatedAt: '2026-08-16T00:02:00.000Z',
     processes: {
       server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
-      zrok: { label: 'zrok', status: 'running', restartAttempt: 0 },
+      tunnel: { label: 'tunnel', status: 'running', restartAttempt: 0 },
     },
     tunnelHealth: {
-      status: 'degraded', generation: 'B', lifecyclePhase: 'steady-state', consecutiveProbeFailures: 2,
-      lastProbeAt: '2026-08-16T00:02:00.000Z', lastProbeStatusCode: 503, lastProbeLatencyMs: 90,
-      lastFailureAt: '2026-08-16T00:02:00.000Z', lastErrorClass: 'http-5xx', lastErrorCode: 'ZROK_PUBLIC_HTTP_503',
-      recoveryAttempt: 1, lastRecoveryAt: '2026-08-16T00:01:30.000Z', message: 'Public zrok route is degraded.',
+      status: 'degraded',
+      lastCheckedAt: '2026-08-16T00:02:00.000Z',
+      lastFailureAt: '2026-08-16T00:02:00.000Z',
+      lastErrorClass: 'tunnel-client',
+      lastErrorCode: 'TUNNEL_HEALTH_DEGRADED',
+      message: 'OpenAI tunnel runtime is degraded.',
     },
   }), 'utf8');
   process.env.DEVFLOW_APP_ROOT = runtimeRoot;
@@ -665,8 +667,8 @@ test('workflow health exposes bounded zrok supervisor evidence without provider 
     const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
     const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
     assert.equal(full.diagnostics.runtimeSupervisor.tunnel.status, 'degraded');
-    assert.equal(full.diagnostics.runtimeSupervisor.tunnel.lastErrorClass, 'http-5xx');
-    assert.equal(full.diagnostics.runtimeSupervisor.tunnel.recoveryAttempt, 1);
+    assert.equal(full.diagnostics.runtimeSupervisor.tunnel.lastErrorClass, 'tunnel-client');
+    assert.equal(full.diagnostics.runtimeSupervisor.tunnel.lastErrorCode, 'TUNNEL_HEALTH_DEGRADED');
     assert.equal(full.diagnostics.runtimeSupervisor.tunnel.pressure, undefined);
     assert.equal(full.diagnostics.runtimeSupervisor.tunnel.recentFailures, undefined);
     assert.equal(compact.runtime.supervisor.tunnelStatus, 'degraded');

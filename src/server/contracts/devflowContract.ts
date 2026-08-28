@@ -138,7 +138,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'restart_devflow',
-    description: 'Request a guarded restart of the DevFlow API runtime only. The persistent external transport (including the zrok Agent Service/reserved share) stays outside restart scope so its public MCP endpoint is expected to remain unchanged. Safe restart requires the start-all supervisor; active MCP work blocks restart.',
+    description: 'Request a guarded restart of the DevFlow API runtime only. The DevFlow-managed OpenAI Tunnel stays outside API restart scope and is expected to remain running while the local server child is replaced. Safe restart requires the start-all supervisor; active MCP work blocks restart.',
     inputSchema: {
       type: 'object',
       properties: {

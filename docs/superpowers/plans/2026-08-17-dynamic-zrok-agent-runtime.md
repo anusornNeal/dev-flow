@@ -1,5 +1,7 @@
 # Dynamic zrok Agent Runtime Implementation Plan
 
+> **Historical / superseded:** This plan targets the retired zrok transport. Current runtime guidance is `docs/runtime-supervisor.md` and uses OpenAI Tunnel. Do not execute this plan against the current codebase.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make DevFlow use the live local zrok Agent share as its account-neutral source of truth, dynamically discover the public MCP endpoint, and suppress unsafe takeover when Agent remoting is unsupported.

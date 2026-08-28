@@ -1,5 +1,7 @@
 # zrok Switch Here Implementation Plan
 
+> **Historical / superseded:** This plan targets the retired zrok ownership flow. Current runtime guidance is `docs/runtime-supervisor.md` and uses OpenAI Tunnel. Do not execute this plan against the current codebase.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an explicit one-click `Switch here` action that releases an active remote zrok share and activates the current DevFlow runtime when remote fencing is unsupported.

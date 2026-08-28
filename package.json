@@ -7,6 +7,9 @@
   "scripts": {
     "setup": "tsx scripts/setup.ts",
     "start:all": "tsx scripts/start-all.ts",
+    "tunnel:start": "tsx scripts/openai-tunnel.ts start",
+    "tunnel:status": "tsx scripts/openai-tunnel.ts status",
+    "tunnel:stop": "tsx scripts/openai-tunnel.ts stop",
     "doctor": "tsx scripts/doctor.ts",
     "typecheck": "tsc --noEmit",
     "verify": "tsx scripts/verify.ts",

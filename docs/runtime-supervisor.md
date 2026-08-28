@@ -1,171 +1,178 @@
-# DevFlow Runtime Supervisor
+# DevFlow runtime supervisor
 
-DevFlow has two supported supervised launch modes. Both share the same guarded API restart contract; the difference is whether the launcher also reconciles the persistent zrok public transport.
+DevFlow has two supported supervisor modes. Both use the same single-instance runtime ownership and guarded API restart contract; only `all` mode manages OpenAI Tunnel.
 
-## Standard startup
+## Launch modes
 
-Local development:
+### Local only
 
 ```bash
 npm run dev
 ```
 
-`npm run dev` starts `scripts/start-all.ts --server-only`. The supervisor launches the raw API through `npm run dev:server` and injects a fresh restart supervisor token. The raw server command remains separate so the supervisor never recursively launches itself.
+Starts the DevFlow API/server under `scripts/start-all.ts --server-only`. Tunnel configuration is not required.
 
-Full one-click startup:
+### DevFlow + OpenAI Tunnel
 
 ```bash
 npm run start:all
 ```
 
-`start:all` runs setup, starts/reuses the DevFlow API runtime, reconciles zrok, and opens the browser.
+`start:all` runs setup, starts or reuses the local API, waits for `/api/capabilities`, then connects the configured OpenAI Tunnel runtime to the local `/mcp` endpoint.
 
-On Windows, `Start DevFlow.bat` launches the hidden tray bootstrap, which requests the same `start:all` path.
+The platform launchers use the same supervisor:
 
-## Single-instance runtime ownership
+- Windows `Start DevFlow.bat` -> tray/bootstrap -> `npm run start:all`
+- macOS `Start DevFlow.command` -> `npm run start:all`
 
-Both launch modes enter the same authoritative single-instance supervisor path. The first launcher atomically claims `.devflow/runtime-owner/` and publishes `owner.json` with an opaque runtime instance id plus a loopback-only control endpoint/token. A later launcher challenges that control endpoint and requires the supervisor name, instance id, PID, and lifecycle state to match before reusing the runtime.
+## OpenAI Tunnel lifecycle
 
-A dead or invalid control identity is treated as stale ownership. Recovery removes only stale ownership metadata and races again for the atomic claim; it never kills a process merely because a PID, process name, or port looks familiar. If the configured DevFlow port is occupied after a new owner is established, startup fails with `DEVFLOW_PORT_CONFLICT` and leaves the unrelated process untouched.
+DevFlow delegates tunnel process/profile ownership to the native `tunnel-client runtimes ...` command family instead of reimplementing the tunnel protocol or running an OS-specific service.
 
-Repeated healthy launches focus/open the recorded DevFlow app URL and do not create a duplicate supervisor/API tree.
+The lifecycle wrapper is `scripts/openai-tunnel.ts`.
 
-## zrok lifecycle
-
-zrok is deliberately not a child tunnel process. On Windows, the one-click bootstrap installs or repairs a persistent `zrokAgent` service and a reserved public name/share.
-
-The first run may require:
-
-1. Administrator approval to install/configure the Windows service.
-2. A zrok account token if the service environment has not been enabled yet.
-3. Reserved-name selection: an explicit `DEVFLOW_ZROK_RESERVED_NAME` wins; otherwise a valid local saved selection is reused; otherwise the bootstrap lists account-owned reserved names and lets the user choose an existing name or create a new one.
-4. Creation of the selected reserved name only when the account does not already own it.
-5. Agent remoting enrollment when the controller supports that capability. An explicit HTTP 501/unimplemented response leaves local service readiness intact and reports remote control as unsupported.
-
-The token is requested with a secure prompt and used only for zrok environment enablement; it is not stored in `.env` or in DevFlow's local selection state. The resolved reserved name is stored as the only field in ignored `.devflow/zrok-selection.json`, making repeated startup and multi-name accounts deterministic without persisting a credential.
-
-The bootstrap never asks for or constructs a public hostname from the reserved name. The local Agent's live `frontendEndpoint`, exposed by `/api/zrok/status`, is authoritative; `DEVFLOW_ZROK_PUBLIC_URL` is only an explicit fallback when live status is temporarily unavailable. On another machine, choosing a reserved name already active elsewhere leads to `Standby`; ownership changes remain an explicit Take over operation.
-
-### Service/share reconciliation
-
-`start:all` invokes `scripts/zrok-bootstrap.ps1` once during startup as an idempotent setup step. A successful bootstrap means the required zrok tooling/environment, reserved name, agent enrollment, and Windows service are ready. The supervisor models this logical transport lifecycle as `processes.zrok`, but no zrok child PID is owned by the supervisor.
-
-After service/share readiness, the supervisor reads local `/api/zrok/status` before each public probe and adopts any valid live `baseUrl`, including when no public URL was configured at startup. A changed Agent endpoint replaces the probe target without restarting DevFlow; missing or invalid status URLs leave the current valid target unchanged. A fresh generation starts as `unknown`; successful public reachability makes it `healthy`. After startup grace, consecutive failures become `degraded` and then `down` at the configured threshold.
-
-If the public route is `down`, DevFlow probes the local API and reads the local zrok status without mutation. `Standby`/`remote-active` remains observational and never triggers repair, re-enrollment, or takeover. Other periodic public-route failures are also observation-only: DevFlow does not invoke the bootstrap or Windows elevation path; the persistent agent service/share remains untouched for manual Recheck or explicit Takeover.
-
-A supervisor shutdown stops its DevFlow API child but intentionally leaves the persistent zrok Agent Service/reserved share running. Starting DevFlow again reconciles and reuses that state.
-
-### zrok status and takeover
-
-`GET /api/zrok/status` is the bounded source of truth used by the UI and smoke tooling. It reports one of:
-
-- `setup-required`
-- `starting`
-- `online`
-- `degraded`
-- `offline`
-- `standby`
-- `setup-error`
-
-The status packet includes bounded service/share/public-health evidence and the managed MCP URL; it does not expose account tokens or enrollment secrets.
-
-If another enrolled machine is actively serving the same reserved name, this machine reports `standby`. DevFlow never automatically steals ownership. `POST /api/zrok/takeover` is an explicit operation: it verifies the remote owner, fences the previous owner where supported, activates the local share, and verifies public routing before reporting success.
-
-## Public probe configuration
-
-Defaults can be tuned without changing the MCP endpoint contract:
-
-```env
-DEVFLOW_ZROK_RESERVED_NAME="your-reserved-name"
-# Optional fallback; live /api/zrok/status baseUrl takes precedence.
-DEVFLOW_ZROK_PUBLIC_URL="https://your-current-zrok-endpoint.example"
-DEVFLOW_ZROK_PROBE_INTERVAL_MS=15000
-DEVFLOW_ZROK_PROBE_TIMEOUT_MS=5000
-DEVFLOW_ZROK_PROBE_STARTUP_GRACE_MS=30000
-DEVFLOW_ZROK_PROBE_FAILURE_THRESHOLD=3
-DEVFLOW_ZROK_RECOVERY_COOLDOWN_MS=15000
-```
-
-Runtime supervisor state is persisted under `.devflow/supervisor-state.json`. `getDevFlowDiagnostics()` reads that bounded state directly. It reports API lifecycle and zrok/public-route health separately, including public probe status, latency, generation, consecutive failures, error classification, and recovery attempt metadata when present. It no longer depends on a provider-specific local inspector or a separate tunnel-pressure log.
-
-## Windows launcher and tray
-
-The tray uses a project-scoped Windows mutex so duplicate tray launches reuse the existing control surface. It may request `npm run start:all`, but it does not own the resulting processes; the single-instance supervisor remains authoritative.
-
-Tray **Restart DevFlow** calls the same `/api/restart` guarded-ticket path as `restart_devflow`. Active/queued meaningful MCP work still produces `RESTART_BUSY` rather than a force kill.
-
-Tray **Stop Server && Exit** sends an authenticated loopback shutdown request to the runtime-owner control endpoint. The tray does not sweep ports, kill by process name, directly spawn the raw server, or stop/recreate the zrok Agent Service.
-
-## Raw/debug startup
+Supported operator commands:
 
 ```bash
-npm run dev:server
+npm run tunnel:start
+npm run tunnel:status
+npm run tunnel:stop
 ```
 
-`dev:server` runs `tsx server.ts` directly. It is intended for tests/debugging and is intentionally not self-restartable. A server cannot safely terminate itself and promise relaunch unless a durable parent process owns the handoff.
+The managed alias defaults to `devflow`.
 
-## Guarded restart lifecycle
+### Start
 
-`restart_devflow` is API-only and preserves external transport state.
-
-1. The request verifies the supported supervisor identity and matching opaque token.
-2. Restart is rejected with `RESTART_BUSY` while durable MCP jobs are queued/active or meaningful Streamable HTTP MCP operations are in-flight/recent inside the bounded quiescence window. The restart request itself and an idle long-lived MCP stream do not keep the runtime permanently busy.
-3. DevFlow persists an accepted restart ticket with `runtimeScope=devflow-api-only` and `externalTransportPolicy=preserve-service-and-endpoint`.
-4. DevFlow returns the MCP response before exiting with the dedicated restart exit code.
-5. The supervisor validates the ticket/token pair and launches a replacement raw API process.
-6. The replacement runtime marks the same ticket healthy after startup. Duplicate fresh restart requests reuse the current ticket.
-
-The zrok Agent Service and reserved share are outside this restart path. A normal DevFlow API restart therefore does not stop/re-enroll zrok or intentionally change the public MCP URL.
-
-After reconnect, `get_devflow_restart_status` can read the durable ticket. Missing/spoofed supervisor state remains `RESTART_UNSUPPORTED`; callers should relaunch through a supported supervisor instead of weakening the gate.
-
-The internal supervisor identifier remains `start-all` for backward compatibility with durable restart tickets and tests. The identifier names the supervisor implementation; it does not imply that every supported launch must invoke the `start:all` npm script.
-
-## Process graph
-
-Local development:
+For an existing remote tunnel, DevFlow uses the equivalent of:
 
 ```text
-npm run dev
-  -> DevFlow supervisor (--server-only)
-       -> npm run dev:server
-            -> server.ts
+tunnel-client runtimes connect
+  --alias <alias>
+  --tunnel-id <tunnel_id>
+  --runtime-api-key env:<runtime-key-env-name>
+  --mcp-server-url http://127.0.0.1:<port>/mcp
+  --json
 ```
 
-Full Windows startup:
+Before connecting, DevFlow checks local runtime status so repeated startup can reuse a running alias. After connect, status is read again before the supervisor reports success.
 
-```text
-Start DevFlow.bat / npm run start:all
-  -> DevFlow supervisor
-       -> npm run dev:server
-            -> server.ts
+DevFlow never puts the literal runtime key in the command line. The configured key remains in the process environment and tunnel-client receives only the `env:<name>` reference.
 
-persistent external transport
-  -> Windows Service: zrokAgent
-       -> reserved zrok share
-            -> <live Agent frontendEndpoint>/mcp
+### Status
+
+`tunnel:status` reads the local managed runtime with `tunnel-client runtimes status <alias> --json`.
+
+DevFlow understands the structured `process_running`, `healthy`, and `ready` fields when available. If the tunnel client succeeds but does not expose a definitive health boolean, supervisor health remains `unknown`; it is not promoted to healthy by assumption.
+
+### Stop
+
+`tunnel:stop` uses `tunnel-client runtimes stop <alias> --json` and confirms stopped status. A missing/already-stopped local runtime is treated idempotently as stopped.
+
+A full supervisor shutdown also stops the managed tunnel before stopping the local DevFlow server.
+
+## Configuration
+
+Required for tunnel startup:
+
+```env
+DEVFLOW_OPENAI_TUNNEL_ID="tunnel_your_id"
+CONTROL_PLANE_API_KEY="your-runtime-key"
 ```
 
-The API runtime and zrok transport can therefore be restarted/reconciled independently.
+Accepted tunnel ID alias:
 
-## MCP regression smoke
+```env
+CONTROL_PLANE_TUNNEL_ID="tunnel_your_id"
+```
 
-`scripts/smoke-multi-mcp.mjs` keeps two bounded modes:
+Optional:
 
-- **local** — starts an isolated raw DevFlow API, exercises five MCP sessions, raw stream interruption/session retention, restart busy/quiescence behavior, and the production tunnel-health state machine.
-- **public** — discovers the managed public base URL from the local `/api/zrok/status` contract and runs five clients against the reserved zrok `/mcp` endpoint. It verifies API/runtime contract stability and that the managed public URL/service generation does not unexpectedly change during the bounded run.
+```env
+DEVFLOW_TUNNEL_ALIAS="devflow"
+DEVFLOW_TUNNEL_CLIENT_BIN="tunnel-client"
+DEVFLOW_TUNNEL_RUNTIME_KEY_ENV="CONTROL_PLANE_API_KEY"
+DEVFLOW_TUNNEL_STARTUP_WAIT_MS=30000
+TUNNEL_CLIENT_STATE_DIR="..." # otherwise ignored .devflow/tunnel-client
+```
 
-The public smoke does not use a local provider inspector, does not read provider request history/bodies, and does not invent a numeric provider-rate safety margin.
+The state directory contains machine-local tunnel runtime metadata. It is not portable application data and should not be copied when moving DevFlow to another machine.
 
-Public `restart_devflow` verification is kept separate from a `run_project_command` smoke invocation because the command itself is a durable active MCP job and correctly causes the guarded restart gate to return `RESTART_BUSY`. Perform the explicit public restart check from an otherwise quiescent MCP client, then verify `/api/zrok/status` reports the same MCP URL after reconnect.
+## Single-instance ownership
 
-## Startup benchmark
+The supervisor owns one runtime record under `.devflow/runtime-owner/owner.json` and exposes a random authenticated loopback control port.
 
-A local Windows benchmark on August 8, 2026 measured three cold-ish launches until the DevFlow TCP port accepted connections:
+A second launcher probes that owner. When the owner is healthy it reuses the existing local API instead of starting a second server.
 
-- Raw `npm run dev:server`: 5298 / 5540 / 5188 ms; average **5342 ms**.
-- Supervised `npm run dev`: 5653 / 5812 / 5803 ms; average **5756 ms**.
-- Measured supervisor startup overhead: **414 ms (+7.7%)** on that machine.
+If the second launcher requested full `start:all`, it can attach/reuse the tunnel on top of an already-running local-only DevFlow runtime. The supervisor-state tunnel record makes the eventual owner shutdown stop that tunnel too.
 
-This is a machine-local historical measurement, not an SLO. The supervisor is a parent process only; once the API is running, normal HTTP/MCP requests go directly to the server and do not traverse another supervisor request hop.
+Stale owner records are quarantined only after the loopback identity probe proves the prior supervisor is no longer healthy.
+
+## Supervisor diagnostics
+
+Runtime supervisor state is persisted under ignored `.devflow/supervisor-state.json`.
+
+The current state model separates:
+
+- `processes.server` — the DevFlow API child owned by `start-all`.
+- `processes.tunnel` — logical tunnel-client managed-runtime lifecycle.
+- `tunnelHealth` — bounded health/status evidence returned by tunnel-client.
+
+`getDevFlowDiagnostics()` and `devflow_health_check` project these separately. Provider-specific route probing is not used.
+
+When the local API is healthy but tunnel state is degraded/down, diagnostics recommend `npm run tunnel:status` and tunnel-client diagnostics.
+
+## Guarded API-only restart
+
+`restart_devflow` remains intentionally scoped to the API child.
+
+Flow:
+
+1. The server validates restart eligibility and creates a durable restart ticket.
+2. The MCP response is returned.
+3. The API child exits with DevFlow's restart exit code.
+4. `start-all` recognizes the ticket/token and launches the replacement server child.
+5. The OpenAI Tunnel managed runtime is left running throughout the API restart.
+6. The tunnel continues targeting the same local `/mcp` URL, so the replacement API becomes reachable through the existing tunnel runtime once ready.
+
+Meaningful active/recent MCP work blocks restart with `RESTART_BUSY`.
+
+A restart failure updates the durable restart ticket; it does not trigger tunnel teardown.
+
+## Full shutdown
+
+The runtime-owner control endpoint accepts authenticated `POST /shutdown` from the tray. Ctrl+C/SIGTERM uses the same supervisor shutdown path.
+
+Full shutdown order:
+
+1. mark supervisor `shuttingDown`,
+2. stop the DevFlow-managed OpenAI Tunnel alias when present,
+3. stop the DevFlow API child process tree,
+4. release runtime ownership,
+5. exit the supervisor.
+
+This is deliberately different from API-only restart.
+
+## Moving to another machine
+
+The portable identity is the OpenAI `tunnel_id`, not tunnel-client's machine-local state directory.
+
+Recommended move:
+
+1. stop the old machine's tunnel,
+2. clone/install/setup DevFlow on the new machine,
+3. install `tunnel-client`,
+4. configure the same tunnel ID and a valid runtime key on the new machine,
+5. run `npm run start:all`,
+6. confirm `npm run tunnel:status`,
+7. make a real read-only MCP call from ChatGPT.
+
+Do not copy `.devflow/tunnel-client` to migrate the runtime.
+
+## Smoke and verification boundary
+
+`scripts/smoke-multi-mcp.mjs` continues to exercise the local Streamable HTTP MCP concurrency/session/restart behavior.
+
+The retired provider-public-URL smoke mode is intentionally gone. OpenAI Tunnel does not require DevFlow to publish a provider public base URL that a local smoke process can call directly. Tunnel-path verification is therefore:
+
+1. `npm run tunnel:status` for native local runtime health,
+2. a real MCP call from ChatGPT/OpenAI through the configured tunnel ID.

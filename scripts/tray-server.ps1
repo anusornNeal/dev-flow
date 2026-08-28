@@ -90,11 +90,6 @@ $openItem.Text = "Open App in Browser"
 $openItem.add_Click({ Start-Process (Get-AppUrl) })
 $menu.MenuItems.Add($openItem)
 
-$zrokItem = New-Object System.Windows.Forms.MenuItem
-$zrokItem.Text = "Open zrok Status"
-$zrokItem.add_Click({ Start-Process "$(Get-AppUrl)/api/zrok/status" })
-$menu.MenuItems.Add($zrokItem)
-$menu.MenuItems.Add("-")
 
 $restartItem = New-Object System.Windows.Forms.MenuItem
 $restartItem.Text = "Restart DevFlow"

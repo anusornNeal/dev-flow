@@ -33,13 +33,12 @@ test('Header no longer renders the legacy Auto Work control', () => {
   assert.doesNotMatch(html, /Schema Spec/);
 });
 
-test('Header uses live zrok status UI without a configured tunnel URL prop', () => {
+test('Header no longer embeds provider-specific tunnel status UI', () => {
   const source = fs.readFileSync('src/components/Header.tsx', 'utf8');
-  assert.match(source, /ZrokStatusPanel/);
-  assert.doesNotMatch(source, /NgrokStatusPanel|ngrokUrl/);
+  assert.doesNotMatch(source, /ZrokStatusPanel|NgrokStatusPanel|ngrokUrl/i);
 
   const html = renderHeader();
-  assert.match(html, /zrok status: Starting/);
+  assert.doesNotMatch(html, /zrok|ngrok/i);
 });
 
 test('normal Board move flow no longer emits legacy Auto Work preflight UI events', () => {

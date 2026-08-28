@@ -1,5 +1,7 @@
 # zrok Switch Here Design
 
+> **Historical / superseded:** This design records the retired zrok ownership flow. Current runtime guidance is `docs/runtime-supervisor.md` and uses OpenAI Tunnel. Keep this file only as design history; do not use it as current implementation guidance.
+
 ## Goal
 
 Allow a user to move the managed reserved zrok share to the current DevFlow machine with one explicit confirmation when the zrok controller does not support authenticated remote-agent fencing.

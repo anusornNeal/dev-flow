@@ -184,7 +184,7 @@ test('target-aware mapped coverage selects only the relevant focused check and e
     resolvedCommands: [
       { command: 'test-focused', semanticKey: 'focused', scope: 'targeted', cost: 'low', resourceKey: 'focused', acceptsTargets: true },
       { command: 'test-command-service', semanticKey: 'command', scope: 'targeted', cost: 'low', resourceKey: 'command' },
-      { command: 'test-zrok-bootstrap', semanticKey: 'zrok', scope: 'targeted', cost: 'low', resourceKey: 'zrok' },
+      { command: 'test-backup-integrity', semanticKey: 'backup', scope: 'targeted', cost: 'low', resourceKey: 'backup' },
     ],
     impactRules: [{
       id: 'task-claim',
@@ -198,7 +198,7 @@ test('target-aware mapped coverage selects only the relevant focused check and e
   assert.deepEqual(plan.commands, ['test-focused']);
   assert.deepEqual(plan.steps[0]?.targets, ['tests/server/taskClaimService.test.ts']);
   assert.deepEqual(plan.impact.selectedChecks, [{ command: 'test-focused', targets: ['tests/server/taskClaimService.test.ts'] }]);
-  assert.deepEqual(plan.impact.omittedCommands.map((entry: any) => entry.command).sort(), ['test-command-service', 'test-zrok-bootstrap']);
+  assert.deepEqual(plan.impact.omittedCommands.map((entry: any) => entry.command).sort(), ['test-backup-integrity', 'test-command-service']);
 });
 
 test('catalog-only fallback never selects unrelated targeted presets without impact evidence', () => {
@@ -206,7 +206,7 @@ test('catalog-only fallback never selects unrelated targeted presets without imp
     changedFiles: ['src/server/services/unmappedService.ts'],
     resolvedCommands: [
       { command: 'test-command-service', semanticKey: 'command', scope: 'targeted', cost: 'low', resourceKey: 'command' },
-      { command: 'test-zrok-bootstrap', semanticKey: 'zrok', scope: 'targeted', cost: 'low', resourceKey: 'zrok' },
+      { command: 'test-backup-integrity', semanticKey: 'backup', scope: 'targeted', cost: 'low', resourceKey: 'backup' },
       { command: 'typecheck', semanticKey: 'typecheck', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
     ],
     impactRules: [{ id: 'other', patterns: ['src/other/**'], commands: ['test-command-service'] }],
@@ -215,7 +215,7 @@ test('catalog-only fallback never selects unrelated targeted presets without imp
   assert.equal(plan.impact.mode, 'fallback');
   assert.deepEqual(plan.commands, ['typecheck']);
   assert.equal(plan.commands.includes('test-command-service'), false);
-  assert.equal(plan.commands.includes('test-zrok-bootstrap'), false);
+  assert.equal(plan.commands.includes('test-backup-integrity'), false);
 });
 
 test('mapped coverage fails closed when a required command or target capability is unavailable', () => {

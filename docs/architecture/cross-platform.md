@@ -18,12 +18,12 @@ DevFlow core/runtime is cross-platform by default.
 
 ## Platform adapters
 
-### Startup and zrok
+### Startup and OpenAI Tunnel
 
-- Windows keeps the existing PowerShell + NSSM `zrokAgent` service bootstrap.
-- macOS uses `scripts/zrok-bootstrap-macos.ts`. It resolves an existing `zrok2` from `DEVFLOW_ZROK_BIN`/PATH or installs the matching darwin release under `.devflow/bin/zrok2` without sudo.
-- The macOS bootstrap enables `~/.zrok2`, keeps only the selected reserved name in `.devflow/zrok-selection.json`, enrolls zrok Agent remoting, starts the user-scoped Agent process when needed, and reconciles the initial public share.
-- macOS Agent service state is derived from the loopback zrok Agent console instead of Windows service-manager APIs.
+- Windows and macOS use the same `tunnel-client runtimes` lifecycle through `scripts/openai-tunnel.ts`; no OS service manager or provider-specific bootstrap is required.
+- `start:all` starts/reuses the local DevFlow API first, then connects the configured OpenAI tunnel alias to the local `/mcp` endpoint.
+- Tunnel runtime state defaults to ignored `.devflow/tunnel-client`; the runtime API key remains an environment secret and is passed to tunnel-client by `env:<name>` reference rather than written into repository state.
+- Intentional supervisor shutdown stops the DevFlow-managed tunnel. Guarded API-only restart leaves the tunnel running while the API child is replaced.
 
 ### Agent launch
 

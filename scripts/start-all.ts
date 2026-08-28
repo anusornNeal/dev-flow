@@ -18,32 +18,30 @@ import {
 import {
   acquireDevFlowRuntimeOwnership,
   assertDevFlowRuntimePortAvailable,
+  type DevFlowRuntimeOwner,
 } from '../src/lib/devFlowRuntimeOwnership';
 import {
-  advanceDevFlowTunnelHealth,
   createDevFlowSupervisorState,
-  resetDevFlowTunnelHealthForGeneration,
   readDevFlowSupervisorState,
   updateDevFlowSupervisorProcess,
   updateDevFlowSupervisorState,
   updateDevFlowSupervisorTunnelHealth,
   writeDevFlowSupervisorState,
   type DevFlowSupervisorProcessLabel,
-  type DevFlowTunnelHealthState,
 } from '../src/lib/devFlowSupervisor';
-import { createZrokRateLimitTracker, type ZrokRateLimitInfo } from '../src/server/services/zrokRateLimitPolicy';
+import {
+  resolveOpenAiTunnelOptions,
+  startOpenAiTunnel,
+  stopOpenAiTunnel,
+  type OpenAiTunnelLifecycleResult,
+  type OpenAiTunnelOptions,
+} from './openai-tunnel';
 
 type StartAllOptions = {
   port: number;
-  zrokPublicUrl: string;
-  zrokReservedName: string;
   openBrowser: boolean;
   openBrowserDelayMs: number;
-  zrokProbeIntervalMs: number;
-  zrokProbeTimeoutMs: number;
-  zrokProbeStartupGraceMs: number;
-  zrokProbeFailureThreshold: number;
-  zrokRecoveryCooldownMs: number;
+  tunnelStartupWaitMs: number;
 };
 
 type ManagedProcess = {
@@ -64,39 +62,10 @@ type StartAllPlan = {
   processes: ManagedProcess[];
 };
 
-type ZrokBootstrapResult = {
-  ready: boolean;
-  publicUrl: string;
-  message: string;
-};
-
-type PublicProbeResult = {
-  ok: boolean;
-  statusCode?: number;
-  latencyMs: number;
-  message: string;
-  failureClass?: ReturnType<typeof classifyPublicProbeFailure> | 'public-url-unavailable';
-  rateLimit?: ZrokRateLimitInfo;
-};
-
-export type ZrokRuntimeStatusProbe = {
-  status?: string;
-  shareState?: string;
-  baseUrl?: string;
-  canRecoverStaleSameMachineOwner?: boolean;
-  rateLimit?: ZrokRateLimitInfo;
-};
-
 const DEFAULT_PORT = 3000;
 const DEFAULT_BROWSER_DELAY_MS = 4000;
-const DEFAULT_ZROK_PROBE_INTERVAL_MS = 15000;
-const DEFAULT_ZROK_PROBE_TIMEOUT_MS = 5000;
-const DEFAULT_ZROK_PROBE_STARTUP_GRACE_MS = 30000;
-const MAX_ZROK_PROBE_STARTUP_GRACE_MS = 120000;
-const DEFAULT_ZROK_PROBE_FAILURE_THRESHOLD = 3;
-const DEFAULT_ZROK_RECOVERY_COOLDOWN_MS = 15000;
-const MAX_ZROK_RUNTIME_STATUS_BYTES = 256 * 1024;
-const MAX_ZROK_PUBLIC_URL_LENGTH = 4096;
+const DEFAULT_TUNNEL_STARTUP_WAIT_MS = 30_000;
+const MAX_TUNNEL_STARTUP_WAIT_MS = 120_000;
 
 function parsePositiveInteger(value: string | undefined, fallback: number) {
   if (!value) return fallback;
@@ -129,43 +98,15 @@ export function buildNpmInvocation(args: string[], env: NodeJS.ProcessEnv = proc
   return { command: executableFor('npm'), args };
 }
 
-export function normalizeZrokPublicUrl(input: { publicUrl?: string; reservedName?: string }) {
-  const publicUrl = String(input.publicUrl || '').trim();
-  if (publicUrl && publicUrl.length <= MAX_ZROK_PUBLIC_URL_LENGTH) {
-    if (/^[a-z][a-z\d+.-]*:\/\//i.test(publicUrl) && !/^https?:\/\//i.test(publicUrl)) return '';
-    const candidate = /^https?:\/\//i.test(publicUrl) ? publicUrl : `https://${publicUrl}`;
-    try {
-      const parsed = new URL(candidate);
-      if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) return '';
-      parsed.pathname = parsed.pathname.replace(/\/+$/, '');
-      parsed.search = '';
-      parsed.hash = '';
-      return parsed.toString().replace(/\/$/, '');
-    } catch {
-      return '';
-    }
-  }
-
-  return '';
-}
-
 export function resolveStartAllOptions(env: NodeJS.ProcessEnv = process.env): StartAllOptions {
   return {
     port: parsePositiveInteger(env.DEVFLOW_PORT || env.PORT, DEFAULT_PORT),
-    zrokPublicUrl: normalizeZrokPublicUrl({
-      publicUrl: env.DEVFLOW_ZROK_PUBLIC_URL || env.DEVFLOW_PUBLIC_URL,
-    }),
-    zrokReservedName: String(env.DEVFLOW_ZROK_RESERVED_NAME || '').trim(),
     openBrowser: parseBoolean(env.DEVFLOW_OPEN_BROWSER, true),
     openBrowserDelayMs: parsePositiveInteger(env.DEVFLOW_OPEN_BROWSER_DELAY_MS, DEFAULT_BROWSER_DELAY_MS),
-    zrokProbeIntervalMs: parsePositiveInteger(env.DEVFLOW_ZROK_PROBE_INTERVAL_MS, DEFAULT_ZROK_PROBE_INTERVAL_MS),
-    zrokProbeTimeoutMs: parsePositiveInteger(env.DEVFLOW_ZROK_PROBE_TIMEOUT_MS, DEFAULT_ZROK_PROBE_TIMEOUT_MS),
-    zrokProbeStartupGraceMs: Math.min(
-      parsePositiveInteger(env.DEVFLOW_ZROK_PROBE_STARTUP_GRACE_MS, DEFAULT_ZROK_PROBE_STARTUP_GRACE_MS),
-      MAX_ZROK_PROBE_STARTUP_GRACE_MS,
+    tunnelStartupWaitMs: Math.min(
+      parsePositiveInteger(env.DEVFLOW_TUNNEL_STARTUP_WAIT_MS, DEFAULT_TUNNEL_STARTUP_WAIT_MS),
+      MAX_TUNNEL_STARTUP_WAIT_MS,
     ),
-    zrokProbeFailureThreshold: parsePositiveInteger(env.DEVFLOW_ZROK_PROBE_FAILURE_THRESHOLD, DEFAULT_ZROK_PROBE_FAILURE_THRESHOLD),
-    zrokRecoveryCooldownMs: parsePositiveInteger(env.DEVFLOW_ZROK_RECOVERY_COOLDOWN_MS, DEFAULT_ZROK_RECOVERY_COOLDOWN_MS),
   };
 }
 
@@ -192,102 +133,6 @@ export function buildStartAllPlan(
     openBrowser: mode === 'all' ? options.openBrowser : false,
     openBrowserDelayMs: options.openBrowserDelayMs,
     processes: [server],
-  };
-}
-
-export function buildZrokBootstrapInvocation(
-  rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'),
-  reservedName = '',
-  platform: NodeJS.Platform = process.platform,
-) {
-  const configuredReservedName = String(reservedName || '').trim();
-  if (platform === 'darwin') {
-    const scriptPath = path.join(rootDir, 'scripts', 'zrok-bootstrap-macos.ts');
-    const tsxCliPath = path.join(rootDir, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-    return {
-      command: process.execPath,
-      args: [
-        tsxCliPath,
-        scriptPath,
-        ...(configuredReservedName ? ['--reserved-name', configuredReservedName] : []),
-      ],
-      scriptPath,
-    };
-  }
-  const scriptPath = path.join(rootDir, 'scripts', 'zrok-bootstrap.ps1');
-  return {
-    command: platform === 'win32' ? 'powershell.exe' : 'pwsh',
-    args: [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      scriptPath,
-      ...(configuredReservedName ? ['-ReservedName', configuredReservedName] : []),
-    ],
-    scriptPath,
-  };
-}
-
-export function parseZrokBootstrapResult(output: string, fallbackPublicUrl = ''): ZrokBootstrapResult {
-  const lines = String(output || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    try {
-      const payload = JSON.parse(lines[index]) as Record<string, unknown>;
-      const status = String(payload.status || payload.state || '').trim().toLowerCase();
-      const code = String(payload.code || '').trim().toLowerCase();
-      const ready = typeof payload.ready === 'boolean'
-        ? payload.ready
-        : typeof payload.ok === 'boolean'
-          ? payload.ok && (!code || ['ready', 'ok', 'success'].includes(code))
-          : ['ready', 'running', 'healthy', 'ok', 'success'].includes(status);
-      const publicUrl = normalizeZrokPublicUrl({
-        publicUrl: String(payload.publicUrl || payload.shareUrl || payload.url || payload.endpoint || fallbackPublicUrl || ''),
-      });
-      return {
-        ready,
-        publicUrl,
-        message: String(payload.message || payload.summary || (ready ? 'zrok bootstrap is ready.' : 'zrok bootstrap did not report ready state.')),
-      };
-    } catch {
-      // Bootstrap may emit human-readable progress before the final structured record.
-    }
-  }
-
-  return {
-    ready: false,
-    publicUrl: normalizeZrokPublicUrl({ publicUrl: fallbackPublicUrl }),
-    message: 'zrok bootstrap did not emit a structured readiness result.',
-  };
-}
-
-export function runZrokBootstrap(
-  options: Pick<StartAllOptions, 'zrokPublicUrl' | 'zrokReservedName'>,
-  rootDir?: string,
-): ZrokBootstrapResult {
-  const invocation = buildZrokBootstrapInvocation(rootDir, options.zrokReservedName);
-  if (!fs.existsSync(invocation.scriptPath)) {
-    return {
-      ready: false,
-      publicUrl: options.zrokPublicUrl,
-      message: `zrok bootstrap script is missing: ${invocation.scriptPath}`,
-    };
-  }
-
-  const result = spawnSync(invocation.command, invocation.args, {
-    env: process.env,
-    encoding: 'utf8',
-    stdio: ['inherit', 'pipe', 'pipe'],
-    windowsHide: false,
-  });
-  const parsed = parseZrokBootstrapResult(result.stdout || '', options.zrokPublicUrl);
-  if (result.status === 0) return parsed;
-
-  const stderr = String(result.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
-  return {
-    ready: false,
-    publicUrl: parsed.publicUrl || options.zrokPublicUrl,
-    message: stderr || parsed.message || `zrok bootstrap failed with exit code ${result.status ?? 1}.`,
   };
 }
 
@@ -330,293 +175,10 @@ export function shouldRestartServerProcess(input: {
     && input.restartState.supervisorToken === input.supervisorToken;
 }
 
-export function classifyPublicProbeFailure(input: { statusCode?: number; error?: unknown }) {
-  const statusCode = Number.isInteger(input.statusCode) ? Number(input.statusCode) : undefined;
-  if (statusCode === 429) return 'rate-limit' as const;
-  if (statusCode && statusCode >= 500) return 'http-5xx' as const;
-  if (statusCode && statusCode >= 400) return 'http-4xx' as const;
-  if (statusCode) return 'http-other' as const;
-  const error = input.error as { name?: unknown; code?: unknown; message?: unknown } | undefined;
-  const text = `${String(error?.name || '')} ${String(error?.code || '')} ${String(error?.message || input.error || '')}`.toLowerCase();
-  if (/abort|timeout|timed out/.test(text)) return 'timeout' as const;
-  if (/enotfound|getaddrinfo|dns/.test(text)) return 'dns' as const;
-  if (/tls|ssl|certificate|cert_/.test(text)) return 'tls' as const;
-  if (/econnrefused|econnreset|socket|connection|fetch failed/.test(text)) return 'connection' as const;
-  return 'network' as const;
-}
-
-function normalizeZrokRateLimitInfo(value: unknown): ZrokRateLimitInfo | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const input = value as Record<string, unknown>;
-  const source = input.source;
-  if (source !== 'public' && source !== 'control' && source !== 'local-agent') return undefined;
-  const firstObservedAt = typeof input.firstObservedAt === 'string' ? input.firstObservedAt : '';
-  const lastObservedAt = typeof input.lastObservedAt === 'string' ? input.lastObservedAt : '';
-  const nextAttemptAt = typeof input.nextAttemptAt === 'string' ? input.nextAttemptAt : '';
-  const retryAfterMs = typeof input.retryAfterMs === 'number' && Number.isFinite(input.retryAfterMs)
-    ? Math.max(0, Math.min(10 * 60_000, Math.round(input.retryAfterMs)))
-    : Number.NaN;
-  const observedCount = Number.isInteger(input.observedCount) && Number(input.observedCount) > 0
-    ? Math.min(999, Number(input.observedCount))
-    : 0;
-  if (!firstObservedAt || !lastObservedAt || !nextAttemptAt || !Number.isFinite(Date.parse(nextAttemptAt)) || !Number.isFinite(retryAfterMs) || observedCount === 0) {
-    return undefined;
-  }
-  return { source, firstObservedAt, lastObservedAt, nextAttemptAt, retryAfterMs, observedCount };
-}
-
-export function getZrokProbeCooldownDelayMs(nextAttemptAt: string | undefined, nowMs = Date.now()) {
-  const nextAttemptMs = Date.parse(String(nextAttemptAt || ''));
-  if (!Number.isFinite(nextAttemptMs)) return 0;
-  return Math.max(0, Math.min(10 * 60_000, Math.round(nextAttemptMs - nowMs)));
-}
-
-export function getZrokProbeAdmission(input: { cooldownUntilMs: number; nowMs?: number }) {
-  const nowMs = input.nowMs ?? Date.now();
-  const remainingMs = Math.max(0, Math.round(input.cooldownUntilMs - nowMs));
-  return remainingMs > 0
-    ? { admit: false as const, nextDelayMs: Math.max(250, remainingMs) }
-    : { admit: true as const, nextDelayMs: 0 };
-}
-
-export function getZrokRecoveryDecision(input: {
-  tunnelStatus: string;
-  consecutiveProbeFailures: number;
-  failureThreshold: number;
-  localApiHealthy: boolean;
-  zrokStatus?: string;
-  zrokShareState?: string;
-  canRecoverStaleSameMachineOwner?: boolean;
-  shuttingDown: boolean;
-  startupGraceUntilMs?: number;
-  lifecyclePhase?: DevFlowTunnelHealthState['lifecyclePhase'];
-  recoveryCooldownUntilMs?: number;
-  nowMs?: number;
-}) {
-  const nowMs = input.nowMs ?? Date.now();
-  if (input.shuttingDown) return 'suppressed-shutdown' as const;
-  if (input.tunnelStatus !== 'down' || input.consecutiveProbeFailures < Math.max(1, input.failureThreshold)) return 'threshold-not-reached' as const;
-  const zrokStatus = String(input.zrokStatus || '').trim().toLowerCase();
-  const zrokShareState = String(input.zrokShareState || '').trim().toLowerCase();
-  if (!input.localApiHealthy) return 'suppressed-local-api-unhealthy' as const;
-  if (input.lifecyclePhase !== 'steady-state' && input.startupGraceUntilMs && input.startupGraceUntilMs > nowMs) return 'suppressed-startup-grace' as const;
-  if (input.recoveryCooldownUntilMs && input.recoveryCooldownUntilMs > nowMs) return 'suppressed-recovery-cooldown' as const;
-  if (zrokStatus === 'standby' || zrokShareState === 'remote-active') {
-    return input.canRecoverStaleSameMachineOwner
-      ? 'recover-stale-same-machine-owner' as const
-      : 'suppressed-standby' as const;
-  }
-  return 'suppressed-periodic-recovery' as const;
-}
-
-export function shouldRecoverZrokSupervisorProcess(input: {
-  publicRouteHealthy: boolean;
-  processStatus?: string;
-  zrokStatus?: string;
-  zrokShareState?: string;
-}) {
-  if (!input.publicRouteHealthy) return false;
-  if (String(input.processStatus || '').trim().toLowerCase() === 'running') return false;
-  return String(input.zrokStatus || '').trim().toLowerCase() === 'online'
-    && String(input.zrokShareState || '').trim().toLowerCase() === 'active';
-}
-
-export function apiCapabilitiesUrl(baseUrl: string) {
-  return new URL('api/capabilities', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
-}
-
-export function apiZrokStatusUrl(baseUrl: string) {
-  return new URL('api/zrok/status', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
-}
-
-export function apiZrokTakeoverUrl(baseUrl: string) {
-  return new URL('api/zrok/takeover', baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
-}
-
-export async function requestZrokStaleSameMachineRecovery(
-  baseUrl: string,
-  timeoutMs: number,
-  fetchImpl: typeof fetch = fetch,
-) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
-  timer.unref();
-  try {
-    const response = await fetchImpl(apiZrokTakeoverUrl(baseUrl), {
-      method: 'POST',
-      signal: controller.signal,
-      redirect: 'manual',
-    });
-    return {
-      ok: response.ok,
-      statusCode: response.status,
-      message: `HTTP ${response.status}`,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      statusCode: undefined,
-      message: error instanceof Error ? error.message : String(error),
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function probeHttpEndpoint(
-  url: string,
-  timeoutMs: number,
-  requireSuccessStatus: boolean,
-  fetchImpl: typeof fetch = fetch,
-  rateLimitTracker?: ReturnType<typeof createZrokRateLimitTracker>,
-): Promise<PublicProbeResult> {
-  const startedAt = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
-  timer.unref();
-  try {
-    const response = await fetchImpl(url, { signal: controller.signal, redirect: 'manual' });
-    const ok = requireSuccessStatus ? response.ok : response.status >= 200 && response.status < 500;
-    const rateLimit = response.status === 429
-      ? (rateLimitTracker || createZrokRateLimitTracker('public')).observe(response.headers.get('retry-after'))
-      : undefined;
-    if (response.status !== 429) rateLimitTracker?.reset();
-    return {
-      ok,
-      statusCode: response.status,
-      latencyMs: Date.now() - startedAt,
-      message: `HTTP ${response.status}`,
-      ...(ok ? {} : { failureClass: classifyPublicProbeFailure({ statusCode: response.status }) }),
-      ...(rateLimit ? { rateLimit } : {}),
-    };
-  } catch (error) {
-    rateLimitTracker?.reset();
-    return {
-      ok: false,
-      latencyMs: Date.now() - startedAt,
-      message: error instanceof Error ? error.message : String(error),
-      failureClass: classifyPublicProbeFailure({ error }),
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export async function probeZrokRuntimeStatus(
-  baseUrl: string,
-  timeoutMs: number,
-  fetchImpl: typeof fetch = fetch,
-): Promise<ZrokRuntimeStatusProbe | undefined> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
-  timer.unref();
-  try {
-    const response = await fetchImpl(apiZrokStatusUrl(baseUrl), { signal: controller.signal, redirect: 'manual' });
-    if (!response.ok) return undefined;
-    const contentLengthHeader = response.headers.get('content-length');
-    const contentLength = contentLengthHeader ? Number(contentLengthHeader) : null;
-    if (contentLength !== null && Number.isFinite(contentLength) && contentLength > MAX_ZROK_RUNTIME_STATUS_BYTES) {
-      await response.body?.cancel();
-      return undefined;
-    }
-    const body = await readBoundedResponseText(response, MAX_ZROK_RUNTIME_STATUS_BYTES);
-    if (body === null) return undefined;
-    const parsed = JSON.parse(body) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-    const payload = parsed as Record<string, unknown>;
-    const share = payload.share && typeof payload.share === 'object'
-      ? payload.share as Record<string, unknown>
-      : undefined;
-    const actionability = payload.actionability && typeof payload.actionability === 'object'
-      ? payload.actionability as Record<string, unknown>
-      : undefined;
-    const rateLimit = normalizeZrokRateLimitInfo(payload.rateLimit);
-    return {
-      status: typeof payload.status === 'string' ? payload.status : undefined,
-      shareState: typeof share?.state === 'string' ? share.state : undefined,
-      baseUrl: typeof payload.baseUrl === 'string' ? payload.baseUrl : undefined,
-      ...(actionability?.canRecoverStaleSameMachineOwner === true
-        ? { canRecoverStaleSameMachineOwner: true }
-        : {}),
-      ...(rateLimit ? { rateLimit } : {}),
-    };
-  } catch {
-    return undefined;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string | null> {
-  if (!response.body) return '';
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytesRead = 0;
-  let text = '';
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) return text + decoder.decode();
-      bytesRead += value.byteLength;
-      if (bytesRead > maxBytes) {
-        await reader.cancel();
-        return null;
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-export function selectZrokPublicProbeUrl(currentPublicUrl: string, runtimeStatus?: ZrokRuntimeStatusProbe) {
-  return normalizeZrokPublicUrl({ publicUrl: runtimeStatus?.baseUrl })
-    || normalizeZrokPublicUrl({ publicUrl: currentPublicUrl });
-}
-
-export async function probeZrokPublicRoute(
-  localBaseUrl: string,
-  currentPublicUrl: string,
-  timeoutMs: number,
-  fetchImpl: typeof fetch = fetch,
-  options: {
-    rateLimitTracker?: ReturnType<typeof createZrokRateLimitTracker>;
-    now?: () => number;
-  } = {},
-) {
-  const runtimeStatus = await probeZrokRuntimeStatus(localBaseUrl, timeoutMs, fetchImpl);
-  const publicUrl = selectZrokPublicProbeUrl(currentPublicUrl, runtimeStatus);
-  const nowMs = (options.now || Date.now)();
-  const sharedPublicRateLimit = runtimeStatus?.rateLimit?.source === 'public'
-    && getZrokProbeCooldownDelayMs(runtimeStatus.rateLimit.nextAttemptAt, nowMs) > 0
-    ? runtimeStatus.rateLimit
-    : undefined;
-  const publicProbe: PublicProbeResult = sharedPublicRateLimit
-    ? {
-        ok: false,
-        statusCode: 429,
-        latencyMs: 0,
-        message: 'HTTP 429 · shared zrok public cooldown is active',
-        failureClass: 'rate-limit',
-        rateLimit: sharedPublicRateLimit,
-      }
-    : publicUrl
-      ? await probeHttpEndpoint(apiCapabilitiesUrl(publicUrl), timeoutMs, true, fetchImpl, options.rateLimitTracker)
-      : {
-          ok: false,
-          latencyMs: 0,
-          message: 'zrok public URL is unavailable from live status/bootstrap/configuration.',
-          failureClass: 'public-url-unavailable',
-        };
-  return { runtimeStatus, publicUrl, publicProbe };
-}
-
-type ProcessCallbacks = {
+function startProcess(processConfig: ManagedProcess, callbacks: {
   onExit?: (child: ChildProcessWithoutNullStreams, code: number | null, signal: NodeJS.Signals | null) => void;
   onError?: (child: ChildProcessWithoutNullStreams, error: Error) => void;
-};
-
-function startProcess(processConfig: ManagedProcess, callbacks: ProcessCallbacks = {}): ChildProcessWithoutNullStreams {
+} = {}): ChildProcessWithoutNullStreams {
   console.log(`[start-all] Starting ${processConfig.label}: ${processConfig.command} ${processConfig.args.join(' ')}`);
   const child = spawn(processConfig.command, processConfig.args, {
     env: { ...process.env, ...(processConfig.env || {}) },
@@ -643,6 +205,150 @@ function stopManagedProcessTree(child: ChildProcessWithoutNullStreams) {
   if (!child.killed) child.kill();
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function waitForLocalApi(baseUrl: string, timeoutMs: number, fetchImpl: typeof fetch = fetch) {
+  const deadline = Date.now() + Math.max(250, timeoutMs);
+  const url = new URL('/api/capabilities', baseUrl).toString();
+  let lastMessage = 'DevFlow API has not answered yet.';
+  while (Date.now() < deadline) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1_500);
+    timer.unref();
+    try {
+      const response = await fetchImpl(url, { signal: controller.signal, redirect: 'manual' });
+      if (response.ok) return { ok: true as const, message: `DevFlow API is ready at ${baseUrl}.` };
+      lastMessage = `DevFlow API returned HTTP ${response.status}.`;
+    } catch (error) {
+      lastMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      clearTimeout(timer);
+    }
+    await sleep(250);
+  }
+  return { ok: false as const, message: `Timed out waiting for DevFlow API: ${lastMessage}` };
+}
+
+function tunnelOptionsForAppUrl(appUrl: string): OpenAiTunnelOptions {
+  const options = resolveOpenAiTunnelOptions();
+  return {
+    ...options,
+    mcpServerUrl: new URL('/mcp', appUrl).toString(),
+  };
+}
+
+function tunnelHealthFromResult(result: OpenAiTunnelLifecycleResult) {
+  const now = new Date().toISOString();
+  if (!result.ok || result.running === false) {
+    return {
+      status: 'down' as const,
+      lastCheckedAt: now,
+      lastFailureAt: now,
+      ...(result.code ? { lastErrorCode: result.code } : {}),
+      lastErrorClass: 'tunnel-client',
+      message: result.message,
+    };
+  }
+  if (result.healthy === false || result.ready === false) {
+    return {
+      status: 'degraded' as const,
+      lastCheckedAt: now,
+      lastFailureAt: now,
+      lastErrorClass: 'tunnel-health',
+      message: result.message,
+    };
+  }
+  if (result.healthy === true || result.ready === true) {
+    return {
+      status: 'healthy' as const,
+      lastCheckedAt: now,
+      lastSuccessAt: now,
+      message: result.message,
+    };
+  }
+  return {
+    status: 'unknown' as const,
+    lastCheckedAt: now,
+    lastSuccessAt: now,
+    message: `${result.message} Tunnel-client did not expose a definitive health boolean in this status response.`,
+  };
+}
+
+function ensureSupervisorStateForReusedRuntime(owner: DevFlowRuntimeOwner) {
+  if (readDevFlowSupervisorState()) return;
+  const state = createDevFlowSupervisorState({ mode: owner.mode, processLabels: ['server'] });
+  state.processes.server = {
+    label: 'server',
+    status: 'running',
+    restartAttempt: 0,
+    message: `Reused healthy DevFlow runtime ${owner.instanceId}.`,
+  };
+  writeDevFlowSupervisorState(state);
+}
+
+function recordTunnelStarting(message: string) {
+  updateDevFlowSupervisorProcess('tunnel', {
+    status: 'starting',
+    restartAttempt: 0,
+    nextRetryAt: undefined,
+    message,
+  });
+  updateDevFlowSupervisorTunnelHealth({
+    status: 'unknown',
+    lastCheckedAt: new Date().toISOString(),
+    message,
+  });
+}
+
+function recordTunnelStartResult(result: OpenAiTunnelLifecycleResult) {
+  updateDevFlowSupervisorProcess('tunnel', {
+    status: result.ok && result.running !== false ? 'running' : 'failed',
+    startedAt: result.ok && result.running !== false ? new Date().toISOString() : undefined,
+    restartAttempt: 0,
+    nextRetryAt: undefined,
+    message: result.message,
+  });
+  updateDevFlowSupervisorTunnelHealth(tunnelHealthFromResult(result));
+}
+
+function recordTunnelStopResult(result: OpenAiTunnelLifecycleResult) {
+  const now = new Date().toISOString();
+  updateDevFlowSupervisorProcess('tunnel', {
+    status: result.ok ? 'stopped' : 'failed',
+    lastExitAt: now,
+    restartAttempt: 0,
+    nextRetryAt: undefined,
+    message: result.message,
+  });
+  updateDevFlowSupervisorTunnelHealth({
+    status: result.ok ? 'down' : 'degraded',
+    lastCheckedAt: now,
+    ...(result.ok ? {} : { lastFailureAt: now, lastErrorCode: result.code || 'TUNNEL_STOP_FAILED', lastErrorClass: 'tunnel-client' }),
+    message: result.message,
+  });
+}
+
+async function startTunnelForRuntime(appUrl: string) {
+  const options = tunnelOptionsForAppUrl(appUrl);
+  recordTunnelStarting(`Starting OpenAI tunnel runtime "${options.alias}".`);
+  const result = startOpenAiTunnel(options);
+  recordTunnelStartResult(result);
+  if (result.ok) console.log(`[tunnel] ${result.message}`);
+  else console.error(`[tunnel] ${result.message}`);
+  return result;
+}
+
+async function stopTunnelForRuntime(appUrl: string) {
+  const options = tunnelOptionsForAppUrl(appUrl);
+  const result = stopOpenAiTunnel(options);
+  recordTunnelStopResult(result);
+  if (result.ok) console.log(`[tunnel] ${result.message}`);
+  else console.error(`[tunnel] ${result.message}`);
+  return result;
+}
+
 export async function startAll(mode: StartAllMode = 'all') {
   const options = resolveStartAllOptions();
   const plan = buildStartAllPlan(options, randomUUID(), mode);
@@ -662,7 +368,11 @@ export async function startAll(mode: StartAllMode = 'all') {
 
   if (ownership.status === 'reused') {
     console.log(`[start-all] Reusing healthy DevFlow runtime ${ownership.owner.instanceId} (pid=${ownership.owner.pid}).`);
-    if (mode === 'all' && options.openBrowser) openUrl(ownership.owner.appUrl);
+    ensureSupervisorStateForReusedRuntime(ownership.owner);
+    if (mode === 'all') {
+      await startTunnelForRuntime(ownership.owner.appUrl);
+      if (options.openBrowser) openUrl(ownership.owner.appUrl);
+    }
     return { reused: true, owner: ownership.owner };
   }
 
@@ -680,196 +390,13 @@ export async function startAll(mode: StartAllMode = 'all') {
   }
 
   const children = new Map<DevFlowSupervisorProcessLabel, ChildProcessWithoutNullStreams>();
-  let tunnelProbeTimer: NodeJS.Timeout | null = null;
-  let tunnelProbeInFlight = false;
-  let zrokGeneration = 0;
-  let recoveryCooldownUntilMs = 0;
-  let rateLimitCooldownUntilMs = 0;
-  const publicRateLimitTracker = createZrokRateLimitTracker('public');
-  let activePublicUrl = options.zrokPublicUrl;
   let shuttingDown = false;
+  let shutdownPromise: Promise<void> | null = null;
 
   writeDevFlowSupervisorState(createDevFlowSupervisorState({
     mode,
-    processLabels: mode === 'all' ? ['server', 'zrok'] : ['server'],
+    processLabels: mode === 'all' ? ['server', 'tunnel'] : ['server'],
   }));
-
-  const currentTunnelHealth = (): DevFlowTunnelHealthState => readDevFlowSupervisorState()?.tunnelHealth || {
-    status: 'unknown',
-    consecutiveProbeFailures: 0,
-  };
-
-  const scheduleTunnelProbe = (delayMs = options.zrokProbeIntervalMs) => {
-    if (mode !== 'all' || shuttingDown) return;
-    if (tunnelProbeTimer) clearTimeout(tunnelProbeTimer);
-    tunnelProbeTimer = setTimeout(() => {
-      tunnelProbeTimer = null;
-      void runTunnelProbe();
-    }, Math.max(250, delayMs));
-    tunnelProbeTimer.unref();
-  };
-
-  const bootstrapZrokAtStartup = () => {
-    if (mode !== 'all' || shuttingDown) return;
-    zrokGeneration += 1;
-    updateDevFlowSupervisorTunnelHealth(resetDevFlowTunnelHealthForGeneration(
-      currentTunnelHealth(),
-      String(zrokGeneration),
-      { startupGraceMs: options.zrokProbeStartupGraceMs },
-    ));
-    updateDevFlowSupervisorProcess('zrok', {
-      status: 'starting',
-      nextRetryAt: undefined,
-      message: 'Bootstrapping zrok service/share during startup.',
-    });
-
-    const result = runZrokBootstrap(options);
-    if (result.publicUrl) activePublicUrl = result.publicUrl;
-    if (result.ready) {
-      updateDevFlowSupervisorProcess('zrok', {
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        restartAttempt: 0,
-        nextRetryAt: undefined,
-        message: activePublicUrl
-          ? `zrok service/share is ready at ${activePublicUrl}.`
-          : 'zrok service/share is ready; waiting for a public endpoint.',
-      });
-      recoveryCooldownUntilMs = 0;
-      rateLimitCooldownUntilMs = 0;
-      publicRateLimitTracker.reset();
-      scheduleTunnelProbe(250);
-      return;
-    }
-
-    updateDevFlowSupervisorProcess('zrok', {
-      status: 'failed',
-      nextRetryAt: undefined,
-      message: `Startup zrok bootstrap failed: ${result.message}; periodic bootstrap is disabled.`,
-    });
-    updateDevFlowSupervisorTunnelHealth({
-      ...currentTunnelHealth(),
-      status: 'down',
-      lastFailureAt: new Date().toISOString(),
-      consecutiveProbeFailures: Math.max(options.zrokProbeFailureThreshold, currentTunnelHealth().consecutiveProbeFailures),
-      nextRecoveryAt: undefined,
-      message: `zrok startup bootstrap is not ready: ${result.message}; periodic bootstrap is disabled.`,
-    });
-    scheduleTunnelProbe(250);
-  };
-
-  async function runTunnelProbe() {
-    if (mode !== 'all' || shuttingDown || tunnelProbeInFlight) return;
-    const admission = getZrokProbeAdmission({ cooldownUntilMs: rateLimitCooldownUntilMs });
-    if (!admission.admit) {
-      scheduleTunnelProbe(admission.nextDelayMs);
-      return;
-    }
-
-    tunnelProbeInFlight = true;
-    const probeGeneration = currentTunnelHealth().generation;
-    let nextProbeDelayMs = options.zrokProbeIntervalMs;
-    try {
-      const routeProbe = await probeZrokPublicRoute(
-        plan.appUrl,
-        activePublicUrl,
-        options.zrokProbeTimeoutMs,
-        fetch,
-        { rateLimitTracker: publicRateLimitTracker },
-      );
-      const localZrokStatus = routeProbe.runtimeStatus;
-      activePublicUrl = routeProbe.publicUrl;
-      const publicProbe = routeProbe.publicProbe;
-
-      let next = advanceDevFlowTunnelHealth(currentTunnelHealth(), publicProbe, {
-        failureThreshold: options.zrokProbeFailureThreshold,
-        generation: probeGeneration,
-      });
-      if (probeGeneration && next.generation !== probeGeneration) return;
-      updateDevFlowSupervisorTunnelHealth(next);
-
-      if (publicProbe.failureClass === 'rate-limit' || publicProbe.rateLimit) {
-        const nowMs = Date.now();
-        const sharedDelayMs = getZrokProbeCooldownDelayMs(publicProbe.rateLimit?.nextAttemptAt, nowMs);
-        const fallbackDelayMs = publicProbe.rateLimit?.retryAfterMs || options.zrokRecoveryCooldownMs;
-        const cooldownDelayMs = Math.max(250, sharedDelayMs || fallbackDelayMs);
-        rateLimitCooldownUntilMs = nowMs + cooldownDelayMs;
-        nextProbeDelayMs = cooldownDelayMs;
-        return;
-      }
-      rateLimitCooldownUntilMs = 0;
-
-      const zrokProcessStatus = readDevFlowSupervisorState()?.processes.zrok?.status;
-      if (shouldRecoverZrokSupervisorProcess({
-        publicRouteHealthy: publicProbe.ok,
-        processStatus: zrokProcessStatus,
-        zrokStatus: localZrokStatus?.status,
-        zrokShareState: localZrokStatus?.shareState,
-      })) {
-        updateDevFlowSupervisorProcess('zrok', {
-          status: 'running',
-          startedAt: new Date().toISOString(),
-          restartAttempt: 0,
-          nextRetryAt: undefined,
-          lastExitAt: undefined,
-          lastExitCode: undefined,
-          lastSignal: undefined,
-          message: activePublicUrl
-            ? `zrok service/share recovered from live status at ${activePublicUrl}.`
-            : 'zrok service/share recovered from live status.',
-        });
-        recoveryCooldownUntilMs = 0;
-      }
-
-      if (next.status !== 'down') return;
-
-      const localProbe = await probeHttpEndpoint(apiCapabilitiesUrl(plan.appUrl), options.zrokProbeTimeoutMs, true);
-      const decision = getZrokRecoveryDecision({
-        tunnelStatus: next.status,
-        consecutiveProbeFailures: next.consecutiveProbeFailures,
-        failureThreshold: options.zrokProbeFailureThreshold,
-        localApiHealthy: localProbe.ok,
-        zrokStatus: localZrokStatus?.status,
-        zrokShareState: localZrokStatus?.shareState,
-        canRecoverStaleSameMachineOwner: localZrokStatus?.canRecoverStaleSameMachineOwner,
-        shuttingDown,
-        startupGraceUntilMs: next.startupGraceUntil ? Date.parse(next.startupGraceUntil) : undefined,
-        lifecyclePhase: next.lifecyclePhase,
-        recoveryCooldownUntilMs,
-      });
-
-      if (decision === 'recover-stale-same-machine-owner') {
-        recoveryCooldownUntilMs = Date.now() + options.zrokRecoveryCooldownMs;
-        const recovery = await requestZrokStaleSameMachineRecovery(plan.appUrl, options.zrokProbeTimeoutMs);
-        updateDevFlowSupervisorTunnelHealth({
-          ...next,
-          message: recovery.ok
-            ? 'Released a proven stale zrok owner from this machine; verifying the stable public route.'
-            : `Stale same-machine zrok recovery failed safely (${recovery.message}); the reserved name was preserved.`,
-        });
-        if (recovery.ok) nextProbeDelayMs = 250;
-      } else if (decision === 'suppressed-standby') {
-        updateDevFlowSupervisorTunnelHealth({
-          ...next,
-          message: 'Public zrok route is unavailable, but local zrok is Standby; automatic repair is suppressed.',
-        });
-      } else if (decision === 'suppressed-periodic-recovery') {
-        recoveryCooldownUntilMs = Date.now() + options.zrokRecoveryCooldownMs;
-        updateDevFlowSupervisorTunnelHealth({
-          ...next,
-          message: 'Public zrok tunnel is down while local API is healthy; periodic bootstrap/elevation is disabled.',
-        });
-      } else if (!localProbe.ok) {
-        updateDevFlowSupervisorTunnelHealth({
-          ...next,
-          message: 'Public tunnel is down, but local DevFlow API is also unhealthy; zrok reconciliation is suppressed.',
-        });
-      }
-    } finally {
-      tunnelProbeInFlight = false;
-      scheduleTunnelProbe(nextProbeDelayMs);
-    }
-  }
 
   let launchServer: () => ChildProcessWithoutNullStreams;
   launchServer = () => {
@@ -896,7 +423,7 @@ export async function startAll(mode: StartAllMode = 'all') {
             lastExitAt: new Date().toISOString(),
             lastExitCode: code,
             lastSignal: signal,
-            message: `Restart ticket ${restartState!.ticket} accepted; relaunching DevFlow server.`,
+            message: `Restart ticket ${restartState!.ticket} accepted; relaunching DevFlow server while preserving the OpenAI tunnel runtime.`,
           });
           try {
             const replacement = launchServer();
@@ -957,47 +484,73 @@ export async function startAll(mode: StartAllMode = 'all') {
       startedAt: new Date().toISOString(),
       restartAttempt: 0,
       nextRetryAt: undefined,
-      message: child.pid ? 'server child process is running.' : 'server child process is starting.',
+      message: child.pid ? 'DevFlow server child process is running.' : 'DevFlow server child process is starting.',
     });
     if (child.pid) lifecycleStatus = 'running';
     return child;
   };
 
   launchServer();
-  if (mode === 'all') bootstrapZrokAtStartup();
+
+  if (mode === 'all') {
+    const readiness = await waitForLocalApi(plan.appUrl, options.tunnelStartupWaitMs);
+    if (readiness.ok) {
+      await startTunnelForRuntime(plan.appUrl);
+    } else {
+      const failed: OpenAiTunnelLifecycleResult = {
+        action: 'start',
+        ok: false,
+        running: false,
+        healthy: null,
+        ready: null,
+        code: 'DEVFLOW_API_NOT_READY',
+        message: `${readiness.message} OpenAI tunnel startup was skipped.`,
+      };
+      recordTunnelStartResult(failed);
+      console.error(`[tunnel] ${failed.message}`);
+    }
+  }
 
   if (plan.openBrowser) setTimeout(() => openUrl(plan.appUrl), plan.openBrowserDelayMs);
 
   const shutdown = () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    lifecycleStatus = 'stopping';
-    updateDevFlowSupervisorState({ shuttingDown: true });
-    if (tunnelProbeTimer) clearTimeout(tunnelProbeTimer);
-    tunnelProbeTimer = null;
-    const serverChild = children.get('server');
-    if (serverChild) {
-      updateDevFlowSupervisorProcess('server', {
-        status: 'stopped',
-        pid: undefined,
-        nextRetryAt: undefined,
-        message: 'server stopped during intentional supervisor shutdown.',
-      });
-      stopManagedProcessTree(serverChild);
-    }
-    if (mode === 'all') {
-      updateDevFlowSupervisorProcess('zrok', {
-        nextRetryAt: undefined,
-        message: 'Supervisor stopped monitoring zrok; persistent agent service/share is left running.',
-      });
-    }
-    void ownership.release().finally(() => process.exit(0));
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      lifecycleStatus = 'stopping';
+      updateDevFlowSupervisorState({ shuttingDown: true });
+
+      const state = readDevFlowSupervisorState();
+      if (state?.processes.tunnel) {
+        await stopTunnelForRuntime(plan.appUrl);
+      }
+
+      const serverChild = children.get('server');
+      if (serverChild) {
+        updateDevFlowSupervisorProcess('server', {
+          status: 'stopped',
+          pid: undefined,
+          nextRetryAt: undefined,
+          message: 'DevFlow server stopped during intentional supervisor shutdown.',
+        });
+        stopManagedProcessTree(serverChild);
+      }
+
+      await ownership.release();
+      process.exit(0);
+    })().catch(async (error) => {
+      console.error(`[start-all] Shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+      try { await ownership.release(); } catch {}
+      process.exit(1);
+    });
+    return shutdownPromise;
   };
 
-  shutdownHandler = shutdown;
-  if (shutdownRequested) shutdown();
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  shutdownHandler = () => { void shutdown(); };
+  if (shutdownRequested) void shutdown();
+  process.on('SIGINT', () => { void shutdown(); });
+  process.on('SIGTERM', () => { void shutdown(); });
   return { reused: false, owner: ownership.owner };
 }
 

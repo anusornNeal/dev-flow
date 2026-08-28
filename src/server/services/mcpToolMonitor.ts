@@ -702,7 +702,7 @@ export function getDevFlowDiagnostics(options?: {
     recommendations.push('MCP tool jobs are queued; inspect get_tool_job_status/log for the oldest queued job.');
   }
   if (runtimeSupervisor.api.status === 'healthy' && (runtimeSupervisor.tunnel.status === 'degraded' || runtimeSupervisor.tunnel.status === 'down')) {
-    recommendations.push(`Public zrok route is ${runtimeSupervisor.tunnel.status} while the local DevFlow API is healthy; inspect zrok service/share state and supervisor public-probe evidence.`);
+    recommendations.push(`OpenAI tunnel is ${runtimeSupervisor.tunnel.status} while the local DevFlow API is healthy; run npm run tunnel:status and inspect tunnel-client diagnostics.`);
   }
   if (staleAgentRuns.length > 0) {
     recommendations.push('Some agent runs are stale; cancel or retry them before starting more work on the same task.');

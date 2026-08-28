@@ -1,6 +1,6 @@
 # DVF-0423 Ngrok Self-Healing Implementation Plan
 
-> **Historical / superseded:** This dated plan documents the retired tunnel implementation. Current runtime guidance is `docs/runtime-supervisor.md`; DevFlow now uses the persistent zrok Agent Service/reserved-share lifecycle. Do not execute this plan against the current runtime.
+> **Historical / superseded:** This dated plan documents a retired tunnel implementation. Current runtime guidance is `docs/runtime-supervisor.md`; DevFlow now uses OpenAI Tunnel through `tunnel-client runtimes`. Do not execute this plan against the current runtime.
 
 > **For agentic workers:** Implement inline in the isolated DevFlow worktree with TDD and guarded edits.
 

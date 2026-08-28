@@ -10,8 +10,8 @@ test('capability catalog exposes guarded runtime restart tools', () => {
   assert.ok(restartTool, 'restart_devflow should be exposed');
   assert.ok(statusTool, 'get_devflow_restart_status should be exposed');
   assert.match(restartTool.description, /API runtime only/i);
-  assert.match(restartTool.description, /zrok Agent Service\/reserved share/i);
-  assert.match(restartTool.description, /endpoint is expected to remain unchanged/i);
+  assert.match(restartTool.description, /OpenAI Tunnel/i);
+  assert.match(restartTool.description, /remain running/i);
   assert.match(statusTool.description, /after reconnecting/i);
   assert.match(statusTool.description, /preserved external-transport policy/i);
   assert.equal(catalog.matrix.runtime?.restart, true);

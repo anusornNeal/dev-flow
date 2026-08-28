@@ -13,48 +13,49 @@ function resetState() {
   fs.rmSync(path.join(tempRoot, '.devflow', 'supervisor-state.json'), { force: true });
 }
 
-test('supervisor state models server and persistent zrok lifecycle separately', () => {
+test('supervisor state models server and OpenAI tunnel lifecycle separately', () => {
   resetState();
   const initial = supervisor.createDevFlowSupervisorState({
     mode: 'all',
-    processLabels: ['server', 'zrok'],
-    now: '2026-08-16T00:00:00.000Z',
+    processLabels: ['server', 'tunnel'],
+    now: '2026-08-28T00:00:00.000Z',
   });
   supervisor.writeDevFlowSupervisorState(initial);
 
   supervisor.updateDevFlowSupervisorProcess('server', {
     status: 'running',
     pid: 1234,
-    startedAt: '2026-08-16T00:00:01.000Z',
+    startedAt: '2026-08-28T00:00:01.000Z',
     restartAttempt: 0,
-  }, '2026-08-16T00:00:01.000Z');
-  supervisor.updateDevFlowSupervisorProcess('zrok', {
+  }, '2026-08-28T00:00:01.000Z');
+  supervisor.updateDevFlowSupervisorProcess('tunnel', {
     status: 'running',
-    startedAt: '2026-08-16T00:00:02.000Z',
+    startedAt: '2026-08-28T00:00:02.000Z',
     restartAttempt: 0,
-    message: 'persistent service/share ready',
-  }, '2026-08-16T00:00:02.000Z');
+    message: 'managed tunnel runtime connected',
+  }, '2026-08-28T00:00:02.000Z');
 
   const persisted = supervisor.readDevFlowSupervisorState();
+  assert.equal(persisted?.version, 2);
   assert.equal(persisted?.processes.server?.pid, 1234);
-  assert.equal(persisted?.processes.zrok?.status, 'running');
-  assert.equal(persisted?.processes.zrok?.pid, undefined);
+  assert.equal(persisted?.processes.tunnel?.status, 'running');
+  assert.equal(persisted?.processes.tunnel?.pid, undefined, 'tunnel-client owns its managed runtime process');
   assert.equal(persisted?.tunnelHealth?.status, 'unknown');
 });
 
-test('running zrok readiness is not public healthy until a probe succeeds', () => {
+test('running tunnel process remains unknown until tunnel-client health is explicit', () => {
   const diagnostics = supervisor.buildDevFlowSupervisorDiagnostics({
-    version: 1,
+    version: 2,
     supervisor: 'start-all',
     mode: 'all',
     shuttingDown: false,
-    startedAt: '2026-08-16T00:00:00.000Z',
-    updatedAt: '2026-08-16T00:00:02.000Z',
+    startedAt: '2026-08-28T00:00:00.000Z',
+    updatedAt: '2026-08-28T00:00:02.000Z',
     processes: {
       server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
-      zrok: { label: 'zrok', status: 'running', restartAttempt: 0 },
+      tunnel: { label: 'tunnel', status: 'running', restartAttempt: 0 },
     },
-    tunnelHealth: { status: 'unknown', consecutiveProbeFailures: 0 },
+    tunnelHealth: { status: 'unknown', lastCheckedAt: '2026-08-28T00:00:02.000Z' },
   });
 
   assert.equal(diagnostics.api.status, 'healthy');
@@ -63,41 +64,39 @@ test('running zrok readiness is not public healthy until a probe succeeds', () =
   assert.equal(diagnostics.summary, 'api-healthy-tunnel-unknown');
 });
 
-test('public tunnel probe succeeds independently from local API process state', () => {
+test('explicit healthy tunnel status produces both-healthy diagnostics', () => {
   const diagnostics = supervisor.buildDevFlowSupervisorDiagnostics({
-    version: 1,
+    version: 2,
     supervisor: 'start-all',
     mode: 'all',
     shuttingDown: false,
-    startedAt: '2026-08-16T00:00:00.000Z',
-    updatedAt: '2026-08-16T00:00:03.000Z',
+    startedAt: '2026-08-28T00:00:00.000Z',
+    updatedAt: '2026-08-28T00:00:03.000Z',
     processes: {
-      server: { label: 'server', status: 'failed', lastExitCode: 1, restartAttempt: 0 },
-      zrok: { label: 'zrok', status: 'running', restartAttempt: 0 },
+      server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
+      tunnel: { label: 'tunnel', status: 'running', restartAttempt: 0 },
     },
     tunnelHealth: {
       status: 'healthy',
-      lastProbeAt: '2026-08-16T00:00:03.000Z',
-      lastProbeStatusCode: 200,
-      lastProbeLatencyMs: 50,
-      lastSuccessAt: '2026-08-16T00:00:03.000Z',
-      consecutiveProbeFailures: 0,
+      lastCheckedAt: '2026-08-28T00:00:03.000Z',
+      lastSuccessAt: '2026-08-28T00:00:03.000Z',
+      message: 'OpenAI tunnel runtime is healthy.',
     },
   });
 
-  assert.equal(diagnostics.summary, 'api-down-tunnel-healthy');
-  assert.equal(diagnostics.api.status, 'down');
+  assert.equal(diagnostics.summary, 'both-healthy');
   assert.equal(diagnostics.tunnel.status, 'healthy');
+  assert.equal(diagnostics.tunnel.lastSuccessAt, '2026-08-28T00:00:03.000Z');
 });
 
 test('server-only diagnostics keep tunnel disabled', () => {
   const diagnostics = supervisor.buildDevFlowSupervisorDiagnostics({
-    version: 1,
+    version: 2,
     supervisor: 'start-all',
     mode: 'server-only',
     shuttingDown: false,
-    startedAt: '2026-08-16T00:00:00.000Z',
-    updatedAt: '2026-08-16T00:00:01.000Z',
+    startedAt: '2026-08-28T00:00:00.000Z',
+    updatedAt: '2026-08-28T00:00:01.000Z',
     processes: {
       server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
     },
@@ -107,109 +106,64 @@ test('server-only diagnostics keep tunnel disabled', () => {
   assert.equal(diagnostics.tunnel.status, 'disabled');
 });
 
-test('cold start ignores failures during grace then degrades and becomes down', () => {
-  let health = supervisor.resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
-    startupGraceMs: 5000,
-    now: '2026-08-16T00:00:00.000Z',
-  });
-  health = supervisor.advanceDevFlowTunnelHealth(health, { ok: false, statusCode: 502 }, {
-    failureThreshold: 3,
-    generation: 'A',
-    now: '2026-08-16T00:00:01.000Z',
-  });
-  assert.equal(health.status, 'unknown');
-  assert.equal(health.consecutiveProbeFailures, 0);
-
-  for (const [index, now] of ['2026-08-16T00:00:06.000Z', '2026-08-16T00:00:07.000Z', '2026-08-16T00:00:08.000Z'].entries()) {
-    health = supervisor.advanceDevFlowTunnelHealth(health, { ok: false, statusCode: 502 }, {
-      failureThreshold: 3,
-      generation: 'A',
-      now,
-    });
-    assert.equal(health.consecutiveProbeFailures, index + 1);
-  }
-  assert.equal(health.status, 'down');
-});
-
-test('first success enters steady state and later failure degrades immediately', () => {
-  let health = supervisor.resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
-    startupGraceMs: 30000,
-    now: '2026-08-16T00:00:00.000Z',
-  });
-  health = supervisor.advanceDevFlowTunnelHealth(health, { ok: true, statusCode: 200 }, {
-    failureThreshold: 3,
-    generation: 'A',
-    now: '2026-08-16T00:00:02.000Z',
-  });
-  assert.equal(health.lifecyclePhase, 'steady-state');
-  assert.equal(health.status, 'healthy');
-
-  health = supervisor.advanceDevFlowTunnelHealth(health, { ok: false, statusCode: 502 }, {
-    failureThreshold: 3,
-    generation: 'A',
-    now: '2026-08-16T00:00:03.000Z',
-  });
-  assert.equal(health.status, 'degraded');
-  assert.equal(health.consecutiveProbeFailures, 1);
-});
-
-test('stale probe generation cannot overwrite a newer zrok generation', () => {
-  const generationA = supervisor.resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
-    startupGraceMs: 0,
-    now: '2026-08-16T00:00:00.000Z',
-  });
-  const generationB = supervisor.resetDevFlowTunnelHealthForGeneration(generationA, 'B', {
-    startupGraceMs: 0,
-    now: '2026-08-16T00:00:01.000Z',
-  });
-  const stale = supervisor.advanceDevFlowTunnelHealth(generationB, { ok: true, statusCode: 200 }, {
-    failureThreshold: 3,
-    generation: 'A',
-    now: '2026-08-16T00:00:02.000Z',
-  });
-  assert.deepEqual(stale, generationB);
-});
-
-test('degraded and down public reachability remain independent from service running state', () => {
+test('a reused server-only owner can become tunnel-enabled without replacing the API owner', () => {
   const diagnostics = supervisor.buildDevFlowSupervisorDiagnostics({
-    version: 1,
+    version: 2,
+    supervisor: 'start-all',
+    mode: 'server-only',
+    shuttingDown: false,
+    startedAt: '2026-08-28T00:00:00.000Z',
+    updatedAt: '2026-08-28T00:00:05.000Z',
+    processes: {
+      server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
+      tunnel: { label: 'tunnel', status: 'running', restartAttempt: 0 },
+    },
+    tunnelHealth: { status: 'healthy', lastCheckedAt: '2026-08-28T00:00:05.000Z' },
+  });
+
+  assert.equal(diagnostics.tunnel.enabled, true);
+  assert.equal(diagnostics.summary, 'both-healthy');
+});
+
+test('failed tunnel lifecycle is down while the API remains healthy', () => {
+  const diagnostics = supervisor.buildDevFlowSupervisorDiagnostics({
+    version: 2,
     supervisor: 'start-all',
     mode: 'all',
     shuttingDown: false,
-    startedAt: '2026-08-16T00:00:00.000Z',
-    updatedAt: '2026-08-16T00:00:10.000Z',
+    startedAt: '2026-08-28T00:00:00.000Z',
+    updatedAt: '2026-08-28T00:00:10.000Z',
     processes: {
       server: { label: 'server', status: 'running', pid: 100, restartAttempt: 0 },
-      zrok: { label: 'zrok', status: 'running', restartAttempt: 0 },
+      tunnel: { label: 'tunnel', status: 'failed', restartAttempt: 0, message: 'tunnel-client failed' },
     },
     tunnelHealth: {
-      status: 'degraded',
-      lastProbeAt: '2026-08-16T00:00:10.000Z',
-      lastProbeStatusCode: 502,
-      consecutiveProbeFailures: 1,
+      status: 'down',
+      lastCheckedAt: '2026-08-28T00:00:10.000Z',
+      lastFailureAt: '2026-08-28T00:00:10.000Z',
+      lastErrorCode: 'TUNNEL_CLIENT_NOT_FOUND',
     },
   });
-  assert.equal(diagnostics.tunnel.processStatus, 'running');
-  assert.equal(diagnostics.tunnel.status, 'degraded');
-  assert.equal(diagnostics.summary, 'api-healthy-tunnel-degraded');
+  assert.equal(diagnostics.tunnel.status, 'down');
+  assert.equal(diagnostics.summary, 'api-healthy-tunnel-down');
+  assert.equal(diagnostics.tunnel.lastErrorCode, 'TUNNEL_CLIENT_NOT_FOUND');
 });
 
-test('intentional shutdown dominates diagnostic summary without changing tunnel proof', () => {
+test('intentional shutdown dominates diagnostic summary', () => {
   const diagnostics = supervisor.buildDevFlowSupervisorDiagnostics({
-    version: 1,
+    version: 2,
     supervisor: 'start-all',
     mode: 'all',
     shuttingDown: true,
-    startedAt: '2026-08-16T00:00:00.000Z',
-    updatedAt: '2026-08-16T00:00:10.000Z',
+    startedAt: '2026-08-28T00:00:00.000Z',
+    updatedAt: '2026-08-28T00:00:10.000Z',
     processes: {
       server: { label: 'server', status: 'stopped', restartAttempt: 0 },
-      zrok: { label: 'zrok', status: 'running', restartAttempt: 0 },
+      tunnel: { label: 'tunnel', status: 'stopped', restartAttempt: 0 },
     },
-    tunnelHealth: { status: 'healthy', consecutiveProbeFailures: 0 },
+    tunnelHealth: { status: 'down', lastCheckedAt: '2026-08-28T00:00:10.000Z' },
   });
   assert.equal(diagnostics.summary, 'shutting-down');
-  assert.equal(diagnostics.tunnel.status, 'healthy');
 });
 
 test.after(() => {

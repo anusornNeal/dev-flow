@@ -185,7 +185,7 @@ The following behaviors must remain compatible end-to-end. Each child PR is resp
 ### 10.11 MCP transport / public route
 - Streamable HTTP MCP session lifecycle works on `/mcp`
 - Legacy SSE compatibility remains covered where required
-- The managed zrok reserved route reaches the backend correctly
+- The configured OpenAI Tunnel runtime connects the managed MCP endpoint to the backend without exposing a local inbound listener
 - CORS preflight is handled without provider-specific headers
 - Static + Vite dev middleware still serves frontend
 

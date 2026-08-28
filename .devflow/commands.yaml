@@ -14,12 +14,9 @@ commands:
       - tests/server/projectCommandService.test.ts
       - tests/server/projectCommandVerificationCandidate.test.ts
     category: test
-  test-zrok-bootstrap:
-    executable: powershell.exe
+  test-start-all:
+    executable: node
     args:
-      - -NoProfile
-      - -ExecutionPolicy
-      - Bypass
-      - -File
-      - scripts/verify-zrok-bootstrap.ps1
+      - ../../../../../node_modules/tsx/dist/cli.mjs
+      - scripts/verify-start-all.ts
     category: test

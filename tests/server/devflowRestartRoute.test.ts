@@ -118,7 +118,7 @@ test('supervised restart acknowledges before scheduling server exit', async () =
   });
 });
 
-test('legacy restart tickets normalize to the zrok-era API-only lifecycle contract after reconnect', () => {
+test('legacy restart tickets normalize to the API-only lifecycle contract after reconnect', () => {
   resetRestartState();
   fs.mkdirSync(path.dirname(restartStatePath), { recursive: true });
   const now = new Date().toISOString();

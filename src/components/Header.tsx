@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Cat, Moon, Sun, FileCode, Code, FileText, Plus, Sparkles, Blocks, ChevronDown } from 'lucide-react';
-import ZrokStatusPanel from './ZrokStatusPanel';
 
 interface HeaderProps {
   filteredTasksCount: number;
@@ -66,7 +65,6 @@ export function Header({
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-2.5 w-full md:w-auto">
-        <ZrokStatusPanel />
         {/* Theme Toggle */}
         <button
           onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}

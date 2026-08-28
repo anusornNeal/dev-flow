@@ -8,18 +8,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import {
-  advanceDevFlowTunnelHealth,
-  resetDevFlowTunnelHealthForGeneration,
-} from '../src/lib/devFlowSupervisor.ts';
 import { DEFAULT_RESTART_QUIESCENCE_WINDOW_MS } from '../src/server/services/mcpTransportMonitor.ts';
-import { getZrokRecoveryDecision } from './start-all.ts';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 const CLIENT_COUNT = 5;
 const LOCAL_ROUNDS = 3;
-const PUBLIC_ROUNDS = 2;
 const MCP_TIMEOUT_MS = 15_000;
 const HTTP_TIMEOUT_MS = 10_000;
 const MCP_PROTOCOL_VERSION = '2025-06-18';
@@ -39,18 +33,13 @@ function percentile(values, percentileValue) {
 function parseMode() {
   const modeIndex = process.argv.indexOf('--mode');
   const mode = modeIndex >= 0 ? String(process.argv[modeIndex + 1] || '') : 'all';
-  if (!['all', 'local', 'public'].includes(mode)) {
-    throw new Error(`Unsupported --mode '${mode}'. Expected all, local, or public.`);
+  if (mode === 'public') {
+    throw new Error('Public URL smoke mode was retired with OpenAI Tunnel. Use npm run tunnel:status plus a real ChatGPT MCP call for tunnel-path verification.');
+  }
+  if (!['all', 'local'].includes(mode)) {
+    throw new Error(`Unsupported --mode '${mode}'. Expected all or local.`);
   }
   return mode;
-}
-
-function normalizeBaseUrl(value) {
-  const url = new URL(value);
-  if (url.pathname.replace(/\/+$/, '') === '/mcp') url.pathname = '/';
-  url.search = '';
-  url.hash = '';
-  return url.toString().replace(/\/$/, '');
 }
 
 async function fetchJson(baseUrl, route, options = {}) {
@@ -290,114 +279,6 @@ async function exerciseInterruptedRawSession(baseUrl, profile) {
   };
 }
 
-function runZrokRecoveryInjection() {
-  let health = resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
-    startupGraceMs: 0,
-    now: '2026-08-16T00:00:00.000Z',
-  });
-  for (const now of ['2026-08-16T00:00:01.000Z', '2026-08-16T00:00:02.000Z', '2026-08-16T00:00:03.000Z']) {
-    health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
-      failureThreshold: 3,
-      generation: 'A',
-      now,
-    });
-  }
-  assert.equal(health.status, 'down');
-  const recoveryA = getZrokRecoveryDecision({
-    tunnelStatus: health.status,
-    consecutiveProbeFailures: health.consecutiveProbeFailures,
-    failureThreshold: 3,
-    localApiHealthy: true,
-    shuttingDown: false,
-    nowMs: Date.parse('2026-08-16T00:00:03.000Z'),
-  });
-  assert.equal(recoveryA, 'suppressed-periodic-recovery');
-
-  health = resetDevFlowTunnelHealthForGeneration(health, 'B', {
-    startupGraceMs: 5_000,
-    now: '2026-08-16T00:00:04.000Z',
-  });
-  health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
-    failureThreshold: 3,
-    generation: 'B',
-    now: '2026-08-16T00:00:05.000Z',
-  });
-  assert.equal(health.status, 'unknown');
-  assert.equal(health.consecutiveProbeFailures, 0);
-
-  health = advanceDevFlowTunnelHealth(health, { ok: true, statusCode: 200 }, {
-    failureThreshold: 3,
-    generation: 'B',
-    now: '2026-08-16T00:00:06.000Z',
-  });
-  assert.equal(health.status, 'healthy');
-  assert.equal(health.lifecyclePhase, 'steady-state');
-  assert.equal(health.consecutiveProbeFailures, 0);
-
-  health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
-    failureThreshold: 3,
-    generation: 'B',
-    now: '2026-08-16T00:00:07.000Z',
-  });
-  assert.equal(health.status, 'degraded', 'First success must enter steady state immediately, even before the original grace expires.');
-  assert.equal(health.consecutiveProbeFailures, 1);
-  const steadyFailureDecision = getZrokRecoveryDecision({
-    tunnelStatus: health.status,
-    consecutiveProbeFailures: health.consecutiveProbeFailures,
-    failureThreshold: 3,
-    localApiHealthy: true,
-    shuttingDown: false,
-    lifecyclePhase: health.lifecyclePhase,
-    startupGraceUntilMs: Date.parse(health.startupGraceUntil),
-    nowMs: Date.parse('2026-08-16T00:00:07.000Z'),
-  });
-  assert.equal(steadyFailureDecision, 'threshold-not-reached');
-
-  health = resetDevFlowTunnelHealthForGeneration(health, 'C', {
-    startupGraceMs: 5_000,
-    now: '2026-08-16T00:00:20.000Z',
-  });
-  health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
-    failureThreshold: 3,
-    generation: 'C',
-    now: '2026-08-16T00:00:21.000Z',
-  });
-  assert.equal(health.status, 'unknown');
-  assert.equal(health.consecutiveProbeFailures, 0);
-
-  const postGraceDecisions = [];
-  for (const now of ['2026-08-16T00:00:26.000Z', '2026-08-16T00:00:27.000Z', '2026-08-16T00:00:28.000Z']) {
-    health = advanceDevFlowTunnelHealth(health, { ok: false, failureClass: 'connection' }, {
-      failureThreshold: 3,
-      generation: 'C',
-      now,
-    });
-    postGraceDecisions.push(getZrokRecoveryDecision({
-      tunnelStatus: health.status,
-      consecutiveProbeFailures: health.consecutiveProbeFailures,
-      failureThreshold: 3,
-      localApiHealthy: true,
-      shuttingDown: false,
-      lifecyclePhase: health.lifecyclePhase,
-      startupGraceUntilMs: Date.parse(health.startupGraceUntil),
-      nowMs: Date.parse(now),
-    }));
-  }
-  assert.deepEqual(postGraceDecisions, ['threshold-not-reached', 'threshold-not-reached', 'suppressed-periodic-recovery']);
-  return {
-    firstGeneration: 'A',
-    firstGenerationRecoveryDecision: recoveryA,
-    firstSuccessGeneration: 'B',
-    firstSuccessEnteredSteadyState: true,
-    steadyFailureDecision,
-    neverHealthyGeneration: 'C',
-    neverHealthyPostGraceDecisions: postGraceDecisions,
-    neverHealthyFinalStatus: health.status,
-    inheritedFailures: 0,
-    recoveryLoopDetected: false,
-  };
-}
-
 function gitRevision() {
   return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true }).trim();
 }
@@ -438,11 +319,9 @@ async function runLocalMode() {
     assert.equal(errorCodeFromCall(busyRestart), 'RESTART_BUSY', 'restart_devflow must be rejected while recent meaningful MCP work is hot.');
     assert.equal(child.exitCode, null, 'Blocked restart must not exit the local API process.');
 
-    const recovery = runZrokRecoveryInjection();
-    const capabilityAfterRecovery = await fetchJson(baseUrl, '/api/capabilities');
-    assert.equal(child.exitCode, null, 'Tunnel-only recovery simulation must not exit the local API process.');
-    assert.equal(capabilityAfterRecovery.runtimeInstanceId, capabilityBefore.runtimeInstanceId, 'Local API runtime identity changed during zrok-only recovery simulation.');
-    assert.equal(capabilityAfterRecovery.contractVersion, capabilityBefore.contractVersion, 'Local API contract revision changed during zrok-only recovery simulation.');
+    const capabilityAfterProfile = await fetchJson(baseUrl, '/api/capabilities');
+    assert.equal(capabilityAfterProfile.runtimeInstanceId, capabilityBefore.runtimeInstanceId, 'Local API runtime identity changed during the bounded MCP profile.');
+    assert.equal(capabilityAfterProfile.contractVersion, capabilityBefore.contractVersion, 'Local API contract revision changed during the bounded MCP profile.');
     assert.equal(gitRevision(), revisionBefore, 'Repository revision changed during the local smoke run.');
 
     await sleep(DEFAULT_RESTART_QUIESCENCE_WINDOW_MS + 350);
@@ -458,10 +337,9 @@ async function runLocalMode() {
       ...profile.metrics,
       apiPid: childPid,
       apiPidStableUntilExplicitRestart: true,
-      runtimeInstanceIdStableDuringRecovery: true,
+      runtimeInstanceIdStableDuringProfile: true,
       contractVersion: capabilityBefore.contractVersion,
       repoRevision: revisionBefore,
-      recovery,
       sessionRetention,
       restartGuard: {
         busyResult: 'RESTART_BUSY',
@@ -493,115 +371,15 @@ async function runLocalMode() {
   }
 }
 
-function localRuntimeBaseUrl() {
-  const configured = String(process.env.DEVFLOW_LOCAL_URL || process.env.DEVFLOW_APP_URL || '').trim();
-  if (configured) return normalizeBaseUrl(configured);
-  const port = Number(process.env.DEVFLOW_PORT || process.env.PORT || 3000);
-  return `http://127.0.0.1:${Number.isInteger(port) && port > 0 ? port : 3000}`;
-}
-
-async function resolveManagedPublicRoute() {
-  const localBaseUrl = localRuntimeBaseUrl();
-  const zrokStatus = await fetchJson(localBaseUrl, '/api/zrok/status');
-  const candidate = String(zrokStatus.baseUrl || zrokStatus.mcpUrl || '').trim();
-  if (!candidate) {
-    throw new Error(`DevFlow zrok status did not expose a managed public URL (status=${String(zrokStatus.status || 'unknown')}).`);
-  }
-  return {
-    localBaseUrl,
-    baseUrl: normalizeBaseUrl(candidate),
-    mcpUrl: String(zrokStatus.mcpUrl || new URL('/mcp', `${normalizeBaseUrl(candidate)}/`).toString()),
-    status: zrokStatus,
-  };
-}
-
-function safeSupervisorSnapshot(health) {
-  const supervisor = health?.diagnostics?.runtimeSupervisor || null;
-  const api = supervisor?.api || {};
-  const tunnel = supervisor?.tunnel || {};
-  return {
-    apiPid: Number.isInteger(api.pid) ? api.pid : null,
-    apiStatus: api.status || null,
-    tunnelStatus: tunnel.status || null,
-    tunnelProcessStatus: tunnel.processStatus || null,
-    tunnelGeneration: tunnel.tunnelGeneration || null,
-    recoveryAttempt: Number.isInteger(tunnel.recoveryAttempt) ? tunnel.recoveryAttempt : null,
-    consecutiveProbeFailures: Number.isInteger(tunnel.consecutiveProbeFailures) ? tunnel.consecutiveProbeFailures : null,
-  };
-}
-
-async function runPublicMode() {
-  const routeBefore = await resolveManagedPublicRoute();
-  const baseUrl = routeBefore.baseUrl;
-  const capabilityBefore = await fetchJson(baseUrl, '/api/capabilities');
-  const healthBefore = await fetchJson(baseUrl, '/api/workflow-health?responseMode=full');
-  const supervisorBefore = safeSupervisorSnapshot(healthBefore);
-  const revisionBefore = gitRevision();
-  const startedAt = Date.now();
-  const profile = await runFiveClientProfile(baseUrl, PUBLIC_ROUNDS, 'public');
-  try {
-    const elapsedMs = Date.now() - startedAt;
-    const capabilityAfter = await fetchJson(baseUrl, '/api/capabilities');
-    const healthAfter = await fetchJson(baseUrl, '/api/workflow-health?responseMode=full');
-    const supervisorAfter = safeSupervisorSnapshot(healthAfter);
-    const routeAfter = await resolveManagedPublicRoute();
-
-    assert.equal(routeAfter.baseUrl, routeBefore.baseUrl, 'Managed zrok public base URL changed during the bounded public run.');
-    assert.equal(routeAfter.mcpUrl, routeBefore.mcpUrl, 'Managed zrok MCP URL changed during the bounded public run.');
-    assert.equal(capabilityAfter.runtimeInstanceId, capabilityBefore.runtimeInstanceId, 'Public run changed the DevFlow runtime instance; API restart/disconnect occurred.');
-    assert.equal(capabilityAfter.contractVersion, capabilityBefore.contractVersion, 'Public run changed the DevFlow contract revision.');
-    assert.equal(gitRevision(), revisionBefore, 'Repository revision changed during the public smoke run.');
-    if (supervisorBefore.apiPid !== null && supervisorAfter.apiPid !== null) {
-      assert.equal(supervisorAfter.apiPid, supervisorBefore.apiPid, 'Public run changed the local API PID.');
-    }
-    if (supervisorBefore.tunnelGeneration && supervisorAfter.tunnelGeneration) {
-      assert.equal(supervisorAfter.tunnelGeneration, supervisorBefore.tunnelGeneration, 'Public bounded run triggered a zrok generation change/recovery.');
-    }
-    if (supervisorBefore.recoveryAttempt !== null && supervisorAfter.recoveryAttempt !== null) {
-      assert.equal(supervisorAfter.recoveryAttempt, supervisorBefore.recoveryAttempt, 'Public bounded run increased zrok recovery attempts.');
-    }
-
-    return {
-      mode: 'public',
-      ...profile.metrics,
-      elapsedMs,
-      runtimeInstanceIdStable: true,
-      contractVersion: capabilityBefore.contractVersion,
-      repoRevision: revisionBefore,
-      zrokStatusBefore: routeBefore.status.status || null,
-      zrokStatusAfter: routeAfter.status.status || null,
-      supervisorBefore,
-      supervisorAfter,
-      apiPidStable: supervisorBefore.apiPid !== null && supervisorAfter.apiPid !== null ? supervisorBefore.apiPid === supervisorAfter.apiPid : null,
-      tunnelGenerationStable: supervisorBefore.tunnelGeneration && supervisorAfter.tunnelGeneration
-        ? supervisorBefore.tunnelGeneration === supervisorAfter.tunnelGeneration
-        : null,
-      zrokRecoveryAttemptStable: supervisorBefore.recoveryAttempt !== null && supervisorAfter.recoveryAttempt !== null
-        ? supervisorBefore.recoveryAttempt === supervisorAfter.recoveryAttempt
-        : null,
-      managedMcpUrlStable: routeAfter.mcpUrl === routeBefore.mcpUrl,
-      privacy: {
-        publicUrlReported: false,
-        providerInspectorRead: false,
-        rawRequestBodiesStored: false,
-      },
-    };
-  } finally {
-    await closeProfile(profile);
-  }
-}
-
 async function main() {
-  const mode = parseMode();
+  parseMode();
   const result = {
     schemaVersion: 1,
     clientCount: CLIENT_COUNT,
     boundedProfile: true,
-    local: null,
-    public: null,
+    local: await runLocalMode(),
+    tunnelPathVerification: 'Use npm run tunnel:status plus a real ChatGPT MCP call; OpenAI Tunnel does not expose a provider public URL for this local smoke.',
   };
-  if (mode === 'all' || mode === 'local') result.local = await runLocalMode();
-  if (mode === 'all' || mode === 'public') result.public = await runPublicMode();
   console.log('[smoke-multi-mcp] PASS');
   console.log(JSON.stringify(result, null, 2));
 }

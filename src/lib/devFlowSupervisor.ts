@@ -2,33 +2,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDevFlowRuntimeDir } from './devFlowPaths';
 
-export const DEVFLOW_SUPERVISOR_STATE_VERSION = 1 as const;
+export const DEVFLOW_SUPERVISOR_STATE_VERSION = 2 as const;
 export const DEVFLOW_SUPERVISOR_NAME = 'start-all' as const;
 
 export type DevFlowSupervisorMode = 'all' | 'server-only';
-export type DevFlowSupervisorProcessLabel = 'server' | 'zrok';
+export type DevFlowSupervisorProcessLabel = 'server' | 'tunnel';
 export type DevFlowSupervisorProcessStatus = 'starting' | 'running' | 'restarting' | 'stopped' | 'failed';
 export type DevFlowTunnelHealthStatus = 'unknown' | 'healthy' | 'degraded' | 'down';
-export type DevFlowTunnelLifecyclePhase = 'cold-start' | 'steady-state';
 
 export type DevFlowTunnelHealthState = {
   status: DevFlowTunnelHealthStatus;
-  generation?: string;
-  generationStartedAt?: string;
-  startupGraceUntil?: string;
-  lifecyclePhase?: DevFlowTunnelLifecyclePhase;
-  lastProbeAt?: string;
-  lastProbeStatusCode?: number;
-  lastProbeLatencyMs?: number;
+  lastCheckedAt?: string;
   lastSuccessAt?: string;
   lastFailureAt?: string;
-  consecutiveProbeFailures: number;
   lastErrorCode?: string;
   lastErrorClass?: string;
-  nextProbeAt?: string;
-  lastRecoveryAt?: string;
-  recoveryAttempt?: number;
-  nextRecoveryAt?: string;
   message?: string;
 };
 
@@ -68,22 +56,11 @@ export type DevFlowSupervisorChildDiagnostic = {
   lastSignal?: string | null;
   message?: string;
   reachabilityStatus?: DevFlowTunnelHealthStatus;
-  tunnelGeneration?: string;
-  generationStartedAt?: string;
-  startupGraceUntil?: string;
-  tunnelLifecyclePhase?: DevFlowTunnelLifecyclePhase;
-  lastProbeAt?: string;
-  lastProbeStatusCode?: number;
-  lastProbeLatencyMs?: number;
+  lastCheckedAt?: string;
   lastSuccessAt?: string;
   lastFailureAt?: string;
-  consecutiveProbeFailures?: number;
   lastErrorCode?: string;
   lastErrorClass?: string;
-  nextProbeAt?: string;
-  lastRecoveryAt?: string;
-  recoveryAttempt?: number;
-  nextRecoveryAt?: string;
 };
 
 export function getDevFlowSupervisorStatePath() {
@@ -112,24 +89,11 @@ function normalizeTunnelHealth(value: unknown): DevFlowTunnelHealthState | undef
   if (!isTunnelHealthStatus(input.status)) return undefined;
   return {
     status: input.status,
-    consecutiveProbeFailures: Number.isInteger(input.consecutiveProbeFailures) && Number(input.consecutiveProbeFailures) >= 0
-      ? Number(input.consecutiveProbeFailures)
-      : 0,
-    ...(typeof input.generation === 'string' ? { generation: input.generation } : {}),
-    ...(typeof input.generationStartedAt === 'string' ? { generationStartedAt: input.generationStartedAt } : {}),
-    ...(typeof input.startupGraceUntil === 'string' ? { startupGraceUntil: input.startupGraceUntil } : {}),
-    ...(input.lifecyclePhase === 'cold-start' || input.lifecyclePhase === 'steady-state' ? { lifecyclePhase: input.lifecyclePhase } : {}),
-    ...(typeof input.lastProbeAt === 'string' ? { lastProbeAt: input.lastProbeAt } : {}),
-    ...(Number.isInteger(input.lastProbeStatusCode) ? { lastProbeStatusCode: Number(input.lastProbeStatusCode) } : {}),
-    ...(typeof input.lastProbeLatencyMs === 'number' && Number.isFinite(input.lastProbeLatencyMs) && input.lastProbeLatencyMs >= 0 ? { lastProbeLatencyMs: input.lastProbeLatencyMs } : {}),
+    ...(typeof input.lastCheckedAt === 'string' ? { lastCheckedAt: input.lastCheckedAt } : {}),
     ...(typeof input.lastSuccessAt === 'string' ? { lastSuccessAt: input.lastSuccessAt } : {}),
     ...(typeof input.lastFailureAt === 'string' ? { lastFailureAt: input.lastFailureAt } : {}),
     ...(typeof input.lastErrorCode === 'string' ? { lastErrorCode: input.lastErrorCode } : {}),
     ...(typeof input.lastErrorClass === 'string' ? { lastErrorClass: input.lastErrorClass } : {}),
-    ...(typeof input.nextProbeAt === 'string' ? { nextProbeAt: input.nextProbeAt } : {}),
-    ...(typeof input.lastRecoveryAt === 'string' ? { lastRecoveryAt: input.lastRecoveryAt } : {}),
-    ...(Number.isInteger(input.recoveryAttempt) && Number(input.recoveryAttempt) >= 0 ? { recoveryAttempt: Number(input.recoveryAttempt) } : {}),
-    ...(typeof input.nextRecoveryAt === 'string' ? { nextRecoveryAt: input.nextRecoveryAt } : {}),
     ...(typeof input.message === 'string' ? { message: input.message } : {}),
   };
 }
@@ -152,10 +116,6 @@ function normalizeProcessState(label: DevFlowSupervisorProcessLabel, value: unkn
   };
 }
 
-function processLabelsIncludeTunnel(labels: DevFlowSupervisorProcessLabel[]) {
-  return labels.includes('zrok');
-}
-
 export function createDevFlowSupervisorState(input: {
   mode: DevFlowSupervisorMode;
   processLabels: DevFlowSupervisorProcessLabel[];
@@ -174,7 +134,9 @@ export function createDevFlowSupervisorState(input: {
     startedAt: now,
     updatedAt: now,
     processes,
-    ...(processLabelsIncludeTunnel(input.processLabels) ? { tunnelHealth: { status: 'unknown' as const, consecutiveProbeFailures: 0 } } : {}),
+    ...(input.processLabels.includes('tunnel')
+      ? { tunnelHealth: { status: 'unknown' as const, lastCheckedAt: now, message: 'OpenAI tunnel startup has not been confirmed yet.' } }
+      : {}),
   };
 }
 
@@ -191,7 +153,7 @@ export function readDevFlowSupervisorState(): DevFlowSupervisorState | null {
       ? parsed.processes as Record<string, unknown>
       : {};
     const processes: DevFlowSupervisorState['processes'] = {};
-    for (const label of ['server', 'zrok'] as const) {
+    for (const label of ['server', 'tunnel'] as const) {
       const normalized = normalizeProcessState(label, rawProcesses[label]);
       if (normalized) processes[label] = normalized;
     }
@@ -219,7 +181,7 @@ export function writeDevFlowSupervisorState(state: DevFlowSupervisorState) {
 }
 
 export function updateDevFlowSupervisorState(
-  patch: Partial<Pick<DevFlowSupervisorState, 'shuttingDown'>>,
+  patch: Partial<Pick<DevFlowSupervisorState, 'shuttingDown' | 'mode'>>,
   now = new Date().toISOString(),
 ) {
   const current = readDevFlowSupervisorState();
@@ -241,132 +203,6 @@ export function updateDevFlowSupervisorProcess(
     updatedAt: now,
     processes: { ...current.processes, [label]: next },
   });
-}
-
-export function resetDevFlowTunnelHealthForGeneration(
-  previous: DevFlowTunnelHealthState | undefined,
-  generation: string,
-  options: { startupGraceMs: number; now?: string },
-): DevFlowTunnelHealthState {
-  const now = options.now || new Date().toISOString();
-  const parsedNowMs = Date.parse(now);
-  const nowMs = Number.isFinite(parsedNowMs) ? parsedNowMs : Date.now();
-  const startupGraceMs = Math.max(0, Math.floor(options.startupGraceMs));
-  return {
-    status: 'unknown',
-    generation,
-    generationStartedAt: now,
-    startupGraceUntil: new Date(nowMs + startupGraceMs).toISOString(),
-    lifecyclePhase: 'cold-start',
-    consecutiveProbeFailures: 0,
-    ...(previous?.lastRecoveryAt ? { lastRecoveryAt: previous.lastRecoveryAt } : {}),
-    ...(Number.isInteger(previous?.recoveryAttempt) ? { recoveryAttempt: previous?.recoveryAttempt } : {}),
-    ...(previous?.lastErrorCode ? { lastErrorCode: previous.lastErrorCode } : {}),
-    ...(previous?.lastErrorClass ? { lastErrorClass: previous.lastErrorClass } : {}),
-    message: 'zrok service/share generation started; public tunnel reachability is unknown during startup grace.',
-  };
-}
-
-export function advanceDevFlowTunnelHealth(
-  previous: DevFlowTunnelHealthState | undefined,
-  probe: {
-    ok: boolean;
-    statusCode?: number;
-    latencyMs?: number;
-    message?: string;
-    failureClass?: string;
-    rateLimit?: { nextAttemptAt?: string };
-  },
-  options: { failureThreshold: number; now?: string; generation?: string },
-): DevFlowTunnelHealthState {
-  const now = options.now || new Date().toISOString();
-  const failureThreshold = Math.max(1, Math.floor(options.failureThreshold));
-  const latencyMs = Number.isFinite(probe.latencyMs) && Number(probe.latencyMs) >= 0 ? Number(probe.latencyMs) : undefined;
-  const statusCode = Number.isInteger(probe.statusCode) ? Number(probe.statusCode) : undefined;
-  const failureClass = typeof probe.failureClass === 'string' ? probe.failureClass : undefined;
-  if (options.generation && previous?.generation && previous.generation !== options.generation) return previous;
-
-  const current = {
-    ...(previous || { status: 'unknown' as const, consecutiveProbeFailures: 0 }),
-    ...(options.generation ? { generation: options.generation } : {}),
-  };
-  const lifecyclePhase: DevFlowTunnelLifecyclePhase = current.lifecyclePhase
-    || (current.generation ? (current.lastSuccessAt ? 'steady-state' : 'cold-start') : 'steady-state');
-
-  if (probe.ok) {
-    return {
-      ...current,
-      lifecyclePhase: 'steady-state',
-      status: 'healthy',
-      lastProbeAt: now,
-      lastProbeStatusCode: statusCode,
-      lastProbeLatencyMs: latencyMs,
-      lastSuccessAt: now,
-      consecutiveProbeFailures: 0,
-      lastErrorCode: undefined,
-      lastErrorClass: undefined,
-      nextProbeAt: undefined,
-      nextRecoveryAt: undefined,
-      message: probe.message || 'Public tunnel probe succeeded; zrok service/share is reachable.',
-    };
-  }
-
-  if (failureClass === 'rate-limit' || statusCode === 429) {
-    const nextProbeAt = typeof probe.rateLimit?.nextAttemptAt === 'string' && Number.isFinite(Date.parse(probe.rateLimit.nextAttemptAt))
-      ? probe.rateLimit.nextAttemptAt
-      : undefined;
-    return {
-      ...current,
-      lifecyclePhase,
-      status: 'degraded',
-      lastProbeAt: now,
-      lastProbeStatusCode: statusCode,
-      lastProbeLatencyMs: latencyMs,
-      lastFailureAt: now,
-      consecutiveProbeFailures: Math.max(0, current.consecutiveProbeFailures || 0),
-      lastErrorCode: 'ZROK_PUBLIC_RATE_LIMITED',
-      lastErrorClass: 'rate-limit',
-      nextProbeAt,
-      nextRecoveryAt: undefined,
-      message: nextProbeAt
-        ? `Public zrok route is rate limited; the next probe is eligible at ${nextProbeAt}.`
-        : 'Public zrok route is rate limited; automatic repair is suppressed until the bounded probe cooldown expires.',
-    };
-  }
-
-  const startupGraceUntilMs = current.startupGraceUntil ? Date.parse(current.startupGraceUntil) : Number.NaN;
-  if (lifecyclePhase === 'cold-start' && Number.isFinite(startupGraceUntilMs) && Date.parse(now) < startupGraceUntilMs) {
-    return {
-      ...current,
-      lifecyclePhase,
-      status: 'unknown',
-      lastProbeAt: now,
-      lastProbeStatusCode: statusCode,
-      lastProbeLatencyMs: latencyMs,
-      lastFailureAt: now,
-      consecutiveProbeFailures: 0,
-      lastErrorCode: statusCode ? `ZROK_PUBLIC_HTTP_${statusCode}` : 'ZROK_PUBLIC_NETWORK_FAILURE',
-      lastErrorClass: failureClass,
-      nextProbeAt: undefined,
-      message: probe.message || 'Public tunnel probe failed during zrok startup grace; recovery threshold is not advanced yet.',
-    };
-  }
-
-  const consecutiveProbeFailures = Math.max(0, current.consecutiveProbeFailures || 0) + 1;
-  return {
-    ...current,
-    lifecyclePhase,
-    status: consecutiveProbeFailures >= failureThreshold ? 'down' : 'degraded',
-    lastProbeAt: now,
-    lastProbeStatusCode: statusCode,
-    lastProbeLatencyMs: latencyMs,
-    lastFailureAt: now,
-    consecutiveProbeFailures,
-    lastErrorCode: statusCode ? `ZROK_PUBLIC_HTTP_${statusCode}` : 'ZROK_PUBLIC_NETWORK_FAILURE',
-    lastErrorClass: failureClass,
-    nextProbeAt: undefined,
-    message: probe.message || 'Public zrok tunnel probe failed.',
-  };
 }
 
 export function updateDevFlowSupervisorTunnelHealth(
@@ -406,31 +242,22 @@ function childDiagnostic(
 }
 
 function tunnelDiagnostic(state: DevFlowSupervisorState): DevFlowSupervisorChildDiagnostic {
-  const enabled = state.mode === 'all';
+  const enabled = state.mode === 'all' || Boolean(state.processes.tunnel);
   if (!enabled) return { enabled: false, status: 'disabled', restartAttempt: 0 };
-  const base = childDiagnostic(state, 'zrok', true);
-  const health = state.tunnelHealth || { status: 'unknown' as const, consecutiveProbeFailures: 0 };
-  const status = base.processStatus === 'running' ? health.status : base.status;
+  const base = childDiagnostic(state, 'tunnel', true);
+  const health = state.tunnelHealth || { status: 'unknown' as const };
+  const status = base.processStatus === 'running'
+    ? health.status
+    : base.status;
   return {
     ...base,
     status,
     reachabilityStatus: health.status,
-    ...(health.generation ? { tunnelGeneration: health.generation } : {}),
-    ...(health.generationStartedAt ? { generationStartedAt: health.generationStartedAt } : {}),
-    ...(health.startupGraceUntil ? { startupGraceUntil: health.startupGraceUntil } : {}),
-    ...(health.lifecyclePhase ? { tunnelLifecyclePhase: health.lifecyclePhase } : {}),
-    ...(health.lastProbeAt ? { lastProbeAt: health.lastProbeAt } : {}),
-    ...(Number.isInteger(health.lastProbeStatusCode) ? { lastProbeStatusCode: health.lastProbeStatusCode } : {}),
-    ...(Number.isFinite(health.lastProbeLatencyMs) ? { lastProbeLatencyMs: health.lastProbeLatencyMs } : {}),
+    ...(health.lastCheckedAt ? { lastCheckedAt: health.lastCheckedAt } : {}),
     ...(health.lastSuccessAt ? { lastSuccessAt: health.lastSuccessAt } : {}),
     ...(health.lastFailureAt ? { lastFailureAt: health.lastFailureAt } : {}),
-    consecutiveProbeFailures: health.consecutiveProbeFailures,
     ...(health.lastErrorCode ? { lastErrorCode: health.lastErrorCode } : {}),
     ...(health.lastErrorClass ? { lastErrorClass: health.lastErrorClass } : {}),
-    ...(health.nextProbeAt ? { nextProbeAt: health.nextProbeAt } : {}),
-    ...(health.lastRecoveryAt ? { lastRecoveryAt: health.lastRecoveryAt } : {}),
-    ...(Number.isInteger(health.recoveryAttempt) ? { recoveryAttempt: health.recoveryAttempt } : {}),
-    ...(health.nextRecoveryAt ? { nextRecoveryAt: health.nextRecoveryAt } : {}),
     ...(health.message ? { message: health.message } : {}),
   };
 }

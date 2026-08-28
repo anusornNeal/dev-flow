@@ -942,7 +942,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     recommendations.push(`Client-observed recovery parity is not ready (${recoveryParity.endToEnd.reasonCodes.join(', ') || 'client-registry-stale'}); ${recoveryParity.endToEnd.nextAction}`);
   }
   if (runtimeSupervisor?.api?.status === 'healthy' && (runtimeSupervisor?.tunnel?.status === 'degraded' || runtimeSupervisor?.tunnel?.status === 'down')) {
-    recommendations.push(`Public zrok route is ${runtimeSupervisor.tunnel.status} while the local API is healthy; inspect zrok service/share state and runtime supervisor public-probe evidence.`);
+    recommendations.push(`OpenAI tunnel is ${runtimeSupervisor.tunnel.status} while the local API is healthy; run npm run tunnel:status and inspect tunnel-client diagnostics.`);
   }
   if (runtimeSourceFreshness && runtimeSourceFreshness.code !== 'current') {
     recommendations.push(`DevFlow runtime source is ${runtimeSourceFreshness.code}; ${runtimeDiagnosis?.nextAction || runtimeSourceFreshness.nextAction || 'inspect runtime source freshness before treating this process as current.'}`);
@@ -1160,14 +1160,11 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         apiStatus: runtimeSupervisor.api?.status,
         tunnelStatus: runtimeSupervisor.tunnel?.status,
         tunnelProcessStatus: runtimeSupervisor.tunnel?.processStatus,
-        lastProbeAt: runtimeSupervisor.tunnel?.lastProbeAt,
-        consecutiveProbeFailures: runtimeSupervisor.tunnel?.consecutiveProbeFailures,
+        lastCheckedAt: runtimeSupervisor.tunnel?.lastCheckedAt,
+        lastSuccessAt: runtimeSupervisor.tunnel?.lastSuccessAt,
         lastErrorCode: runtimeSupervisor.tunnel?.lastErrorCode,
         lastErrorClass: runtimeSupervisor.tunnel?.lastErrorClass,
         lastFailureAt: runtimeSupervisor.tunnel?.lastFailureAt,
-        lastRecoveryAt: runtimeSupervisor.tunnel?.lastRecoveryAt,
-        recoveryAttempt: runtimeSupervisor.tunnel?.recoveryAttempt,
-        nextRecoveryAt: runtimeSupervisor.tunnel?.nextRecoveryAt,
       } : null,
     },
     recovery: {

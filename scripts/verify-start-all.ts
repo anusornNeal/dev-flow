@@ -1,321 +1,63 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 assert.equal(packageJson.scripts.dev, 'tsx scripts/start-all.ts --server-only');
 assert.equal(packageJson.scripts['dev:server'], 'tsx server.ts');
 assert.equal(packageJson.scripts['start:all'], 'tsx scripts/start-all.ts');
+assert.equal(packageJson.scripts['tunnel:start'], 'tsx scripts/openai-tunnel.ts start');
+assert.equal(packageJson.scripts['tunnel:status'], 'tsx scripts/openai-tunnel.ts status');
+assert.equal(packageJson.scripts['tunnel:stop'], 'tsx scripts/openai-tunnel.ts stop');
 
 const {
-  apiCapabilitiesUrl,
-  apiZrokTakeoverUrl,
   buildNpmInvocation,
   buildStartAllPlan,
-  buildZrokBootstrapInvocation,
-  classifyPublicProbeFailure,
-  apiZrokStatusUrl,
-  getZrokProbeAdmission,
-  getZrokProbeCooldownDelayMs,
-  getZrokRecoveryDecision,
-  normalizeZrokPublicUrl,
-  shouldRecoverZrokSupervisorProcess,
-  parseZrokBootstrapResult,
-  probeZrokPublicRoute,
-  probeZrokRuntimeStatus,
-  requestZrokStaleSameMachineRecovery,
-  selectZrokPublicProbeUrl,
   resolveStartAllOptions,
   shouldRestartServerProcess,
+  waitForLocalApi,
 } = await import('./start-all');
 const {
-  advanceDevFlowTunnelHealth,
-  resetDevFlowTunnelHealthForGeneration,
-} = await import('../src/lib/devFlowSupervisor');
-const { createZrokRateLimitTracker } = await import('../src/server/services/zrokRateLimitPolicy');
+  buildOpenAiTunnelInvocation,
+  getOpenAiTunnelStatus,
+  resolveOpenAiTunnelOptions,
+  startOpenAiTunnel,
+  stopOpenAiTunnel,
+} = await import('./openai-tunnel');
 
 assert.deepEqual(buildNpmInvocation(['run', 'dev:server'], { npm_execpath: 'C:\\node\\npm-cli.js' }), {
   command: process.execPath,
   args: ['C:\\node\\npm-cli.js', 'run', 'dev:server'],
 });
 
-assert.equal(normalizeZrokPublicUrl({ publicUrl: 'zrok-test.example.test/mcp' }), 'https://zrok-test.example.test/mcp');
-assert.equal(
-  normalizeZrokPublicUrl({ publicUrl: 'https://custom.example/app///?ignored=query#ignored' }),
-  'https://custom.example/app',
-);
-assert.equal(normalizeZrokPublicUrl({ publicUrl: 'https://user:secret@custom.example/app' }), '');
-assert.equal(normalizeZrokPublicUrl({ reservedName: 'test-reserved-name' }), '');
-assert.equal(normalizeZrokPublicUrl({ reservedName: 'not-a-public-url.example.test' }), '');
-assert.equal(normalizeZrokPublicUrl({}), '');
-
 assert.deepEqual(resolveStartAllOptions({
   DEVFLOW_PORT: '3456',
-  DEVFLOW_ZROK_RESERVED_NAME: 'test-reserved-name',
+  DEVFLOW_OPEN_BROWSER: 'false',
   DEVFLOW_OPEN_BROWSER_DELAY_MS: '250',
+  DEVFLOW_TUNNEL_STARTUP_WAIT_MS: '1200',
 }), {
   port: 3456,
-  zrokPublicUrl: '',
-  zrokReservedName: 'test-reserved-name',
-  openBrowser: true,
+  openBrowser: false,
   openBrowserDelayMs: 250,
-  zrokProbeIntervalMs: 15000,
-  zrokProbeTimeoutMs: 5000,
-  zrokProbeStartupGraceMs: 30000,
-  zrokProbeFailureThreshold: 3,
-  zrokRecoveryCooldownMs: 15000,
+  tunnelStartupWaitMs: 1200,
 });
+assert.equal(resolveStartAllOptions({ DEVFLOW_TUNNEL_STARTUP_WAIT_MS: '999999' }).tunnelStartupWaitMs, 120000);
 
-const capped = resolveStartAllOptions({ DEVFLOW_ZROK_PROBE_STARTUP_GRACE_MS: '999999' });
-assert.equal(capped.zrokProbeStartupGraceMs, 120000);
-
-const options = resolveStartAllOptions({
-  DEVFLOW_PORT: '3456',
-  DEVFLOW_ZROK_PUBLIC_URL: 'https://zrok-test.example.test',
-  DEVFLOW_OPEN_BROWSER_DELAY_MS: '250',
-});
-const plan = buildStartAllPlan(options, 'all-token', 'all');
+const plan = buildStartAllPlan(resolveStartAllOptions({ DEVFLOW_PORT: '3456' }), 'all-token', 'all');
 assert.equal(plan.mode, 'all');
-assert.deepEqual(plan.processes.map((entry) => entry.label), ['server']);
-assert.deepEqual(plan.processes[0].args.slice(-2), ['run', 'dev:server']);
 assert.equal(plan.appUrl, 'http://localhost:3456');
 assert.equal(plan.openBrowser, true);
-assert.equal(plan.openBrowserDelayMs, 250);
+assert.deepEqual(plan.processes.map((entry) => entry.label), ['server']);
+assert.deepEqual(plan.processes[0].args.slice(-2), ['run', 'dev:server']);
 assert.equal(plan.processes[0].env?.DEVFLOW_RESTART_SUPERVISOR, 'start-all');
 assert.equal(plan.processes[0].env?.DEVFLOW_RESTART_SUPERVISOR_TOKEN, 'all-token');
 
-const serverOnly = buildStartAllPlan(options, 'server-token', 'server-only');
-assert.deepEqual(serverOnly.processes.map((entry) => entry.label), ['server']);
-assert.equal(serverOnly.openBrowser, false);
-assert.equal(serverOnly.processes[0].env?.DEVFLOW_RESTART_SUPERVISOR_TOKEN, 'server-token');
-
-const bootstrapInvocation = buildZrokBootstrapInvocation('C:\\repo', 'account-specific-name', 'win32');
-assert.match(bootstrapInvocation.scriptPath.replace(/\\/g, '/'), /scripts\/zrok-bootstrap\.ps1$/);
-assert.equal(bootstrapInvocation.command, 'powershell.exe');
-assert.ok(bootstrapInvocation.args.includes('-File'));
-assert.deepEqual(bootstrapInvocation.args.slice(-2), ['-ReservedName', 'account-specific-name']);
-const bootstrapInvocationWithoutName = buildZrokBootstrapInvocation('C:\\repo', '', 'win32');
-assert.equal(bootstrapInvocationWithoutName.args.includes('-ReservedName'), false);
-const macBootstrapInvocation = buildZrokBootstrapInvocation('C:\\repo', 'account-specific-name', 'darwin');
-assert.equal(macBootstrapInvocation.command, process.execPath);
-assert.match(macBootstrapInvocation.scriptPath.replace(/\\/g, '/'), /scripts\/zrok-bootstrap-macos\.ts$/);
-assert.match(macBootstrapInvocation.args[0].replace(/\\/g, '/'), /node_modules\/tsx\/dist\/cli\.mjs$/);
-assert.deepEqual(macBootstrapInvocation.args.slice(-2), ['--reserved-name', 'account-specific-name']);
-assert.equal(macBootstrapInvocation.args.some((arg) => /powershell|\.ps1|nssm/i.test(arg)), false);
-
-assert.deepEqual(parseZrokBootstrapResult(JSON.stringify({
-  status: 'ready',
-  reservedName: 'test-reserved-name',
-  message: 'ready',
-})), {
-  ready: true,
-  publicUrl: '',
-  message: 'ready',
-});
-assert.deepEqual(parseZrokBootstrapResult(JSON.stringify({
-  ok: true,
-  code: 'ready',
-  reservedName: 'account-specific-name',
-  message: 'zrok bootstrap is ready.',
-})), {
-  ready: true,
-  publicUrl: '',
-  message: 'zrok bootstrap is ready.',
-});
-assert.deepEqual(parseZrokBootstrapResult([
-  'progress line',
-  JSON.stringify({ ready: true, publicUrl: 'https://zrok-test.example.test/mcp' }),
-].join('\n')), {
-  ready: true,
-  publicUrl: 'https://zrok-test.example.test/mcp',
-  message: 'zrok bootstrap is ready.',
-});
-assert.equal(parseZrokBootstrapResult('not-json', 'https://fallback.example.test').ready, false);
-assert.equal(parseZrokBootstrapResult('not-json', 'https://fallback.example.test').publicUrl, 'https://fallback.example.test');
-const notReady = parseZrokBootstrapResult(JSON.stringify({ ready: false, status: 'degraded', message: 'service stopped' }));
-assert.equal(notReady.ready, false);
-assert.equal(notReady.message, 'service stopped');
-
-assert.equal(apiCapabilitiesUrl('https://zrok-test.example.test'), 'https://zrok-test.example.test/api/capabilities');
-assert.equal(apiCapabilitiesUrl('https://custom.example/app'), 'https://custom.example/app/api/capabilities');
-assert.equal(apiZrokStatusUrl('https://zrok-test.example.test'), 'https://zrok-test.example.test/api/zrok/status');
-const dynamicRuntime = await probeZrokRuntimeStatus('http://localhost:3456', 500, async () => new Response(JSON.stringify({
-  status: 'online',
-  baseUrl: 'https://dynamic-account.example/app',
-  share: { state: 'active' },
-}), { status: 200, headers: { 'content-type': 'application/json' } }));
-assert.deepEqual(dynamicRuntime, {
-  status: 'online',
-  shareState: 'active',
-  baseUrl: 'https://dynamic-account.example/app',
-});
-const runtimeRateLimited = await probeZrokRuntimeStatus('http://localhost:3456', 500, async () => new Response(JSON.stringify({
-  status: 'degraded',
-  baseUrl: 'https://dynamic-account.example/app',
-  share: { state: 'active' },
-  rateLimit: {
-    source: 'public',
-    firstObservedAt: '2026-08-27T00:00:00.000Z',
-    lastObservedAt: '2026-08-27T00:00:00.000Z',
-    nextAttemptAt: '2026-08-27T00:00:05.000Z',
-    retryAfterMs: 5000,
-    observedCount: 1,
-  },
-}), { status: 200, headers: { 'content-type': 'application/json' } }));
-assert.equal(runtimeRateLimited?.rateLimit?.source, 'public');
-assert.equal(runtimeRateLimited?.rateLimit?.retryAfterMs, 5000);
-const oversizedByHeader = await probeZrokRuntimeStatus('http://localhost:3456', 500, async () => new Response(JSON.stringify({
-  status: 'online',
-  baseUrl: 'https://oversized.example',
-  share: { state: 'active' },
-}), {
-  status: 200,
-  headers: { 'content-length': String(256 * 1024 + 1) },
-}));
-assert.equal(oversizedByHeader, undefined, 'declared oversized local zrok status is rejected before parsing');
-let oversizedStreamCancelled = false;
-const oversizedChunked = await probeZrokRuntimeStatus('http://localhost:3456', 500, async () => new Response(new ReadableStream<Uint8Array>({
-  start(controller) {
-    controller.enqueue(new TextEncoder().encode(' '.repeat(256 * 1024 + 1)));
-    controller.enqueue(new TextEncoder().encode(JSON.stringify({
-      status: 'online',
-      baseUrl: 'https://oversized.example',
-      share: { state: 'active' },
-    })));
-    controller.close();
-  },
-  cancel() {
-    oversizedStreamCancelled = true;
-  },
-}), { status: 200 }));
-assert.equal(oversizedChunked, undefined, 'chunked oversized local zrok status is rejected');
-assert.equal(oversizedStreamCancelled, true, 'chunked oversized local zrok status stream is cancelled');
-const probedUrls: string[] = [];
-const dynamicRouteProbe = await probeZrokPublicRoute(
-  'http://localhost:3456',
-  '',
-  500,
-  async (input) => {
-    const url = String(input);
-    probedUrls.push(url);
-    if (url === 'http://localhost:3456/api/zrok/status') {
-      return new Response(JSON.stringify({
-        status: 'online',
-        baseUrl: 'https://dynamic-account.example/app',
-        share: { state: 'active' },
-        actionability: { canRecoverStaleSameMachineOwner: true },
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
-    }
-    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-  },
-);
-assert.equal(dynamicRouteProbe.publicUrl, 'https://dynamic-account.example/app');
-assert.equal(dynamicRouteProbe.publicProbe.ok, true);
-assert.equal(dynamicRouteProbe.runtimeStatus?.canRecoverStaleSameMachineOwner, true);
-assert.deepEqual(probedUrls, [
-  'http://localhost:3456/api/zrok/status',
-  'https://dynamic-account.example/app/api/capabilities',
-]);
-const sharedCooldownUrls: string[] = [];
-const sharedCooldownResults = [];
-for (const nowMs of [1000, 2000, 4000]) {
-  sharedCooldownResults.push(await probeZrokPublicRoute(
-    'http://localhost:3456',
-    'https://configured.example',
-    500,
-    async (input) => {
-      sharedCooldownUrls.push(String(input));
-      return new Response(JSON.stringify({
-        status: 'degraded',
-        baseUrl: 'https://dynamic-account.example/app',
-        share: { state: 'active' },
-        rateLimit: {
-          source: 'public',
-          firstObservedAt: '1970-01-01T00:00:01.000Z',
-          lastObservedAt: '1970-01-01T00:00:01.000Z',
-          nextAttemptAt: '1970-01-01T00:00:05.000Z',
-          retryAfterMs: 4000,
-          observedCount: 1,
-        },
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
-    },
-    { now: () => nowMs },
-  ));
-}
-assert.equal(sharedCooldownResults.every((result) => result.publicProbe.failureClass === 'rate-limit'), true);
-assert.deepEqual(sharedCooldownUrls, [
-  'http://localhost:3456/api/zrok/status',
-  'http://localhost:3456/api/zrok/status',
-  'http://localhost:3456/api/zrok/status',
-], 'repeated ticks inside shared cooldown never call the public route');
-
-let directPublicCalls = 0;
-const directTracker = createZrokRateLimitTracker('public', { now: () => 1000, random: () => 0 });
-const directRateLimited = await probeZrokPublicRoute(
-  'http://localhost:3456',
-  '',
-  500,
-  async (input) => {
-    if (String(input) === 'http://localhost:3456/api/zrok/status') {
-      return new Response(JSON.stringify({
-        status: 'online',
-        baseUrl: 'https://dynamic-account.example/app',
-        share: { state: 'active' },
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
-    }
-    directPublicCalls += 1;
-    return new Response('{}', { status: 429, headers: { 'retry-after': '2' } });
-  },
-  { rateLimitTracker: directTracker, now: () => 1000 },
-);
-assert.equal(directPublicCalls, 1);
-assert.equal(directRateLimited.publicProbe.failureClass, 'rate-limit');
-assert.equal(directRateLimited.publicProbe.rateLimit?.retryAfterMs, 2000);
-assert.equal(
-  selectZrokPublicProbeUrl('https://configured.example', dynamicRuntime),
-  'https://dynamic-account.example/app',
-  'live local zrok status replaces the public probe target without a supervisor restart',
-);
-assert.equal(
-  selectZrokPublicProbeUrl('https://configured.example', { status: 'degraded', shareState: 'unknown' }),
-  'https://configured.example',
-  'an absent live base URL preserves the current public probe target',
-);
-assert.equal(
-  selectZrokPublicProbeUrl('https://configured.example', { baseUrl: 'not a valid URL' }),
-  'https://configured.example',
-  'an invalid live base URL preserves the current public probe target',
-);
-assert.equal(classifyPublicProbeFailure({ statusCode: 503 }), 'http-5xx');
-assert.equal(classifyPublicProbeFailure({ statusCode: 429 }), 'rate-limit');
-assert.equal(getZrokProbeCooldownDelayMs('1970-01-01T00:00:05.000Z', 1000), 4000);
-assert.equal(getZrokProbeCooldownDelayMs('1970-01-01T00:00:05.000Z', 5000), 0);
-let admittedProbeCount = 0;
-for (const nowMs of [1000, 2000, 4999]) {
-  const admission = getZrokProbeAdmission({ cooldownUntilMs: 5000, nowMs });
-  if (admission.admit) admittedProbeCount += 1;
-  assert.equal(admission.admit, false);
-}
-const cooldownExpiryAdmission = getZrokProbeAdmission({ cooldownUntilMs: 5000, nowMs: 5000 });
-if (cooldownExpiryAdmission.admit) admittedProbeCount += 1;
-assert.equal(cooldownExpiryAdmission.admit, true);
-assert.equal(admittedProbeCount, 1, 'ticks inside cooldown admit zero probes and expiry admits exactly one');
-assert.equal(classifyPublicProbeFailure({ error: Object.assign(new Error('request timed out'), { name: 'AbortError' }) }), 'timeout');
-assert.equal(classifyPublicProbeFailure({ error: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }) }), 'dns');
-assert.equal(apiZrokTakeoverUrl('http://localhost:3456'), 'http://localhost:3456/api/zrok/takeover');
-let takeoverRequest: { url?: string; method?: string } = {};
-const takeoverTrigger = await requestZrokStaleSameMachineRecovery(
-  'http://localhost:3456',
-  5000,
-  async (input, init) => {
-    takeoverRequest = { url: String(input), method: init?.method };
-    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-  },
-);
-assert.deepEqual(takeoverRequest, { url: 'http://localhost:3456/api/zrok/takeover', method: 'POST' });
-assert.equal(takeoverTrigger.ok, true);
+const localPlan = buildStartAllPlan(resolveStartAllOptions({ DEVFLOW_PORT: '3456' }), 'local-token', 'server-only');
+assert.equal(localPlan.openBrowser, false);
+assert.equal(localPlan.processes[0].env?.DEVFLOW_RESTART_SUPERVISOR_TOKEN, 'local-token');
 
 const acceptedRestart = {
-  ticket: 'restart-test',
   status: 'accepted' as const,
   supervisor: 'start-all',
   supervisorToken: 'supervisor-token',
@@ -335,174 +77,139 @@ assert.equal(shouldRestartServerProcess({
   restartState: acceptedRestart,
 }), false);
 
-assert.equal(getZrokRecoveryDecision({
-  tunnelStatus: 'down',
-  consecutiveProbeFailures: 3,
-  failureThreshold: 3,
-  localApiHealthy: true,
-  zrokStatus: 'standby',
-  zrokShareState: 'remote-active',
-  shuttingDown: false,
-  nowMs: 40000,
-}), 'suppressed-standby');
-assert.equal(getZrokRecoveryDecision({
-  tunnelStatus: 'down',
-  consecutiveProbeFailures: 3,
-  failureThreshold: 3,
-  localApiHealthy: true,
-  zrokStatus: 'standby',
-  zrokShareState: 'remote-active',
-  canRecoverStaleSameMachineOwner: true,
-  shuttingDown: false,
-  lifecyclePhase: 'steady-state',
-  nowMs: 40000,
-}), 'recover-stale-same-machine-owner');
-assert.equal(getZrokRecoveryDecision({
-  tunnelStatus: 'down',
-  consecutiveProbeFailures: 2,
-  failureThreshold: 3,
-  localApiHealthy: true,
-  zrokStatus: 'standby',
-  zrokShareState: 'remote-active',
-  canRecoverStaleSameMachineOwner: true,
-  shuttingDown: false,
-  lifecyclePhase: 'steady-state',
-  nowMs: 40000,
-}), 'threshold-not-reached');
-assert.equal(getZrokRecoveryDecision({
-  tunnelStatus: 'down',
-  consecutiveProbeFailures: 3,
-  failureThreshold: 3,
-  localApiHealthy: true,
-  zrokStatus: 'standby',
-  zrokShareState: 'remote-active',
-  canRecoverStaleSameMachineOwner: true,
-  shuttingDown: false,
-  lifecyclePhase: 'steady-state',
-  recoveryCooldownUntilMs: 45000,
-  nowMs: 40000,
-}), 'suppressed-recovery-cooldown');
-assert.equal(getZrokRecoveryDecision({
-  tunnelStatus: 'down',
-  consecutiveProbeFailures: 3,
-  failureThreshold: 3,
-  localApiHealthy: true,
-  zrokStatus: 'online',
-  zrokShareState: 'active',
-  shuttingDown: false,
-  nowMs: 40000,
-}), 'suppressed-periodic-recovery');
-assert.equal(getZrokRecoveryDecision({
-  tunnelStatus: 'down',
-  consecutiveProbeFailures: 3,
-  failureThreshold: 3,
-  localApiHealthy: true,
-  shuttingDown: false,
-  recoveryCooldownUntilMs: 45000,
-  nowMs: 40000,
-}), 'suppressed-recovery-cooldown');
-assert.equal(shouldRecoverZrokSupervisorProcess({
-  publicRouteHealthy: true,
-  processStatus: 'failed',
-  zrokStatus: 'online',
-  zrokShareState: 'active',
-}), true);
-assert.equal(shouldRecoverZrokSupervisorProcess({
-  publicRouteHealthy: false,
-  processStatus: 'failed',
-  zrokStatus: 'online',
-  zrokShareState: 'active',
-}), false);
-assert.equal(shouldRecoverZrokSupervisorProcess({
-  publicRouteHealthy: true,
-  processStatus: 'failed',
-  zrokStatus: 'standby',
-  zrokShareState: 'remote-active',
-}), false);
-assert.equal(shouldRecoverZrokSupervisorProcess({
-  publicRouteHealthy: true,
-  processStatus: 'running',
-  zrokStatus: 'online',
-  zrokShareState: 'active',
-}), false);
-let health = resetDevFlowTunnelHealthForGeneration(undefined, 'A', {
-  startupGraceMs: 5000,
-  now: '2026-08-16T00:00:00.000Z',
-});
-health = advanceDevFlowTunnelHealth(health, { ok: false, statusCode: 502 }, {
-  failureThreshold: 3,
-  generation: 'A',
-  now: '2026-08-16T00:00:01.000Z',
-});
-assert.equal(health.status, 'unknown');
-assert.equal(health.consecutiveProbeFailures, 0);
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-openai-tunnel-options-'));
+const tunnelEnv = {
+  DEVFLOW_PORT: '3456',
+  DEVFLOW_OPENAI_TUNNEL_ID: 'tunnel_abc123',
+  CONTROL_PLANE_API_KEY: 'runtime-secret-value',
+  DEVFLOW_TUNNEL_ALIAS: 'devflow-test',
+  DEVFLOW_TUNNEL_CLIENT_BIN: 'C:\\tools\\tunnel-client.exe',
+} as NodeJS.ProcessEnv;
+const tunnelOptions = resolveOpenAiTunnelOptions(tunnelEnv, tempRoot);
+assert.equal(tunnelOptions.alias, 'devflow-test');
+assert.equal(tunnelOptions.tunnelId, 'tunnel_abc123');
+assert.equal(tunnelOptions.mcpServerUrl, 'http://127.0.0.1:3456/mcp');
+assert.equal(tunnelOptions.runtimeKeyEnvName, 'CONTROL_PLANE_API_KEY');
+assert.equal(tunnelOptions.stateDir, path.join(tempRoot, '.devflow', 'tunnel-client'));
 
-for (const now of ['2026-08-16T00:00:06.000Z', '2026-08-16T00:00:07.000Z', '2026-08-16T00:00:08.000Z']) {
-  health = advanceDevFlowTunnelHealth(health, { ok: false, statusCode: 502 }, {
-    failureThreshold: 3,
-    generation: 'A',
-    now,
-  });
-}
-assert.equal(health.status, 'down');
-assert.equal(health.consecutiveProbeFailures, 3);
+const startInvocation = buildOpenAiTunnelInvocation('start', tunnelOptions, tunnelEnv);
+assert.equal(startInvocation.command, 'C:\\tools\\tunnel-client.exe');
+assert.deepEqual(startInvocation.args.slice(0, 2), ['runtimes', 'connect']);
+assert.ok(startInvocation.args.includes('--tunnel-id'));
+assert.ok(startInvocation.args.includes('tunnel_abc123'));
+assert.ok(startInvocation.args.includes('--runtime-api-key'));
+assert.ok(startInvocation.args.includes('env:CONTROL_PLANE_API_KEY'));
+assert.ok(startInvocation.args.includes('--mcp-server-url'));
+assert.ok(startInvocation.args.includes('http://127.0.0.1:3456/mcp'));
+assert.equal(startInvocation.args.includes('runtime-secret-value'), false, 'literal runtime key must not appear in tunnel-client arguments');
+assert.equal(startInvocation.env.TUNNEL_CLIENT_STATE_DIR, tunnelOptions.stateDir);
+assert.deepEqual(buildOpenAiTunnelInvocation('status', tunnelOptions, tunnelEnv).args, ['runtimes', 'status', 'devflow-test', '--json']);
+assert.deepEqual(buildOpenAiTunnelInvocation('stop', tunnelOptions, tunnelEnv).args, ['runtimes', 'stop', 'devflow-test', '--json']);
 
-const generationB = resetDevFlowTunnelHealthForGeneration(health, 'B', {
-  startupGraceMs: 0,
-  now: '2026-08-16T00:00:09.000Z',
-});
-const stale = advanceDevFlowTunnelHealth(generationB, { ok: true, statusCode: 200 }, {
-  failureThreshold: 3,
-  generation: 'A',
-  now: '2026-08-16T00:00:10.000Z',
-});
-assert.deepEqual(stale, generationB);
-
-const firstHealthy = advanceDevFlowTunnelHealth(generationB, { ok: true, statusCode: 200 }, {
-  failureThreshold: 3,
-  generation: 'B',
-  now: '2026-08-16T00:00:11.000Z',
-});
-assert.equal(firstHealthy.status, 'healthy');
-assert.equal(firstHealthy.lifecyclePhase, 'steady-state');
-const throttled = advanceDevFlowTunnelHealth(firstHealthy, {
-  ok: false,
-  statusCode: 429,
-  failureClass: 'rate-limit',
-  rateLimit: { nextAttemptAt: '2026-08-16T00:00:15.000Z' },
-}, {
-  failureThreshold: 3,
-  generation: 'B',
-  now: '2026-08-16T00:00:12.000Z',
-});
-assert.equal(throttled.status, 'degraded');
-assert.equal(throttled.consecutiveProbeFailures, 0, '429 does not advance the repair failure threshold');
-assert.equal(throttled.lastErrorClass, 'rate-limit');
-assert.equal(throttled.nextProbeAt, '2026-08-16T00:00:15.000Z');
-const healthyAfterThrottle = advanceDevFlowTunnelHealth(throttled, { ok: true, statusCode: 200 }, {
-  failureThreshold: 3,
-  generation: 'B',
-  now: '2026-08-16T00:00:15.000Z',
-});
-assert.equal(healthyAfterThrottle.status, 'healthy');
-assert.equal(healthyAfterThrottle.nextProbeAt, undefined);
-
-const startAllSource = fs.readFileSync(new URL('./start-all.ts', import.meta.url), 'utf8');
-const supervisorSource = fs.readFileSync(new URL('../src/lib/devFlowSupervisor.ts', import.meta.url), 'utf8');
-assert.doesNotMatch(startAllSource, /scheduleZrokReconcile|reconcileZrok/);
-assert.match(startAllSource, /bootstrapZrokAtStartup\(\)/);
-assert.match(startAllSource, /rateLimitCooldownUntilMs/);
-assert.match(startAllSource, /publicProbe\.failureClass === 'rate-limit'/);
-const failedBootstrapSection = startAllSource.slice(
-  startAllSource.indexOf('Startup zrok bootstrap failed'),
-  startAllSource.indexOf('async function runTunnelProbe'),
+const missingConfig = startOpenAiTunnel(
+  resolveOpenAiTunnelOptions({ DEVFLOW_PORT: '3456' }, tempRoot),
+  {},
+  () => { throw new Error('runner must not be called for invalid configuration'); },
 );
-assert.equal(failedBootstrapSection.includes('scheduleTunnelProbe(250)'), true);
-assert.equal(failedBootstrapSection.includes('runZrokBootstrap('), false);
-const retiredTunnelName = ['n', 'grok'].join('');
-for (const source of [startAllSource, supervisorSource]) {
-  assert.equal(source.toLowerCase().includes(retiredTunnelName), false);
-  assert.doesNotMatch(source, /127\.0\.0\.1:4040|ERR_[A-Z]+_334/);
+assert.equal(missingConfig.ok, false);
+assert.equal(missingConfig.code, 'TUNNEL_CONFIG_INVALID');
+
+function commandResult(input: {
+  ok?: boolean;
+  exitCode?: number;
+  payload?: Record<string, unknown> | null;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+}) {
+  return {
+    ok: input.ok ?? true,
+    exitCode: input.exitCode ?? (input.ok === false ? 1 : 0),
+    stdout: input.stdout ?? (input.payload ? JSON.stringify(input.payload) : ''),
+    stderr: input.stderr ?? '',
+    payload: input.payload ?? null,
+    ...(input.error ? { error: input.error } : {}),
+  };
 }
 
+const connectActions: string[] = [];
+const connectResponses = [
+  commandResult({ ok: false, stderr: 'unknown alias devflow-test' }),
+  commandResult({ payload: { connected: true } }),
+  commandResult({ payload: { process_running: true, healthy: true, ready: true } }),
+];
+const connected = startOpenAiTunnel(tunnelOptions, tunnelEnv, (invocation) => {
+  connectActions.push(invocation.args[1]);
+  const next = connectResponses.shift();
+  assert.ok(next, 'unexpected extra tunnel-client call during connect');
+  return next;
+});
+assert.equal(connected.ok, true);
+assert.equal(connected.running, true);
+assert.equal(connected.healthy, true);
+assert.equal(connected.ready, true);
+assert.equal(connected.reused, false);
+assert.deepEqual(connectActions, ['status', 'connect', 'status']);
+
+let reuseCalls = 0;
+const reused = startOpenAiTunnel(tunnelOptions, tunnelEnv, () => {
+  reuseCalls += 1;
+  return commandResult({ payload: { process_running: true, healthy: true, ready: true } });
+});
+assert.equal(reused.ok, true);
+assert.equal(reused.reused, true);
+assert.equal(reuseCalls, 1, 'already-running runtime should not reconnect');
+
+const missingStatus = getOpenAiTunnelStatus(tunnelOptions, tunnelEnv, () => commandResult({
+  ok: false,
+  stderr: 'runtime not found',
+}));
+assert.equal(missingStatus.ok, true);
+assert.equal(missingStatus.running, false);
+
+const stopActions: string[] = [];
+const stopResponses = [
+  commandResult({ payload: { process_running: true, healthy: true, ready: true } }),
+  commandResult({ payload: { stopped: true } }),
+  commandResult({ payload: { process_running: false, healthy: false, ready: false } }),
+];
+const stopped = stopOpenAiTunnel(tunnelOptions, tunnelEnv, (invocation) => {
+  stopActions.push(invocation.args[1]);
+  const next = stopResponses.shift();
+  assert.ok(next, 'unexpected extra tunnel-client call during stop');
+  return next;
+});
+assert.equal(stopped.ok, true);
+assert.equal(stopped.running, false);
+assert.deepEqual(stopActions, ['status', 'stop', 'status']);
+
+let alreadyStoppedCalls = 0;
+const alreadyStopped = stopOpenAiTunnel(tunnelOptions, tunnelEnv, () => {
+  alreadyStoppedCalls += 1;
+  return commandResult({ payload: { process_running: false } });
+});
+assert.equal(alreadyStopped.ok, true);
+assert.equal(alreadyStopped.running, false);
+assert.equal(alreadyStoppedCalls, 1, 'already-stopped runtime should not issue a stop command');
+
+const apiReady = await waitForLocalApi('http://localhost:3456', 500, async () => new Response('{}', { status: 200 }));
+assert.equal(apiReady.ok, true);
+
+const activeSources = [
+  '../scripts/start-all.ts',
+  '../scripts/openai-tunnel.ts',
+  '../src/lib/devFlowSupervisor.ts',
+  '../src/server/routes/registerApiRoutes.ts',
+  '../src/server/services/mcpToolMonitor.ts',
+  '../src/components/Header.tsx',
+  '../scripts/tray-server.ps1',
+  '../.env.example',
+  '../docs/runtime-supervisor.md',
+  '../docs/architecture/cross-platform.md',
+].map((relative) => fs.readFileSync(new URL(relative, import.meta.url), 'utf8'));
+for (const source of activeSources) {
+  assert.doesNotMatch(source, /zrok/i, 'active runtime/config documentation must not retain retired zrok references');
+}
+
+fs.rmSync(tempRoot, { recursive: true, force: true });
 console.log('[verify-start-all] all assertions passed');

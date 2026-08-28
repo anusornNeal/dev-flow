@@ -29,6 +29,20 @@
       "reason": "Task-claim behavior is covered by its focused server regression suite."
     },
     {
+      "id": "start-all-tunnel",
+      "patterns": [
+        "scripts/start-all.ts",
+        "scripts/openai-tunnel.ts",
+        "scripts/verify-start-all.ts",
+        "src/lib/devFlowSupervisor.ts"
+      ],
+      "commands": [
+        "test-start-all"
+      ],
+      "lane": "fast",
+      "reason": "Start-all and OpenAI tunnel lifecycle changes are covered by the focused supervisor/tunnel verifier."
+    },
+    {
       "id": "project-command-tests",
       "patterns": [
         "tests/server/projectCommandService.test.ts",
@@ -39,17 +53,6 @@
       ],
       "lane": "fast",
       "reason": "Project-command test changes are covered by the repository project-command preset."
-    },
-    {
-      "id": "zrok-bootstrap-script",
-      "patterns": [
-        "scripts/verify-zrok-bootstrap.ps1"
-      ],
-      "commands": [
-        "test-zrok-bootstrap"
-      ],
-      "lane": "fast",
-      "reason": "The zrok bootstrap verifier is covered by the repository zrok bootstrap preset."
     }
   ]
 }

@@ -1,5 +1,7 @@
 # zrok Existing-or-New One-Click Setup Implementation Plan
 
+> **Historical / superseded:** This plan targets the retired zrok bootstrap. Current runtime guidance is `docs/runtime-supervisor.md` and uses OpenAI Tunnel. Do not execute this plan against the current codebase.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let a DevFlow machine reuse an account-owned zrok reserved name or create a new one during one-click setup, while persisting only the selected name locally and continuing to discover the public endpoint from live zrok state.

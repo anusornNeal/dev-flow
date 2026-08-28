@@ -1,5 +1,7 @@
 # Dynamic zrok Agent Runtime Design
 
+> **Historical / superseded:** This design records the retired zrok transport. Current runtime guidance is `docs/runtime-supervisor.md` and uses OpenAI Tunnel. Keep this file only as design history; do not use it as current implementation guidance.
+
 ## Goal
 
 Make DevFlow report and probe the zrok share actually managed by the local Windows `zrokAgent` service, derive the MCP endpoint dynamically for any machine and account, and never offer takeover when authenticated remote fencing is unavailable.

@@ -102,10 +102,17 @@ test('workspace finalization is a first-class local-only terminal tool', () => {
   assert.equal((tool?.inputSchema as any)?.required?.includes('workspaceId'), true);
   assert.equal((tool?.inputSchema as any)?.required?.includes('taskId'), true);
   assert.equal((tool?.inputSchema as any)?.required?.includes('checks'), false);
+  const completedChecklistIds = (tool?.inputSchema as any)?.properties?.completedChecklistIds;
+  assert.equal((tool?.inputSchema as any)?.required?.includes('completedChecklistIds'), false);
+  assert.equal(completedChecklistIds?.type, 'array');
+  assert.equal(completedChecklistIds?.maxItems, 100);
+  assert.equal(completedChecklistIds?.uniqueItems, true);
   assert.ok((tool?.inputSchema as any)?.properties?.operationId);
   assert.equal((tool?.inputSchema as any)?.required?.includes('operationId'), false);
   assert.match(String(tool?.description || ''), /Never pushes or fetches/i);
-  assert.equal(tool?.buildHttpRequest({ taskId: 'DVF-1', workspaceId: 'ws_1', checks: [] }).path, '/api/workspaces/finalize-task');
+  const request = tool?.buildHttpRequest({ taskId: 'DVF-1', workspaceId: 'ws_1', checks: [], completedChecklistIds: ['done'] });
+  assert.equal(request?.path, '/api/workspaces/finalize-task');
+  assert.deepEqual((request as any)?.body?.completedChecklistIds, ['done']);
 });
 
 test('workspace finalization transport preserves verification continuation without weakening hard conflicts', () => {

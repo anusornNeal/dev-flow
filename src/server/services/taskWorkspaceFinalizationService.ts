@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import type { AppState } from '../types.js';
-import { getTaskByIdentifier, getTasksByProjectId } from '../repositories/taskRepository.js';
+import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
 import { getProject } from '../repositories/projectRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import {
@@ -67,6 +67,7 @@ export type TaskWorkspaceFinalizationInput = {
   taskId: string;
   workspaceId: string;
   checks?: TaskWorkspaceFinalizationCheck[];
+  completedChecklistIds?: string[];
   requireChecklistComplete?: boolean;
   operationId?: string;
   detachedIntegrated?: DetachedIntegratedFinalizationEvidence;
@@ -102,6 +103,41 @@ function normalizeOwnerBreakGlassAuthority(value: unknown): OwnerBreakGlassFinal
     throw createApiError(400, 'OWNER_BREAK_GLASS_AUDIT_CONTEXT_REQUIRED', 'Owner break-glass finalization requires operationId, reason, and actorLabel.');
   }
   return { operationId, reason, actorLabel };
+}
+
+function normalizeChecklistCompletionIds(task: any, value: unknown, supplied: boolean) {
+  if (!supplied) return [] as string[];
+  if (!Array.isArray(value)) {
+    throw createApiError(400, 'FINALIZATION_CHECKLIST_IDS_INVALID', 'completedChecklistIds must be an array of checklist item ids.');
+  }
+  if (value.length > 100) {
+    throw createApiError(400, 'FINALIZATION_CHECKLIST_IDS_TOO_MANY', 'completedChecklistIds is limited to 100 checklist item ids.');
+  }
+  const knownIds = new Set((Array.isArray(task?.checklist) ? task.checklist : []).map((item: any) => String(item?.id || '').trim()).filter(Boolean));
+  const normalized = value.map((item) => String(item || '').trim());
+  if (normalized.some((id) => !id || id.length > 200)) {
+    throw createApiError(400, 'FINALIZATION_CHECKLIST_ID_INVALID', 'Each completed checklist id must be a non-empty string no longer than 200 characters.');
+  }
+  if (new Set(normalized).size !== normalized.length) {
+    throw createApiError(400, 'FINALIZATION_CHECKLIST_IDS_DUPLICATE', 'completedChecklistIds must not contain duplicate ids.');
+  }
+  const unknown = normalized.filter((id) => !knownIds.has(id));
+  if (unknown.length > 0) {
+    throw createApiError(400, 'FINALIZATION_CHECKLIST_ID_UNKNOWN', 'completedChecklistIds contains ids that are not present on the selected task.', {
+      affectedId: task?.id,
+      details: { unknownChecklistIds: unknown.slice(0, 20) },
+    });
+  }
+  return [...normalized].sort();
+}
+
+function projectChecklistCompletion(task: any, completedChecklistIds: string[]) {
+  if (completedChecklistIds.length === 0 || !Array.isArray(task?.checklist)) return task;
+  const completed = new Set(completedChecklistIds);
+  return {
+    ...task,
+    checklist: task.checklist.map((item: any) => completed.has(String(item?.id || '').trim()) ? { ...item, completed: true } : item),
+  };
 }
 
 type FinalizationQualityDebt = {
@@ -387,6 +423,7 @@ function finalizationOperationIdentity(input: {
   candidateId: string | null;
   candidateRepoRevision: string | null;
   ownedFingerprint: string | null;
+  completedChecklistIds: string[];
 }) {
   const digest = crypto.createHash('sha256');
   for (const value of [
@@ -400,6 +437,7 @@ function finalizationOperationIdentity(input: {
     input.candidateId || '',
     input.candidateRepoRevision || '',
     input.ownedFingerprint || '',
+    ...input.completedChecklistIds,
   ]) {
     digest.update(String(value));
     digest.update('\0');
@@ -471,7 +509,7 @@ function assertTaskFinalizationBranchAuthority(task: any, baseBranch: string, wo
   });
 }
 
-function freezeNewFinalizationOperation(task: any, workspaceId: string, submittedChecks: TaskWorkspaceFinalizationCheck[]) {
+function freezeNewFinalizationOperation(task: any, workspaceId: string, submittedChecks: TaskWorkspaceFinalizationCheck[], completedChecklistIds: string[]) {
   const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
   if (!metadata) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
   if (metadata.projectId !== task.projectId) {
@@ -522,7 +560,7 @@ function freezeNewFinalizationOperation(task: any, workspaceId: string, submitte
     candidateRepoRevision: candidate?.repoRevision || null,
     ownedFingerprint: authority?.verification.ownedFingerprint || null,
   };
-  const id = finalizationOperationIdentity(frozen);
+  const id = finalizationOperationIdentity({ ...frozen, completedChecklistIds });
   const now = new Date().toISOString();
   const operation = createTaskFinalizationOperation({
     id,
@@ -530,7 +568,7 @@ function freezeNewFinalizationOperation(task: any, workspaceId: string, submitte
     ...frozen,
     phase: 'frozen',
     status: 'active',
-    verification: { submittedChecks },
+    verification: { submittedChecks, completedChecklistIds },
     createdAt: now,
     updatedAt: now,
   });
@@ -541,6 +579,7 @@ function freezeDetachedIntegratedFinalizationOperation(
   task: any,
   workspaceId: string,
   submittedChecks: TaskWorkspaceFinalizationCheck[],
+  completedChecklistIds: string[],
   detached: DetachedIntegratedFinalizationEvidence,
 ) {
   const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
@@ -575,7 +614,7 @@ function freezeDetachedIntegratedFinalizationOperation(
     candidateRepoRevision: detached.candidateRepoRevision || null,
     ownedFingerprint: detached.ownedFingerprint || null,
   };
-  const id = finalizationOperationIdentity(frozen);
+  const id = finalizationOperationIdentity({ ...frozen, completedChecklistIds });
   const now = new Date().toISOString();
   const operation = createTaskFinalizationOperation({
     id,
@@ -586,6 +625,7 @@ function freezeDetachedIntegratedFinalizationOperation(
     integration: integration as any,
     verification: {
       submittedChecks,
+      completedChecklistIds,
       detachedIntegrated: true,
       detachedEvidence: {
         sourceHead: detached.sourceHead,
@@ -762,6 +802,15 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
       : [];
     const suppliedChecks = Array.isArray(input.checks) ? input.checks : [];
     const effectiveChecks = [...(suppliedChecks.length > 0 ? suppliedChecks : persistedChecks)];
+    const checklistIdsSupplied = Object.prototype.hasOwnProperty.call(input || {}, 'completedChecklistIds');
+    const suppliedCompletedChecklistIds = normalizeChecklistCompletionIds(task, input.completedChecklistIds, checklistIdsSupplied);
+    const persistedCompletedChecklistIds = Array.isArray(operation?.verification?.completedChecklistIds)
+      ? [...operation.verification.completedChecklistIds].map((id: unknown) => String(id || '').trim()).filter(Boolean).sort()
+      : [];
+    if (operation && checklistIdsSupplied && JSON.stringify(suppliedCompletedChecklistIds) !== JSON.stringify(persistedCompletedChecklistIds)) {
+      throw createApiError(409, 'FINALIZATION_CHECKLIST_OPERATION_MISMATCH', 'Finalization retry supplied different completed checklist ids than the frozen operation.');
+    }
+    const effectiveCompletedChecklistIds = operation ? persistedCompletedChecklistIds : suppliedCompletedChecklistIds;
     const persistedOwnerBreakGlass = normalizeOwnerBreakGlassAuthority(operation?.verification?.ownerBreakGlass);
     if (suppliedOwnerBreakGlass && persistedOwnerBreakGlass
       && JSON.stringify(suppliedOwnerBreakGlass) !== JSON.stringify(persistedOwnerBreakGlass)) {
@@ -786,7 +835,8 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           verificationFresh: sourceOwnership?.verificationFresh ?? null,
         })
       : null;
-    const initialQualityDebt = collectInitialFinalizationQualityDebt(task, {
+    const projectedTask = projectChecklistCompletion(task, effectiveCompletedChecklistIds);
+    const initialQualityDebt = collectInitialFinalizationQualityDebt(projectedTask, {
       ...input,
       checks: effectiveChecks,
       ownerBreakGlass: ownerBreakGlass || undefined,
@@ -795,14 +845,15 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
     if (!operation) {
       const latestBeforeFreeze = getLatestTaskFinalizationOperation(task.id, workspaceId);
       const frozen = detachedIntegrated
-        ? freezeDetachedIntegratedFinalizationOperation(task, workspaceId, effectiveChecks, detachedIntegrated)
-        : freezeNewFinalizationOperation(task, workspaceId, effectiveChecks);
+        ? freezeDetachedIntegratedFinalizationOperation(task, workspaceId, effectiveChecks, effectiveCompletedChecklistIds, detachedIntegrated)
+        : freezeNewFinalizationOperation(task, workspaceId, effectiveChecks, effectiveCompletedChecklistIds);
       if ('blocked' in frozen) return frozen.blocked;
       operation = frozen.operation;
       operation = updateOperation(operation, {
         verification: {
           ...(operation.verification || {}),
           submittedChecks: effectiveChecks,
+          completedChecklistIds: effectiveCompletedChecklistIds,
           qualityDebt: initialQualityDebt,
           ...(ownerBreakGlass ? { ownerBreakGlass } : {}),
         },
@@ -822,7 +873,16 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
     } else {
       operation = updateOperation(operation, { retryCount: operation.retryCount + 1, failure: null });
       assertOperationStillBound(operation, task, isDetachedIntegratedOperation(operation) ? null : getSessionWorkspaceMetadataForRecovery(workspaceId));
+    }    if (effectiveCompletedChecklistIds.length > 0) {
+      const persistedTaskProjection = projectChecklistCompletion(task, effectiveCompletedChecklistIds);
+      const checklistChanged = Array.isArray(task.checklist) && Array.isArray(persistedTaskProjection.checklist)
+        && task.checklist.some((item: any, index: number) => Boolean(item?.completed) !== Boolean(persistedTaskProjection.checklist[index]?.completed));
+      if (checklistChanged) {
+        saveTask({ ...persistedTaskProjection, updatedAt: new Date().toISOString() });
+        task = getTaskByIdentifier(task.id, 'full') || persistedTaskProjection;
+      }
     }
+
 
     if (operation.status === 'completed') {
       return {
@@ -1041,8 +1101,9 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
               type: 'update',
             });
           }
+          const completedTask = projectChecklistCompletion(base, effectiveCompletedChecklistIds);
           return {
-            ...base,
+            ...completedTask,
             status: 'done',
             claim: undefined,
             branch: operation!.baseBranch,

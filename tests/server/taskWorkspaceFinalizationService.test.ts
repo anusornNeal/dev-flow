@@ -474,7 +474,68 @@ test('finalization preserves checklist and verification debt while pausing for r
   assert.equal((withoutChecks.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'VERIFICATION_EVIDENCE_MISSING'), true);
   assert.equal((withoutChecks.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), true);
   assert.deepEqual((getTaskFinalizationOperation(withoutChecks.operation.id)?.verification as any)?.qualityDebtSummary?.codes.slice().sort(), ['POST_INTEGRATION_VERIFICATION_REQUIRED', 'VERIFICATION_EVIDENCE_MISSING']);
+});test('finalization freezes explicit checklist completion and persists it before continuation debt is calculated', () => {
+  const incomplete = fixture('checklist-attestation');
+  const saved = getTask(incomplete.task.id)!;
+  saved.checklist[0].completed = false;
+  saveTask(saved);
+  const failedChecks = [{ name: 'focused', command: 'focused-test', status: 'failed' as const, summary: 'known verification debt' }];
+
+  const result = finalizeTaskWorkspace(incomplete.state, {
+    taskId: incomplete.task.id,
+    workspaceId: incomplete.workspace.workspaceId,
+    checks: failedChecks,
+    completedChecklistIds: ['done'],
+  });
+
+  assert.equal(result.status, 'continuation');
+  assert.equal(result.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
+  assert.equal(getTask(incomplete.task.id)?.checklist?.[0]?.completed, true);
+  assert.deepEqual((result.operation.verification as any)?.completedChecklistIds, ['done']);
+  assert.equal((result.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'CHECKLIST_INCOMPLETE'), false);
+  assert.equal((result.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'VERIFICATION_NOT_PASSED'), true);
+
+  assert.throws(
+    () => finalizeTaskWorkspace(incomplete.state, {
+      taskId: incomplete.task.id,
+      workspaceId: incomplete.workspace.workspaceId,
+      operationId: result.operation.id,
+      checks: failedChecks,
+      completedChecklistIds: [],
+    }),
+    (error: any) => error?.payload?.code === 'FINALIZATION_CHECKLIST_OPERATION_MISMATCH' || error?.code === 'FINALIZATION_CHECKLIST_OPERATION_MISMATCH',
+  );
 });
+
+test('finalization rejects invalid checklist completion ids before creating finalization state', () => {
+  const incomplete = fixture('checklist-invalid');
+  const saved = getTask(incomplete.task.id)!;
+  saved.checklist[0].completed = false;
+  saveTask(saved);
+
+  assert.throws(
+    () => finalizeTaskWorkspace(incomplete.state, {
+      taskId: incomplete.task.id,
+      workspaceId: incomplete.workspace.workspaceId,
+      checks,
+      completedChecklistIds: ['missing'],
+    }),
+    (error: any) => error?.payload?.code === 'FINALIZATION_CHECKLIST_ID_UNKNOWN' || error?.code === 'FINALIZATION_CHECKLIST_ID_UNKNOWN',
+  );
+  assert.equal(getTask(incomplete.task.id)?.checklist?.[0]?.completed, false);
+
+  assert.throws(
+    () => finalizeTaskWorkspace(incomplete.state, {
+      taskId: incomplete.task.id,
+      workspaceId: incomplete.workspace.workspaceId,
+      checks,
+      completedChecklistIds: ['done', 'done'],
+    }),
+    (error: any) => error?.payload?.code === 'FINALIZATION_CHECKLIST_IDS_DUPLICATE' || error?.code === 'FINALIZATION_CHECKLIST_IDS_DUPLICATE',
+  );
+  assert.equal(getTask(incomplete.task.id)?.checklist?.[0]?.completed, false);
+});
+
 
 
 test('finalization pauses on combined-state verification escalation before terminalization and cleanup', () => {

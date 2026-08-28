@@ -94,7 +94,7 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
           }],
         };
 
-        const qualityError = validateTaskQualityForMutation(updatedTask);
+        const qualityError = validateTaskQualityForMutation(updatedTask, { currentTask, changedFields: Object.keys(item) });
         if (qualityError) {
           if (!Array.isArray(req.body)) return res.status(400).json({ error: qualityError });
           continue;

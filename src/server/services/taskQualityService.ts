@@ -129,7 +129,26 @@ export function validateTaskQuality(task: any): TaskQualityResult {
   return { ok: errors.length === 0, errors, warnings };
 }
 
-export function validateTaskQualityForMutation(task: any): string | null {
+export interface TaskQualityMutationContext {
+  currentTask?: any;
+  changedFields?: Iterable<string>;
+}
+
+const READINESS_AUTHORITATIVE_FIELDS = new Set([
+  'status', 'description', 'reasoning', 'repoContext', 'targetFiles', 'checklist',
+  'acceptanceCriteria', 'verification', 'parentId', 'prerequisiteTaskIds',
+]);
+
+export function validateTaskQualityForMutation(task: any, context: TaskQualityMutationContext = {}): string | null {
   const result = validateTaskQuality(task);
-  return result.ok ? null : result.errors.join(' ');
+  if (result.ok) return null;
+  const currentTask = context.currentTask;
+  if (!currentTask) return result.errors.join(' ');
+  const changedFields = new Set(Array.from(context.changedFields || []));
+  const statusChanged = changedFields.has('status') && String(currentTask.status || 'backlog') !== String(task.status || 'backlog');
+  const touchesReadinessAuthority = Array.from(changedFields).some((field) => READINESS_AUTHORITATIVE_FIELDS.has(field));
+  if ((statusChanged && isImplementationReadyTask(task)) || touchesReadinessAuthority) return result.errors.join(' ');
+  const previousErrors = new Set(validateTaskQuality(currentTask).errors);
+  const introducedErrors = result.errors.filter((error) => !previousErrors.has(error));
+  return introducedErrors.length === 0 ? null : introducedErrors.join(' ');
 }

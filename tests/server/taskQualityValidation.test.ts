@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateTaskQuality } from '../../src/server/services/taskQualityService.js';
+import { validateTaskQuality, validateTaskQualityForMutation } from '../../src/server/services/taskQualityService.js';
 
 test('validateTaskQuality blocks implementation-ready Jira cards without implementation map', () => {
   const result = validateTaskQuality({
@@ -91,3 +91,24 @@ test('validateTaskQuality accepts implementation-ready card with focused impleme
   assert.equal(result.ok, true);
   assert.deepEqual(result.errors, []);
 });
+
+test('validateTaskQualityForMutation allows narrow updates that preserve pre-existing quality debt', () => {
+  const currentTask = { title: 'Legacy active task', status: 'in-progress', category: 'backend', repoContext: 'Legacy context without implementation map.', targetFiles: ['src/legacy.ts'], checklist: [{ id: 'step-1', text: 'Update legacy behavior safely.', completed: false }] };
+  const updatedTask = { ...currentTask, checklist: [{ id: 'step-1', text: 'Update legacy behavior safely.', completed: true }] };
+  assert.equal(validateTaskQualityForMutation(updatedTask, { currentTask, changedFields: ['updatedAt'] }), null);
+  assert.match(validateTaskQuality(updatedTask).errors.join('\n'), /Implementation map/);
+});
+
+test('validateTaskQualityForMutation keeps readiness-field edits strict', () => {
+  const currentTask = { title: 'Legacy active task', status: 'in-progress', category: 'backend', repoContext: 'Legacy context without implementation map.', targetFiles: ['src/legacy.ts'], checklist: [] };
+  const error = validateTaskQualityForMutation({ ...currentTask, description: 'Changed implementation scope.' }, { currentTask, changedFields: ['description'] });
+  assert.match(error || '', /Implementation map/);
+});
+
+test('validateTaskQualityForMutation rejects invalid backlog to runnable transition', () => {
+  const currentTask = { title: 'Deferred legacy task', status: 'backlog', category: 'backend', repoContext: 'Legacy context without implementation map.', targetFiles: [], checklist: [] };
+  const error = validateTaskQualityForMutation({ ...currentTask, status: 'todo', reasoning: 'User explicitly asked to start this task.' }, { currentTask, changedFields: ['status', 'reasoning'] });
+  assert.match(error || '', /Implementation map/);
+  assert.match(error || '', /targetFiles/);
+});
+

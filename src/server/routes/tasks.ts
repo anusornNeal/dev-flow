@@ -401,7 +401,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         updatedTask.prerequisiteTaskIds = resolveTaskPrerequisiteIds(updatedTask, tasksForDependencyUpdate.map((task) => task.id === updatedTask.id ? updatedTask : task));
         assertTaskPrerequisiteGraph(tasksForDependencyUpdate.map((task) => task.id === updatedTask.id ? updatedTask : task));
 
-        const qualityError = validateTaskQualityForMutation(updatedTask);
+        const qualityError = validateTaskQualityForMutation(updatedTask, { currentTask, changedFields: Object.keys(item) });
         if (qualityError) {
           if (!Array.isArray(req.body)) return res.status(400).json({ error: qualityError });
           continue;
@@ -591,7 +591,7 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
         assertTaskPrerequisiteGraph(dependencyTasks.map((task) => task.id === updatedTask.id ? updatedTask : task));
       }
 
-      const qualityError = validateTaskQualityForMutation(updatedTask);
+      const qualityError = validateTaskQualityForMutation(updatedTask, { currentTask, changedFields: Object.keys(updateBody) });
       if (qualityError) return res.status(400).json({ error: qualityError });
 
       const persistedTask = persistTaskMutationWithLifecycle(currentTask, updatedTask, 'PUT /tasks/:id endpoint');

@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
-  Bot,
   CheckCircle2,
   Clock3,
   GitMerge,
@@ -19,18 +18,18 @@ const FALLBACK_REFRESH_MS = 60_000;
 const LOCAL_AGE_TICK_MS = 15_000;
 
 const QUEUE_META: Record<AgentOfficeQueueState, { label: string; description: string }> = {
-  ready: { label: 'Ready', description: 'Runnable work' },
-  execution: { label: 'Execution', description: 'Work in progress' },
-  attention: { label: 'Attention', description: 'Reasoning or handoff needed' },
-  blocked: { label: 'Blocked', description: 'Waiting on a dependency or recovery' },
+  ready: { label: 'Ready to start', description: 'Runnable work waiting for an owner.' },
+  execution: { label: 'Running queue', description: 'Tasks currently owned or executing.' },
+  attention: { label: 'Needs attention', description: 'Reasoning, review, or handoff is required.' },
+  blocked: { label: 'Blocked', description: 'A dependency or recovery step prevents progress.' },
 };
 
 const PIPELINE_LABELS: Record<string, string> = {
-  'waiting-verification': 'Waiting verify',
-  verifying: 'Verifying',
-  integrating: 'Integrating',
-  finalizing: 'Finalizing',
-  cleanup: 'Cleanup',
+  'waiting-verification': 'Waiting for checks',
+  verifying: 'Running checks',
+  integrating: 'Merging changes',
+  finalizing: 'Closing task',
+  cleanup: 'Cleaning workspace',
 };
 
 export function formatActivityAge(ageMs: number | null | undefined) {
@@ -139,10 +138,48 @@ function sourceLabel(source: string) {
 }
 
 function statusDotClass(indicator: string | null, stale: boolean) {
-  if (stale || indicator === 'disconnected') return 'bg-[#c45d3d]';
-  if (indicator === 'blocked') return 'bg-[#c45d3d]';
-  if (indicator === 'attention') return 'bg-[#d89745]';
-  return 'bg-[#55a05a]';
+  if (stale || indicator === 'disconnected' || indicator === 'blocked') return 'bg-[var(--df-color-danger)]';
+  if (indicator === 'attention') return 'bg-[var(--df-color-warning)]';
+  return 'bg-[var(--df-color-success)]';
+}
+
+export type OfficeConnectionState = 'idle' | 'connecting' | 'connected' | 'fallback';
+
+export function describeAgentOfficeHealth(input: {
+  error?: string | null;
+  partialSnapshot: boolean;
+  staleSnapshot: boolean;
+  connectionState: OfficeConnectionState;
+}) {
+  if (input.error) {
+    return {
+      tone: 'danger' as const,
+      title: 'Refresh failed',
+      detail: `Showing the last successful snapshot. ${input.error}`,
+    };
+  }
+  if (input.partialSnapshot) {
+    return {
+      tone: 'warning' as const,
+      title: 'Snapshot is partial',
+      detail: `Some bounded sources were truncated, so counts and empty states may be incomplete.${input.staleSnapshot ? ' This snapshot is also stale.' : ''}`,
+    };
+  }
+  if (input.staleSnapshot) {
+    return {
+      tone: 'warning' as const,
+      title: 'Snapshot is stale',
+      detail: 'Displayed work may be out of date. Refresh or wait for the live monitor to reconcile.',
+    };
+  }
+  if (input.connectionState === 'fallback') {
+    return {
+      tone: 'warning' as const,
+      title: 'Live updates interrupted',
+      detail: 'The realtime stream is reconnecting. Bounded fallback refresh is active, so updates may arrive later than usual.',
+    };
+  }
+  return null;
 }
 
 interface AgentOfficePageProps {
@@ -152,8 +189,6 @@ interface AgentOfficePageProps {
   disableAutoLoad?: boolean;
   nowMs?: number;
 }
-
-type OfficeConnectionState = 'idle' | 'connecting' | 'connected' | 'fallback';
 
 export default function AgentOfficePage({
   onOpenTask,
@@ -266,13 +301,61 @@ export default function AgentOfficePage({
     || Object.values(snapshot.queue.truncated).some(Boolean)
   ));
   const reconnecting = connectionState === 'connecting' || connectionState === 'fallback';
-  const incomplete = partialSnapshot || Boolean(error) || reconnecting;
+  const incomplete = partialSnapshot || staleSnapshot || Boolean(error) || reconnecting;
   const exactZero = Boolean(snapshot) && snapshot!.workers.total === 0 && snapshot!.pipeline.total === 0 && queueTotal === 0;
   const empty = exactZero && !incomplete;
+  const health = describeAgentOfficeHealth({ error, partialSnapshot, staleSnapshot, connectionState });
+
+  const renderQueuePanel = (state: AgentOfficeQueueState) => {
+    if (!snapshot) return null;
+    const meta = QUEUE_META[state];
+    const items = snapshot.queue.items[state];
+    const attentionState = state === 'attention' || state === 'blocked';
+    return (
+      <div className={`min-w-0 rounded-[var(--df-radius-md)] border p-3 ${
+        state === 'blocked'
+          ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
+          : state === 'attention'
+            ? 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)]'
+            : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)]'
+      }`}>
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className={`text-[12px] font-extrabold ${attentionState ? (state === 'blocked' ? 'text-[var(--df-color-danger)]' : 'text-[var(--df-color-warning)]') : 'text-[var(--df-color-text-strong)]'}`}>{meta.label}</h3>
+            <p className="mt-0.5 text-[9.5px] leading-relaxed text-[var(--df-color-text-muted)]">{meta.description}</p>
+          </div>
+          <span className="shrink-0 rounded-md bg-[var(--df-color-surface-muted)] px-2 py-1 text-[10px] font-extrabold text-[var(--df-color-text)]">{snapshot.queue.counts[state]}</span>
+        </div>
+
+        <div className="mt-3 space-y-1.5">
+          {items.length === 0 && <p className="py-2 text-[10px] text-[var(--df-color-text-subtle)]">Nothing here right now.</p>}
+          {items.map((item) => (
+            <button
+              key={`${item.projectId}:${item.taskId}`}
+              type="button"
+              onClick={() => void onOpenTask(item.taskId)}
+              className="block w-full min-w-0 rounded-[var(--df-radius-sm)] border border-transparent px-2 py-2 text-left transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)]"
+            >
+              <div className="truncate text-[9px] font-bold text-[var(--df-color-text-subtle)]" title={item.projectName}>{item.projectName}</div>
+              <div className="mt-0.5 line-clamp-2 break-words text-[10px] font-extrabold text-[var(--df-color-text)]" title={`${item.displayId || item.taskId} · ${item.title}`}>
+                {item.displayId || item.taskId} · {item.title}
+              </div>
+              {item.reasons[0]?.message && (
+                <div className={`mt-1 line-clamp-2 break-words text-[9px] leading-relaxed ${state === 'blocked' ? 'text-[var(--df-color-danger)]' : state === 'attention' ? 'text-[var(--df-color-warning)]' : 'text-[var(--df-color-text-muted)]'}`} title={item.reasons[0].message}>
+                  {item.reasons[0].message}
+                </div>
+              )}
+            </button>
+          ))}
+          {snapshot.queue.truncated[state] && <p className="px-2 text-[9px] text-[var(--df-color-text-subtle)]">More items exist beyond this bounded view.</p>}
+        </div>
+      </div>
+    );
+  };
 
   if (loading && !snapshot) {
     return (
-      <div className="flex flex-1 items-center justify-center gap-3 text-xs font-bold text-[#8c7463] dark:text-[#d6b56d]">
+      <div className="flex flex-1 items-center justify-center gap-3 text-xs font-bold text-[var(--df-color-text-muted)]" role="status">
         <Loader2 className="animate-spin" size={18} /> Loading Agent Office…
       </div>
     );
@@ -281,11 +364,11 @@ export default function AgentOfficePage({
   if (error && !snapshot) {
     return (
       <div className="flex flex-1 items-center justify-center p-8">
-        <div className="max-w-lg rounded-2xl border border-[#e6a994] bg-[#fff5f0] p-6 dark:border-[#70483d] dark:bg-[#32221d]">
-          <div className="flex items-center gap-2 text-sm font-extrabold text-[#a33f25] dark:text-[#f0b29f]"><ShieldAlert size={18} /> Agent Office unavailable</div>
-          <p className="mt-2 text-xs text-[#805446] dark:text-[#e7c3b8]">{error}</p>
-          <button type="button" onClick={requestRefresh} className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#d8c5aa] bg-white px-3 py-2 text-xs font-bold text-[#714a1a] hover:bg-[#fff7ec] dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f3eadf]">
-            <RefreshCw size={14} /> Refresh read
+        <div className="max-w-lg rounded-[var(--df-radius-lg)] border border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)] p-6">
+          <div className="flex items-center gap-2 text-sm font-extrabold text-[var(--df-color-danger)]"><ShieldAlert size={18} /> Agent Office unavailable</div>
+          <p className="mt-2 break-words text-xs leading-relaxed text-[var(--df-color-text)]">{error}</p>
+          <button type="button" onClick={requestRefresh} className="df-button df-button--secondary mt-4">
+            <RefreshCw size={14} /> Refresh
           </button>
         </div>
       </div>
@@ -293,126 +376,220 @@ export default function AgentOfficePage({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#faf7f0] p-4 md:p-6 dark:bg-[#1e1914]">
+    <div className="flex-1 overflow-y-auto bg-[var(--df-color-canvas)] p-4 md:p-6">
       <div className="mx-auto flex max-w-[1500px] flex-col gap-4">
-        <section className="rounded-2xl border border-[#e5d4bb] bg-white/85 px-5 py-4 shadow-sm dark:border-[#584a3b] dark:bg-[#292119]">
+        <section className="df-surface px-5 py-4 shadow-[var(--df-shadow-sm)]">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <Activity size={18} className="text-[#d89745]" />
-                <h1 className="text-lg font-extrabold tracking-tight text-[#3c2a1a] dark:text-[#f3eadf]">Agent Office</h1>
-                <span className="rounded-full border border-[#e4cfb0] bg-[#fff7eb] px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-[#8d6533] dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#d6b56d]">Monitoring only</span>
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-2">
+                <Activity size={18} className="shrink-0 text-[var(--df-color-accent)]" />
+                <h1 className="min-w-0 truncate text-lg font-extrabold tracking-tight text-[var(--df-color-text-strong)]">Agent Office</h1>
               </div>
-              <p className="mt-1 text-[11px] font-mono text-[#816b5a] dark:text-[#d6b56d]">Canonical workers, pipeline and queue state • all projects</p>
+              <p className="mt-1 text-[11px] text-[var(--df-color-text-muted)]">Global operational view across all projects</p>
             </div>
-            <div className="flex items-center gap-2 text-[10px] font-mono text-[#8c7463] dark:text-[#d6b56d]">
-              {snapshot && <span>Updated {new Date(snapshot.generatedAt).toLocaleTimeString()}</span>}
-              {!disableAutoLoad && <span>{connectionState === 'connected' ? 'Live' : connectionState === 'fallback' ? 'Reconnecting · fallback' : 'Connecting'}</span>}
-              <button type="button" onClick={requestRefresh} disabled={refreshing} className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#d8c5aa] bg-[#fff7ec] px-2.5 py-1.5 font-bold text-[#714a1a] hover:bg-[#ffeace] disabled:cursor-default disabled:opacity-60 dark:border-[#584a3b] dark:bg-[#1e1914] dark:text-[#f3eadf]">
+
+            <div className="flex min-w-0 flex-wrap items-center gap-2 text-[10px] text-[var(--df-color-text-muted)]">
+              {snapshot && <span className="shrink-0">Updated {new Date(snapshot.generatedAt).toLocaleTimeString()}</span>}
+              {!disableAutoLoad && (
+                <span className="min-w-0 truncate" title={connectionState === 'connected' ? 'Live updates connected' : connectionState === 'fallback' ? 'Live stream unavailable; fallback refresh active' : 'Connecting live updates'}>
+                  {connectionState === 'connected' ? 'Live updates connected' : connectionState === 'fallback' ? 'Fallback refresh active' : 'Connecting live updates'}
+                </span>
+              )}
+              <button type="button" onClick={requestRefresh} disabled={refreshing} className="df-button df-button--secondary !min-h-8 !min-w-0 !px-2.5 !py-1.5">
                 <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
               </button>
             </div>
           </div>
         </section>
 
-        {(staleSnapshot || incomplete) && (
-          <div className="flex items-start gap-2 rounded-2xl border border-[#e5bb78] bg-[#fff7e8] px-4 py-3 text-xs text-[#81591e] dark:border-[#695232] dark:bg-[#30271c] dark:text-[#e8c98c]">
-            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-            <div>
-              <strong>{error ? 'Refresh failed.' : partialSnapshot ? 'Snapshot is partial.' : connectionState === 'fallback' ? 'Realtime stream is reconnecting.' : 'Snapshot is stale.'}</strong>{' '}
-              {error ? `Showing the last successful snapshot. ${error}` : partialSnapshot ? 'Some bounded sources were truncated, so absence is not proof that the office is quiet.' : connectionState === 'fallback' ? 'Using bounded fallback refresh until SSE reconnects.' : 'Fresh data will be requested when the page can reconcile safely.'}
+        {health && (
+          <div
+            className={`flex min-w-0 items-start gap-2 rounded-[var(--df-radius-md)] border px-4 py-3 text-xs ${
+              health.tone === 'danger'
+                ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
+                : 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)]'
+            }`}
+            role="status"
+          >
+            <AlertTriangle size={16} className={`mt-0.5 shrink-0 ${health.tone === 'danger' ? 'text-[var(--df-color-danger)]' : 'text-[var(--df-color-warning)]'}`} />
+            <div className="min-w-0">
+              <strong className={health.tone === 'danger' ? 'text-[var(--df-color-danger)]' : 'text-[var(--df-color-warning)]'}>{health.title}.</strong>{' '}
+              <span className="break-words leading-relaxed text-[var(--df-color-text)]">{health.detail}</span>
             </div>
           </div>
         )}
 
         {empty ? (
-          <div className="rounded-2xl border border-dashed border-[#d8c5aa] bg-[#fffdfa] px-6 py-12 text-center dark:border-[#584a3b] dark:bg-[#292119]">
-            <CheckCircle2 className="mx-auto text-[#68a66b]" size={28} />
-            <h2 className="mt-3 text-sm font-extrabold">Agent Office is quiet</h2>
-            <p className="mt-1 text-xs text-[#816b5a] dark:text-[#d6b56d]">No active workers, pipeline tails, queue work or attention right now.</p>
+          <div className="df-surface border-dashed px-6 py-12 text-center">
+            <CheckCircle2 className="mx-auto text-[var(--df-color-success)]" size={28} />
+            <h2 className="mt-3 text-sm font-extrabold text-[var(--df-color-text-strong)]">Agent Office is quiet</h2>
+            <p className="mt-1 text-xs text-[var(--df-color-text-muted)]">No active workers, pipeline tails, queued work, or attention items right now.</p>
           </div>
         ) : snapshot && exactZero && incomplete ? (
-          <div className="rounded-2xl border border-dashed border-[#e5bb78] bg-[#fff7e8] px-6 py-12 text-center dark:border-[#695232] dark:bg-[#30271c]">
-            <AlertTriangle className="mx-auto text-[#d89745]" size={28} />
-            <h2 className="mt-3 text-sm font-extrabold">Office state is incomplete</h2>
-            <p className="mt-1 text-xs text-[#816b5a] dark:text-[#d6b56d]">No rows are visible in the current bounded snapshot, but the monitor is partial, stale, or reconnecting.</p>
+          <div className="rounded-[var(--df-radius-lg)] border border-dashed border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)] px-6 py-12 text-center">
+            <AlertTriangle className="mx-auto text-[var(--df-color-warning)]" size={28} />
+            <h2 className="mt-3 text-sm font-extrabold text-[var(--df-color-text-strong)]">Office state is incomplete</h2>
+            <p className="mt-1 text-xs text-[var(--df-color-text-muted)]">No rows are visible, but this snapshot is partial, stale, or reconnecting, so zero is not conclusive.</p>
           </div>
         ) : snapshot ? (
           <>
-            <section className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
-              <div className="rounded-2xl border border-[#e5d4bb] bg-[#fffdfa] p-4 dark:border-[#584a3b] dark:bg-[#292119]">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2"><UserRoundCog size={16} className="text-[#d89745]" /><h2 className="text-sm font-extrabold">Active Agents</h2></div>
-                  <span className="rounded-full bg-[#f2e5d2] px-2 py-1 text-[10px] font-black dark:bg-[#3a2f26]">{snapshot.workers.total}</span>
+            <section aria-label="Agent Office summary" className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {[
+                { label: 'Active work', value: snapshot.workers.total, detail: 'Workers currently executing', tone: 'text-[var(--df-color-success)]' },
+                { label: 'Needs attention', value: snapshot.queue.counts.attention, detail: 'Reasoning or handoff required', tone: 'text-[var(--df-color-warning)]' },
+                { label: 'Blocked', value: snapshot.queue.counts.blocked, detail: 'Cannot progress yet', tone: 'text-[var(--df-color-danger)]' },
+                { label: 'Ready to start', value: snapshot.queue.counts.ready, detail: 'Runnable work available', tone: 'text-[var(--df-color-info)]' },
+              ].map((item) => (
+                <div key={item.label} className="df-surface min-w-0 p-3">
+                  <div className={`text-xl font-extrabold ${item.tone}`}>{item.value}</div>
+                  <div className="mt-1 text-[11px] font-extrabold text-[var(--df-color-text-strong)]">{item.label}</div>
+                  <div className="mt-0.5 text-[9px] leading-relaxed text-[var(--df-color-text-muted)]">{item.detail}</div>
                 </div>
-                <div className="space-y-2">
-                  {snapshot.workers.items.length === 0 && <p className="rounded-xl border border-dashed border-[#e5d4bb] p-4 text-xs text-[#8c7463] dark:border-[#584a3b] dark:text-[#d6b56d]">No active reasoning workers.</p>}
-                  {snapshot.workers.items.map((worker) => (
-                    <button key={`${worker.projectId}:${worker.taskId}`} type="button" onClick={() => void onOpenTask(worker.taskId)} className="group flex w-full cursor-pointer items-start gap-3 rounded-xl border border-[#eadbc6] bg-white px-3.5 py-3 text-left transition hover:border-[#d8a15f] hover:bg-[#fff9f1] dark:border-[#584a3b] dark:bg-[#211b16] dark:hover:bg-[#30271f]">
-                      <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${statusDotClass(worker.indicator, worker.stale)}`} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs font-extrabold">{worker.ownerLabel}</span>
-                          <span className="rounded-full border border-[#e1d1bc] bg-[#fff8ee] px-1.5 py-0.5 text-[9px] font-bold text-[#714a1a] dark:border-[#584a3b] dark:bg-[#30271f] dark:text-[#f3eadf]">{worker.projectName}</span>
-                          <span className="rounded-full border border-[#e1d1bc] px-1.5 py-0.5 text-[9px] font-bold text-[#816b5a] dark:border-[#584a3b] dark:text-[#d6b56d]">{sourceLabel(worker.source)}</span>
-                          {worker.ownerKind && <span className="rounded-full border border-[#e1d1bc] px-1.5 py-0.5 text-[9px] font-mono font-bold text-[#816b5a] dark:border-[#584a3b] dark:text-[#d6b56d]">{worker.ownerKind}</span>}
-                          {(worker.stale || worker.indicator) && <span className="text-[9px] font-black uppercase tracking-wide text-[#b65036]">{worker.stale ? 'Disconnected' : worker.indicator}</span>}
-                        </div>
-                        <div className="mt-1 truncate text-[11px] font-bold text-[#584638] dark:text-[#f3eadf]">{worker.displayId || worker.taskId} · {worker.title}</div>
-                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-[#8c7463] dark:text-[#d6b56d]"><span>{worker.action}</span><span>{worker.phaseLabel}</span><span className="inline-flex items-center gap-1"><Clock3 size={10} /> {formatActivityAge(advanceActivityAge(worker.ageMs, snapshot.generatedAt, effectiveNowMs))}</span></div>
-                      </div>
-                    </button>
-                  ))}
-                  {snapshot.workers.truncated && <p className="px-1 text-[10px] font-mono text-[#8c7463] dark:text-[#d6b56d]">More workers exist beyond this bounded view.</p>}
+              ))}
+            </section>
+
+            <section className="df-surface p-4">
+              <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <UserRoundCog size={16} className="shrink-0 text-[var(--df-color-accent)]" />
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-extrabold text-[var(--df-color-text-strong)]">Active work</h2>
+                    <p className="mt-0.5 text-[9.5px] text-[var(--df-color-text-muted)]">Who is working, on what, and whether execution needs intervention.</p>
+                  </div>
                 </div>
+                <span className="shrink-0 rounded-md bg-[var(--df-color-surface-muted)] px-2 py-1 text-[10px] font-extrabold">{snapshot.workers.total}</span>
               </div>
 
-              <div className="rounded-2xl border border-[#e5d4bb] bg-[#fffdfa] p-4 dark:border-[#584a3b] dark:bg-[#292119]">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2"><GitMerge size={16} className="text-[#d89745]" /><h2 className="text-sm font-extrabold">DevFlow Pipeline</h2></div>
-                  <span className="rounded-full bg-[#f2e5d2] px-2 py-1 text-[10px] font-black dark:bg-[#3a2f26]">{snapshot.pipeline.total}</span>
+              <div className="grid gap-2 lg:grid-cols-2">
+                {snapshot.workers.items.length === 0 && <p className="rounded-[var(--df-radius-md)] border border-dashed border-[var(--df-color-border)] p-4 text-xs text-[var(--df-color-text-muted)] lg:col-span-2">No active workers are reporting work.</p>}
+                {snapshot.workers.items.map((worker) => {
+                  const workerState = worker.stale
+                    ? 'Disconnected'
+                    : worker.failure
+                      ? 'Failed'
+                      : worker.indicator === 'blocked'
+                        ? 'Blocked'
+                        : worker.indicator === 'attention'
+                          ? 'Needs attention'
+                          : 'Running';
+                  const attention = workerState !== 'Running';
+                  return (
+                    <button
+                      key={`${worker.projectId}:${worker.taskId}`}
+                      type="button"
+                      onClick={() => void onOpenTask(worker.taskId)}
+                      className={`group flex w-full min-w-0 items-start gap-3 rounded-[var(--df-radius-md)] border px-3.5 py-3 text-left transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)] ${
+                        workerState === 'Blocked' || workerState === 'Failed' || workerState === 'Disconnected'
+                          ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
+                          : workerState === 'Needs attention'
+                            ? 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)]'
+                            : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)]'
+                      }`}
+                    >
+                      <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${statusDotClass(worker.indicator, worker.stale)}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-xs font-extrabold text-[var(--df-color-text-strong)]" title={worker.ownerLabel}>{worker.ownerLabel}</span>
+                          <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-extrabold ${
+                            attention
+                              ? workerState === 'Needs attention'
+                                ? 'border-[var(--df-color-warning)] text-[var(--df-color-warning)]'
+                                : 'border-[var(--df-color-danger)] text-[var(--df-color-danger)]'
+                              : 'border-[var(--df-color-success)] text-[var(--df-color-success)]'
+                          }`}>{workerState}</span>
+                        </div>
+
+                        <div className="mt-1 line-clamp-2 break-words text-[11px] font-extrabold text-[var(--df-color-text)]" title={`${worker.displayId || worker.taskId} · ${worker.title}`}>
+                          {worker.displayId || worker.taskId} · {worker.title}
+                        </div>
+
+                        <div className="mt-1.5 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-[9px] text-[var(--df-color-text-muted)]">
+                          <span className="max-w-[180px] truncate" title={worker.projectName}>{worker.projectName}</span>
+                          <span>{sourceLabel(worker.source)}</span>
+                          {worker.ownerKind && <span>{worker.ownerKind}</span>}
+                          <span className="inline-flex items-center gap-1"><Clock3 size={10} /> {formatActivityAge(advanceActivityAge(worker.ageMs, snapshot.generatedAt, effectiveNowMs))}</span>
+                        </div>
+
+                        <div className="mt-1.5 line-clamp-2 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text-muted)]" title={`${worker.action} · ${worker.phaseLabel}`}>
+                          {worker.action} · {worker.phaseLabel}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {snapshot.workers.truncated && <p className="mt-2 px-1 text-[9px] text-[var(--df-color-text-subtle)]">More workers exist beyond this bounded view.</p>}
+            </section>
+
+            <section className="grid gap-3 lg:grid-cols-2">
+              {renderQueuePanel('attention')}
+              {renderQueuePanel('blocked')}
+            </section>
+
+            <section className="grid gap-4 xl:grid-cols-[0.9fr_1.4fr]">
+              <div className="grid gap-3">
+                {renderQueuePanel('ready')}
+                {renderQueuePanel('execution')}
+              </div>
+
+              <div className="df-surface min-w-0 p-4">
+                <div className="mb-3 flex min-w-0 items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <GitMerge size={16} className="mt-0.5 shrink-0 text-[var(--df-color-accent)]" />
+                    <div className="min-w-0">
+                      <h2 className="text-sm font-extrabold text-[var(--df-color-text-strong)]">Pipeline</h2>
+                      <p className="mt-0.5 text-[9.5px] text-[var(--df-color-text-muted)]">Verification, integration, finalization, and cleanup still in flight.</p>
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded-md bg-[var(--df-color-surface-muted)] px-2 py-1 text-[10px] font-extrabold">{snapshot.pipeline.total}</span>
                 </div>
-                <div className="mb-3 flex flex-wrap gap-1.5">
+
+                <div className="mb-3 flex min-w-0 flex-wrap gap-1.5">
                   {Object.entries(PIPELINE_LABELS).map(([stage, label]) => (
-                    <span key={stage} className="rounded-lg border border-[#e5d4bb] bg-white px-2 py-1 text-[9px] font-bold dark:border-[#584a3b] dark:bg-[#211b16]">{label} {pipelineCounts.get(stage) || 0}</span>
+                    <span key={stage} className="max-w-full truncate rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] px-2 py-1 text-[9px] font-bold text-[var(--df-color-text-muted)]" title={`${label}: ${pipelineCounts.get(stage) || 0}`}>
+                      {label} {pipelineCounts.get(stage) || 0}
+                    </span>
                   ))}
                 </div>
+
                 <div className="space-y-2">
-                  {snapshot.pipeline.items.length === 0 && <p className="rounded-xl border border-dashed border-[#e5d4bb] p-4 text-xs text-[#8c7463] dark:border-[#584a3b] dark:text-[#d6b56d]">No background pipeline tails.</p>}
+                  {snapshot.pipeline.items.length === 0 && <p className="rounded-[var(--df-radius-md)] border border-dashed border-[var(--df-color-border)] p-4 text-xs text-[var(--df-color-text-muted)]">No pipeline work is currently in flight.</p>}
                   {snapshot.pipeline.items.map((row) => (
-                    <button key={`${row.projectId}:${row.executionSessionId}:${row.stage}`} type="button" onClick={() => void onOpenTask(row.taskId)} className="flex w-full cursor-pointer items-start justify-between gap-3 rounded-xl border border-[#eadbc6] bg-white px-3 py-2.5 text-left hover:border-[#d8a15f] hover:bg-[#fff9f1] dark:border-[#584a3b] dark:bg-[#211b16] dark:hover:bg-[#30271f]">
-                      <div className="min-w-0"><div className="text-[9px] font-bold text-[#9a6b32] dark:text-[#d6b56d]">{row.projectName}</div><div className="truncate text-[11px] font-extrabold">{row.displayId || row.taskId} · {row.title}</div><div className="mt-1 truncate text-[10px] font-mono text-[#8c7463] dark:text-[#d6b56d]">{row.activity || row.operationKind || row.lifecycleStage}</div></div>
-                      <span className={`shrink-0 rounded-lg px-2 py-1 text-[9px] font-black ${row.blocked ? 'bg-[#f9d9cf] text-[#a33f25] dark:bg-[#4c2c24] dark:text-[#f0b29f]' : 'bg-[#f2e5d2] text-[#71543a] dark:bg-[#3a2f26] dark:text-[#e5c99d]'}`}>{PIPELINE_LABELS[row.stage] || row.stage}</span>
+                    <button
+                      key={`${row.projectId}:${row.executionSessionId}:${row.stage}`}
+                      type="button"
+                      onClick={() => void onOpenTask(row.taskId)}
+                      className={`flex w-full min-w-0 items-start justify-between gap-3 rounded-[var(--df-radius-md)] border px-3 py-2.5 text-left transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)] ${
+                        row.blocked ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]' : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)]'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[9px] font-bold text-[var(--df-color-text-subtle)]" title={`${row.projectName} · ${row.ownerLabel}`}>{row.projectName} · {row.ownerLabel}</div>
+                        <div className="mt-0.5 line-clamp-2 break-words text-[11px] font-extrabold text-[var(--df-color-text)]" title={`${row.displayId || row.taskId} · ${row.title}`}>
+                          {row.displayId || row.taskId} · {row.title}
+                        </div>
+                        <div className="mt-1 line-clamp-2 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text-muted)]" title={row.activity || row.operationKind || row.lifecycleStage}>
+                          {row.activity || row.operationKind || row.lifecycleStage}
+                        </div>
+                      </div>
+                      <span className={`max-w-[140px] shrink-0 truncate rounded-md border px-2 py-1 text-[9px] font-extrabold ${
+                        row.blocked
+                          ? 'border-[var(--df-color-danger)] text-[var(--df-color-danger)]'
+                          : 'border-[var(--df-color-border)] text-[var(--df-color-text-muted)]'
+                      }`} title={row.blocked ? `Blocked · ${PIPELINE_LABELS[row.stage] || row.stage}` : PIPELINE_LABELS[row.stage] || row.stage}>
+                        {row.blocked ? `Blocked · ${PIPELINE_LABELS[row.stage] || row.stage}` : PIPELINE_LABELS[row.stage] || row.stage}
+                      </span>
                     </button>
                   ))}
                 </div>
               </div>
             </section>
 
-            <section className="rounded-2xl border border-[#e5d4bb] bg-[#fffdfa] p-4 dark:border-[#584a3b] dark:bg-[#292119]">
-              <div className="mb-3 flex items-center gap-2"><Bot size={16} className="text-[#d89745]" /><h2 className="text-sm font-extrabold">Queues & Attention</h2></div>
-              <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
-                {(Object.keys(QUEUE_META) as AgentOfficeQueueState[]).map((state) => {
-                  const meta = QUEUE_META[state];
-                  const items = snapshot.queue.items[state];
-                  return (
-                    <div key={state} className="min-w-0 rounded-xl border border-[#e5d4bb] bg-white p-3 dark:border-[#584a3b] dark:bg-[#211b16]">
-                      <div className="flex items-start justify-between gap-2"><div><h3 className="text-xs font-extrabold">{meta.label}</h3><p className="mt-0.5 text-[9px] text-[#8c7463] dark:text-[#d6b56d]">{meta.description}</p></div><span className="rounded-full bg-[#f2e5d2] px-2 py-1 text-[10px] font-black dark:bg-[#3a2f26]">{snapshot.queue.counts[state]}</span></div>
-                      <div className="mt-3 space-y-1.5">
-                        {items.length === 0 && <p className="py-2 text-[10px] font-mono text-[#a08a78] dark:text-[#bfa78f]">Empty</p>}
-                        {items.map((item) => (
-                          <button key={`${item.projectId}:${item.taskId}`} type="button" onClick={() => void onOpenTask(item.taskId)} className="block w-full cursor-pointer rounded-lg border border-transparent px-2 py-2 text-left hover:border-[#eadbc6] hover:bg-[#fff8ee] dark:hover:border-[#584a3b] dark:hover:bg-[#30271f]">
-                            <div className="text-[9px] font-bold text-[#9a6b32] dark:text-[#d6b56d]">{item.projectName}</div>
-                            <div className="truncate text-[10px] font-extrabold">{item.displayId || item.taskId} · {item.title}</div>
-                            {item.reasons[0]?.message && <div className="mt-1 line-clamp-2 text-[9px] leading-relaxed text-[#8c7463] dark:text-[#d6b56d]">{item.reasons[0].message}</div>}
-                          </button>
-                        ))}
-                        {snapshot.queue.truncated[state] && <p className="px-2 text-[9px] font-mono text-[#9a7e68] dark:text-[#bfa78f]">More queued items…</p>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+            <section className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[9px] text-[var(--df-color-text-subtle)]" aria-label="Snapshot technical details">
+              <span>Scope: all projects</span>
+              <span>Workers returned: {snapshot.workers.items.length}/{snapshot.workers.total}</span>
+              <span>Pipeline returned: {snapshot.pipeline.items.length}/{snapshot.pipeline.total}</span>
+              <span>Snapshot: {snapshot.generatedAt}</span>
             </section>
           </>
         ) : null}

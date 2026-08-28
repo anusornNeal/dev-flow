@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import AgentOfficePage, {
   advanceActivityAge,
   createAgentOfficeRefreshGate,
+  describeAgentOfficeHealth,
   formatActivityAge,
   isAgentOfficeSnapshotStale,
 } from '../../src/components/AgentOfficePage.js';
@@ -126,13 +127,64 @@ test('activity age and snapshot freshness helpers expose compact monitoring sema
   assert.equal(isAgentOfficeSnapshotStale('invalid', Date.parse(generatedAt)), true);
 });
 
-test('Agent Office renders multi-project identity across workers, pipeline and queues', () => {
+test('health semantics prioritize refresh failure, partial, stale and fallback while staying quiet when healthy', () => {
+  assert.equal(describeAgentOfficeHealth({
+    error: null,
+    partialSnapshot: false,
+    staleSnapshot: false,
+    connectionState: 'connected',
+  }), null);
+
+  const fallback = describeAgentOfficeHealth({
+    error: null,
+    partialSnapshot: false,
+    staleSnapshot: false,
+    connectionState: 'fallback',
+  });
+  assert.equal(fallback?.title, 'Live updates interrupted');
+  assert.match(fallback?.detail || '', /fallback refresh/i);
+
+  const stale = describeAgentOfficeHealth({
+    error: null,
+    partialSnapshot: false,
+    staleSnapshot: true,
+    connectionState: 'connected',
+  });
+  assert.equal(stale?.title, 'Snapshot is stale');
+  assert.match(stale?.detail || '', /out of date/i);
+
+  const partial = describeAgentOfficeHealth({
+    error: null,
+    partialSnapshot: true,
+    staleSnapshot: true,
+    connectionState: 'connected',
+  });
+  assert.equal(partial?.title, 'Snapshot is partial');
+  assert.match(partial?.detail || '', /counts and empty states may be incomplete/i);
+  assert.match(partial?.detail || '', /also stale/i);
+
+  const failed = describeAgentOfficeHealth({
+    error: 'backend unavailable',
+    partialSnapshot: true,
+    staleSnapshot: true,
+    connectionState: 'fallback',
+  });
+  assert.equal(failed?.title, 'Refresh failed');
+  assert.equal(failed?.tone, 'danger');
+  assert.match(failed?.detail || '', /last successful snapshot/i);
+});
+
+test('Agent Office renders operational hierarchy across active work, attention, queues and pipeline', () => {
   const html = renderOffice({ initialSnapshot: makeSnapshot() });
 
   assert.match(html, /Agent Office/);
-  assert.match(html, /Monitoring only/);
-  assert.match(html, /all projects/);
-  assert.match(html, /Active Agents/);
+  assert.match(html, /Global operational view across all projects/);
+  assert.match(html, /aria-label="Agent Office summary"/);
+  assert.match(html, /Active work/);
+  assert.match(html, /Needs attention/);
+  assert.match(html, /Blocked/);
+  assert.match(html, /Ready to start/);
+  assert.match(html, /Running queue/);
   assert.match(html, /Chat 0738/);
   assert.match(html, /DevFlow managed/);
   assert.match(html, />chat</);
@@ -142,18 +194,21 @@ test('Agent Office renders multi-project identity across workers, pipeline and q
   assert.match(html, /Implement monitoring UI/);
   assert.match(html, /Implementing/);
   assert.match(html, /1m/);
-  assert.match(html, /DevFlow Pipeline/);
-  assert.match(html, /Verifying 1/);
-  assert.match(html, /Queues &amp; Attention/);
+  assert.match(html, />Pipeline</);
+  assert.match(html, /Running checks 1/);
   assert.match(html, /Needs operator context/);
   assert.match(html, /Waiting for prerequisite/);
+  assert.match(html, /Snapshot technical details/);
+  assert.doesNotMatch(html, /Snapshot is stale/);
+  assert.doesNotMatch(html, /Snapshot is partial/);
 });
 
-test('Agent Office exposes honest loading, empty, error, stale and partial-zero states', () => {
+test('Agent Office exposes honest loading, empty, error, stale, partial and last-success failure states', () => {
   const loadingHtml = renderToStaticMarkup(React.createElement(AgentOfficePage as any, {
     onOpenTask: () => {},
   }));
   assert.match(loadingHtml, /Loading Agent Office/);
+  assert.match(loadingHtml, /role="status"/);
 
   const emptySnapshot = makeSnapshot({
     workers: { total: 0, truncated: false, sourceTruncated: false, items: [] },
@@ -167,13 +222,72 @@ test('Agent Office exposes honest loading, empty, error, stale and partial-zero 
     },
   });
   assert.match(renderOffice({ initialSnapshot: emptySnapshot }), /Agent Office is quiet/);
+
   const partialEmpty = { ...emptySnapshot, partial: true };
-  const partialHtml = renderOffice({ initialSnapshot: partialEmpty });
-  assert.match(partialHtml, /Office state is incomplete/);
-  assert.doesNotMatch(partialHtml, /Agent Office is quiet/);
-  assert.match(renderOffice({ initialError: 'backend unavailable' }), /Agent Office unavailable/);
-  assert.match(renderOffice({ initialError: 'backend unavailable' }), /backend unavailable/);
-  assert.match(renderOffice({ initialSnapshot: makeSnapshot(), nowMs: Date.parse(generatedAt) + 16_000 }), /Snapshot is stale/);
+  const partialZeroHtml = renderOffice({ initialSnapshot: partialEmpty });
+  assert.match(partialZeroHtml, /Office state is incomplete/);
+  assert.doesNotMatch(partialZeroHtml, /Agent Office is quiet/);
+
+  const staleZeroHtml = renderOffice({ initialSnapshot: emptySnapshot, nowMs: Date.parse(generatedAt) + 16_000 });
+  assert.match(staleZeroHtml, /Snapshot is stale/);
+  assert.match(staleZeroHtml, /Office state is incomplete/);
+  assert.doesNotMatch(staleZeroHtml, /Agent Office is quiet/);
+
+  const partialBusyHtml = renderOffice({ initialSnapshot: makeSnapshot({ partial: true }) });
+  assert.match(partialBusyHtml, /Snapshot is partial/);
+  assert.match(partialBusyHtml, /counts and empty states may be incomplete/);
+
+  const unavailableHtml = renderOffice({ initialError: 'backend unavailable' });
+  assert.match(unavailableHtml, /Agent Office unavailable/);
+  assert.match(unavailableHtml, /backend unavailable/);
+
+  const staleHtml = renderOffice({ initialSnapshot: makeSnapshot(), nowMs: Date.parse(generatedAt) + 16_000 });
+  assert.match(staleHtml, /Snapshot is stale/);
+  assert.match(staleHtml, /Displayed work may be out of date/);
+
+  const lastSuccessHtml = renderOffice({ initialSnapshot: makeSnapshot(), initialError: 'refresh endpoint unavailable' });
+  assert.match(lastSuccessHtml, /Refresh failed/);
+  assert.match(lastSuccessHtml, /Showing the last successful snapshot/);
+  assert.match(lastSuccessHtml, /refresh endpoint unavailable/);
+});
+
+test('Agent Office keeps long blocked worker, pipeline and reason text inside operational cards', () => {
+  const snapshot = makeSnapshot();
+  const longOwner = 'Chat worker with an intentionally very long owner label that must remain inside the active work card';
+  const longTitle = 'A very long task title from the server that should remain readable and discoverable without forcing the Agent Office card beyond its grid column';
+  const longAction = 'Resolving a long-running recovery operation with detailed server activity that needs two safe wrapped lines rather than horizontal overflow';
+  const longPipelineActivity = 'Post-integration verification is blocked while a very long diagnostic condition is being reconciled and the complete activity remains discoverable';
+  const longReason = 'Waiting for a prerequisite with an intentionally verbose server explanation that must wrap safely inside the blocked queue card.';
+
+  snapshot.workers.items[0] = {
+    ...snapshot.workers.items[0],
+    ownerLabel: longOwner,
+    title: longTitle,
+    action: longAction,
+    indicator: 'blocked',
+  };
+  snapshot.pipeline.items[0] = {
+    ...snapshot.pipeline.items[0],
+    blocked: true,
+    activity: longPipelineActivity,
+  };
+  snapshot.queue.items.blocked[0] = {
+    ...snapshot.queue.items.blocked[0],
+    title: longTitle,
+    reasons: [{ code: 'BLOCKED', message: longReason }],
+  };
+
+  const html = renderOffice({ initialSnapshot: snapshot });
+  assert.match(html, /min-w-0/);
+  assert.match(html, /line-clamp-2 break-words/);
+  assert.match(html, new RegExp(`title="${longOwner}"`));
+  assert.match(html, new RegExp(`title="DVF-0738 · ${longTitle}"`));
+  assert.match(html, new RegExp(`title="${longAction} · Implementing"`));
+  assert.match(html, new RegExp(`title="${longPipelineActivity}"`));
+  assert.match(html, new RegExp(`title="${longReason}"`));
+  assert.match(html, />Blocked</);
+  assert.match(html, /Blocked · Running checks/);
+  assert.match(html, /text-\[var\(--df-color-danger\)\]/);
 });
 
 test('refresh gate is single-flight and coalesces invalidations during a request into one follow-up', async () => {

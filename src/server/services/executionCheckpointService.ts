@@ -7,6 +7,7 @@ import {
   type ExecutionSessionEvidenceRecord,
   type ExecutionSessionRecord,
 } from '../repositories/executionSessionRepository.js';
+import { publishServerEvent } from './serverEventService.js';
 
 const MAX_PENDING_OPERATIONS = 8;
 const MAX_CONTEXT_LINEAGE = 6;
@@ -144,7 +145,12 @@ function baseSnapshot(session: ExecutionSessionRecord, previous: ExecutionCheckp
   };
 }
 
-function persistCheckpoint(session: ExecutionSessionRecord, snapshot: ExecutionCheckpointSnapshot, nowIso: string) {
+function persistCheckpoint(
+  session: ExecutionSessionRecord,
+  snapshot: ExecutionCheckpointSnapshot,
+  nowIso: string,
+  eventReason: string | null,
+) {
   saveExecutionSessionEvidence({
     id: snapshot.id,
     sessionId: session.id,
@@ -159,6 +165,14 @@ function persistCheckpoint(session: ExecutionSessionRecord, snapshot: ExecutionC
     createdAt: nowIso,
     updatedAt: nowIso,
   });
+  if (eventReason) {
+    publishServerEvent('execution.changed', {
+      projectId: session.projectId,
+      entityId: session.id,
+      status: snapshot.stage,
+      reason: eventReason,
+    });
+  }
   return snapshot;
 }
 
@@ -166,6 +180,7 @@ export function recordAutomaticExecutionCheckpoint(
   sessionId: string,
   transition: AutomaticCheckpointTransition,
   now = new Date(),
+  options: { publishEvent?: boolean } = {},
 ) {
   const session = requireActiveSession(sessionId);
   const previous = getLatestExecutionCheckpoint(sessionId);
@@ -176,7 +191,12 @@ export function recordAutomaticExecutionCheckpoint(
   snapshot.transitionEvidenceId = transition.id;
   snapshot.reasonCode = compact(transition.metadata?.reasonCode, 160);
   snapshot.pendingOperations = snapshot.pendingOperations.filter((entry) => !operationId || entry.operationId !== operationId);
-  return persistCheckpoint(session, snapshot, nowIso);
+  return persistCheckpoint(
+    session,
+    snapshot,
+    nowIso,
+    options.publishEvent === false ? null : snapshot.reasonCode || 'lifecycle-transition',
+  );
 }
 
 export function recordExecutionPendingOperationReference(
@@ -197,7 +217,7 @@ export function recordExecutionPendingOperationReference(
     ...snapshot.pendingOperations.filter((entry) => entry.operationId !== operationId),
     next,
   ].slice(-MAX_PENDING_OPERATIONS);
-  return persistCheckpoint(session, snapshot, nowIso);
+  return persistCheckpoint(session, snapshot, nowIso, `pending-operation-${input.status}`);
 }
 
 export function reconcileExecutionPendingOperationReference(
@@ -213,7 +233,7 @@ export function reconcileExecutionPendingOperationReference(
   const nowIso = now.toISOString();
   const snapshot = baseSnapshot(session, previous, nowIso);
   snapshot.pendingOperations = snapshot.pendingOperations.filter((entry) => entry.operationId !== operationId);
-  return persistCheckpoint(session, snapshot, nowIso);
+  return persistCheckpoint(session, snapshot, nowIso, 'pending-operation-reconciled');
 }
 
 export function enrichExecutionCheckpointFromHandoff(
@@ -229,5 +249,5 @@ export function enrichExecutionCheckpointFromHandoff(
   snapshot.pendingNextWork = compactList(input.pendingNextWork, MAX_WORK_ITEMS);
   snapshot.decisions = compactList(input.decisions, MAX_DECISIONS);
   snapshot.blockers = compactList(input.blockers, MAX_DECISIONS);
-  return persistCheckpoint(session, snapshot, nowIso);
+  return persistCheckpoint(session, snapshot, nowIso, 'handoff-checkpoint-updated');
 }

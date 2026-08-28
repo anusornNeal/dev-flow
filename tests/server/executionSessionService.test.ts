@@ -28,6 +28,7 @@ executeAllMigrations();
 const sessions = await import('../../src/server/services/executionSessionService.js');
 const reconciliation = await import('../../src/server/services/executionLifecycleReconciliationService.js');
 const repository = await import('../../src/server/repositories/executionSessionRepository.js');
+const serverEvents = await import('../../src/server/services/serverEventService.js') as any;
 
 test('persists logical execution-session identity without storing the local repo path', () => {
   const created = sessions.createExecutionSession({
@@ -194,6 +195,56 @@ test('tracks observable lifecycle stages independently from terminal session sta
   sessions.completeExecutionSession(created.id);
   assert.equal(repository.getExecutionSessionById(created.id)?.status, 'completed');
   assert.equal(repository.getExecutionSessionById(created.id)?.lifecycle.stage, 'finalized');
+});
+
+test('publishes compact execution invalidations for lifecycle, checkpoint, and terminal changes', () => {
+  serverEvents.__resetServerEventsForTests();
+  const received: any[] = [];
+  const subscription = serverEvents.subscribeServerEvents((event: any) => received.push(event));
+  const created = sessions.createExecutionSession({ projectId: 'project-events', workspaceId: 'ws_events', repoRoot });
+
+  assert.equal(received.length, 1);
+  assert.deepEqual(received[0], {
+    ...received[0],
+    type: 'execution.changed',
+    projectId: 'project-events',
+    entityId: created.id,
+    status: 'created',
+    reason: 'session-created',
+  });
+
+  const transition = {
+    toStage: 'context-ready' as const,
+    reasonCode: 'context-ready',
+    evidence: { id: 'context-event-1', kind: 'context-bundle', status: 'completed' as const, operationId: 'op-context-event-1' },
+  };
+  sessions.recordExecutionLifecycleTransition(created.id, transition);
+  const afterTransition = received.at(-1);
+  assert.equal(afterTransition.type, 'execution.changed');
+  assert.equal(afterTransition.status, 'context-ready');
+  assert.equal(afterTransition.reason, 'context-ready');
+  const eventCountAfterTransition = received.length;
+  sessions.recordExecutionLifecycleTransition(created.id, transition);
+  assert.equal(received.length, eventCountAfterTransition, 'idempotent lifecycle retries must not publish duplicate invalidations');
+
+  assert.throws(() => sessions.recordExecutionLifecycleTransition(created.id, {
+    toStage: 'implementing',
+    reasonCode: 'mutation-pending',
+    evidence: { id: 'mutation-event-1', kind: 'owned-change', status: 'accepted', operationId: 'op-mutation-event-1' },
+  }), (error: any) => error?.code === 'EXECUTION_LIFECYCLE_EVIDENCE_NOT_TERMINAL');
+  const pending = received.at(-1);
+  assert.equal(pending.type, 'execution.changed');
+  assert.equal(pending.status, 'context-ready');
+  assert.equal(pending.reason, 'pending-operation-accepted');
+
+  sessions.cancelExecutionSession(created.id);
+  const terminal = received.at(-1);
+  assert.equal(terminal.type, 'execution.changed');
+  assert.equal(terminal.status, 'cancelled');
+  assert.equal(terminal.reason, 'session-cancelled');
+  assert.equal(JSON.stringify(received).includes(repoRoot), false);
+  assert.equal(JSON.stringify(received).includes('ws_events'), false);
+  subscription.unsubscribe();
 });
 
 test('direct lifecycle reconciliation records observed state without synthetic intermediate transitions', () => {

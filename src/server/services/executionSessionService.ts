@@ -30,6 +30,7 @@ import {
   recordAutomaticExecutionCheckpoint,
   recordExecutionPendingOperationReference,
 } from './executionCheckpointService.js';
+import { publishServerEvent } from './serverEventService.js';
 import {
   buildVerificationCoverageIdentity,
   createVerificationBatch,
@@ -389,6 +390,15 @@ function sessionSnapshot(session: ExecutionSessionRecord) {
   return { ...session };
 }
 
+function publishExecutionSessionChanged(session: ExecutionSessionRecord, reason: string) {
+  publishServerEvent('execution.changed', {
+    projectId: session.projectId,
+    entityId: session.id,
+    status: session.status === 'active' ? session.lifecycle.stage : session.status,
+    reason,
+  });
+}
+
 export function createExecutionSession(input: CreateExecutionSessionInput) {
   const projectId = String(input.projectId || '').trim();
   if (!projectId) throw executionSessionError('EXECUTION_SESSION_PROJECT_REQUIRED', 'projectId is required for an execution session.');
@@ -435,7 +445,9 @@ export function createExecutionSession(input: CreateExecutionSessionInput) {
     });
     if (ownershipEpochId) saveExecutionOwnershipEpochEvidence(sessionId, ownershipEpochId, nowIso);
   });
-  return requireSession(sessionId);
+  const created = requireSession(sessionId);
+  publishExecutionSessionChanged(created, 'session-created');
+  return created;
 }
 
 export function getExecutionSessionOwnershipEpoch(id: string) {
@@ -524,9 +536,10 @@ export function recordExecutionLifecycleTransition(id: string, input: ExecutionL
     });
     updateExecutionSessionRecord(id, { updatedAt: nowIso });
     const refreshed = requireSession(id);
-    recordAutomaticExecutionCheckpoint(id, transition, now);
+    recordAutomaticExecutionCheckpoint(id, transition, now, { publishEvent: false });
     result = { session: refreshed, transition, changed: true, idempotent: false };
   });
+  if (!result.idempotent) publishExecutionSessionChanged(result.session, reasonCode);
   return result;
 }
 
@@ -2303,7 +2316,7 @@ export function completeExecutionSession(id: string, patch: Pick<ExecutionSessio
   const session = requireSession(id);
   assertActive(session);
   const nowIso = new Date().toISOString();
-  return updateExecutionSessionRecord(id, {
+  const updated = updateExecutionSessionRecord(id, {
     status: 'completed',
     contextHandle: Object.prototype.hasOwnProperty.call(patch, 'contextHandle') ? patch.contextHandle || null : session.contextHandle,
     changedFiles: Array.isArray(patch.changedFiles) ? normalizeStringList(patch.changedFiles) : session.changedFiles,
@@ -2311,6 +2324,8 @@ export function completeExecutionSession(id: string, patch: Pick<ExecutionSessio
     updatedAt: nowIso,
     endedAt: nowIso,
   })!;
+  publishExecutionSessionChanged(updated, 'session-completed');
+  return updated;
 }
 
 export function recordExecutionReconciliationEvidence(
@@ -2345,6 +2360,7 @@ export function expireExecutionSessionsForTaskWorkspace(taskId: string, workspac
   return expiredIds.map((id) => {
     const session = requireSession(id);
     recordExecutionReconciliationEvidence(id, 'scoped-expiry', { expiresAt: session.expiresAt }, now);
+    publishExecutionSessionChanged(session, 'session-expired');
     return session;
   });
 }
@@ -2353,16 +2369,24 @@ export function cancelExecutionSession(id: string) {
   const session = requireSession(id);
   assertActive(session);
   const nowIso = new Date().toISOString();
-  return updateExecutionSessionRecord(id, { status: 'cancelled', updatedAt: nowIso, endedAt: nowIso })!;
+  const updated = updateExecutionSessionRecord(id, { status: 'cancelled', updatedAt: nowIso, endedAt: nowIso })!;
+  publishExecutionSessionChanged(updated, 'session-cancelled');
+  return updated;
 }
 
 export function expireExecutionSession(id: string) {
   const session = requireSession(id);
   assertActive(session);
   const nowIso = new Date().toISOString();
-  return updateExecutionSessionRecord(id, { status: 'expired', updatedAt: nowIso, endedAt: nowIso })!;
+  const updated = updateExecutionSessionRecord(id, { status: 'expired', updatedAt: nowIso, endedAt: nowIso })!;
+  publishExecutionSessionChanged(updated, 'session-expired');
+  return updated;
 }
 
 export function pruneExpiredExecutionSessions(now = new Date()) {
-  return markExpiredExecutionSessions(now.toISOString());
+  const expiredCount = markExpiredExecutionSessions(now.toISOString());
+  if (expiredCount > 0) {
+    publishServerEvent('execution.changed', { status: 'expired', reason: 'expired-session-prune' });
+  }
+  return expiredCount;
 }

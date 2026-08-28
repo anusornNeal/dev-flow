@@ -1,6 +1,7 @@
 export type ServerEventType =
   | 'task.changed'
   | 'job.changed'
+  | 'execution.changed'
   | 'ui-preview.changed'
   | 'atlas.changed'
   | 'project.changed'
@@ -9,6 +10,13 @@ export type ServerEventType =
   | 'settings.changed'
   | 'stream.ready'
   | 'stream.reset';
+
+export const GLOBAL_RUNTIME_INVALIDATION_EVENT_TYPES = [
+  'task.changed',
+  'job.changed',
+  'project.changed',
+  'execution.changed',
+] as const satisfies readonly ServerEventType[];
 
 export type ServerEventPacket = {
   v: 1;
@@ -42,6 +50,7 @@ type SubscribeOptions = {
 const EVENT_TYPES: ServerEventType[] = [
   'task.changed',
   'job.changed',
+  'execution.changed',
   'ui-preview.changed',
   'atlas.changed',
   'project.changed',
@@ -127,7 +136,7 @@ export function subscribeServerEvents(
 
 type ReactiveRefreshOptions = {
   refresh: () => void | Promise<void>;
-  eventTypes: ServerEventType[];
+  eventTypes: readonly ServerEventType[];
   projectId?: string | null;
   fallbackMs?: number;
   subscribe?: typeof subscribeServerEvents;
@@ -143,6 +152,17 @@ export function startReactiveServerRefresh(options: ReactiveRefreshOptions) {
   const fallbackMs = Math.max(10_000, options.fallbackMs ?? 60_000);
   const refresh = () => { void options.refresh(); };
   let fallbackTimer: any = null;
+  let eventRefreshQueued = false;
+  let disposed = false;
+
+  const scheduleEventRefresh = () => {
+    if (disposed || eventRefreshQueued) return;
+    eventRefreshQueued = true;
+    queueMicrotask(() => {
+      eventRefreshQueued = false;
+      if (!disposed) refresh();
+    });
+  };
 
   const stopFallback = () => {
     if (fallbackTimer === null) return;
@@ -157,15 +177,20 @@ export function startReactiveServerRefresh(options: ReactiveRefreshOptions) {
   refresh();
   startFallback();
   const unsubscribe = subscribe((event) => {
+    if (event.type === 'stream.reset') {
+      scheduleEventRefresh();
+      return;
+    }
     if (!allowed.has(event.type)) return;
     if (options.projectId && event.projectId && options.projectId !== event.projectId) return;
-    refresh();
+    scheduleEventRefresh();
   }, {
     onAvailable: stopFallback,
     onUnavailable: startFallback,
   });
 
   return () => {
+    disposed = true;
     unsubscribe();
     stopFallback();
   };

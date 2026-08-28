@@ -44,11 +44,25 @@ test('published events are versioned, ordered, and compact invalidation notices'
     status: 'running',
     reason: 'claimed',
   });
+  const execution = events.publishServerEvent('execution.changed', {
+    projectId: 'project-1',
+    entityId: 'exec-1',
+    status: 'implementing',
+    reason: 'mutation-applied',
+    workspacePath: 'C:\\secret\\workspace',
+    rawLog: 'token=do-not-emit',
+  } as any);
 
   assert.equal(first.v, 1);
   assert.equal(first.type, 'task.changed');
   assert.equal(eventStreamId(second.id), eventStreamId(first.id));
   assert.equal(eventSequence(second.id), eventSequence(first.id) + 1);
+  assert.equal(eventSequence(execution.id), eventSequence(second.id) + 1);
+  assert.equal(execution.type, 'execution.changed');
+  assert.deepEqual(Object.keys(execution).sort(), ['at', 'entityId', 'id', 'projectId', 'reason', 'status', 'type', 'v'].sort());
+  assert.equal(JSON.stringify(execution).includes('workspacePath'), false);
+  assert.equal(JSON.stringify(execution).includes('rawLog'), false);
+  assert.equal(JSON.stringify(execution).includes('do-not-emit'), false);
   assert.match(first.at, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(Object.keys(first).sort(), ['at', 'entityId', 'id', 'projectId', 'reason', 'status', 'type', 'v'].sort());
   assert.equal(JSON.stringify(first).includes('description'), false);

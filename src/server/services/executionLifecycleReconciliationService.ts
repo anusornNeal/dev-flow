@@ -13,6 +13,7 @@ import {
   recordAutomaticExecutionCheckpoint,
   recordExecutionPendingOperationReference,
 } from './executionCheckpointService.js';
+import { publishServerEvent } from './serverEventService.js';
 
 export interface ExecutionLifecycleObservedEvidence {
   id: string;
@@ -156,7 +157,7 @@ export function reconcileExecutionLifecycleStage(id: string, input: ExecutionLif
     });
     updateExecutionSessionRecord(id, { updatedAt: nowIso });
     const refreshed = requireSession(id);
-    recordAutomaticExecutionCheckpoint(id, reconciliation, now);
+    recordAutomaticExecutionCheckpoint(id, reconciliation, now, { publishEvent: false });
     result = {
       session: refreshed,
       reconciliation,
@@ -165,5 +166,13 @@ export function reconcileExecutionLifecycleStage(id: string, input: ExecutionLif
     };
   });
 
+  if (!result.idempotent) {
+    publishServerEvent('execution.changed', {
+      projectId: result.session.projectId,
+      entityId: result.session.id,
+      status: result.session.lifecycle.stage,
+      reason: reasonCode,
+    });
+  }
   return result;
 }

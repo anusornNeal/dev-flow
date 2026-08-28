@@ -47,10 +47,14 @@ test('subscription dispatches compact events immediately and cleanup closes the 
   source.emit('job.changed', { v: 1, id: '7', type: 'job.changed', at: new Date().toISOString(), entityId: 'job-7', status: 'running' }, '7');
   assert.equal(received.length, 1);
   assert.equal(received[0].entityId, 'job-7');
-  source.emit('ui-preview.changed', { v: 1, id: '8', type: 'ui-preview.changed', at: new Date().toISOString(), entityId: 'uip-8', reason: 'created' }, '8');
+  source.emit('execution.changed', { v: 1, id: '8', type: 'execution.changed', at: new Date().toISOString(), projectId: 'project-1', entityId: 'exec-8', status: 'verifying' }, '8');
   assert.equal(received.length, 2);
-  assert.equal(received[1].type, 'ui-preview.changed');
-  assert.equal(received[1].entityId, 'uip-8');
+  assert.equal(received[1].type, 'execution.changed');
+  assert.equal(received[1].entityId, 'exec-8');
+  source.emit('ui-preview.changed', { v: 1, id: '9', type: 'ui-preview.changed', at: new Date().toISOString(), entityId: 'uip-9', reason: 'created' }, '9');
+  assert.equal(received.length, 3);
+  assert.equal(received[2].type, 'ui-preview.changed');
+  assert.deepEqual(client.GLOBAL_RUNTIME_INVALIDATION_EVENT_TYPES, ['task.changed', 'job.changed', 'project.changed', 'execution.changed']);
 
   unsubscribe();
   assert.equal(source.closed, true);
@@ -80,7 +84,7 @@ test('subscription reconnects with bounded backoff and carries lastEventId in th
   unsubscribe();
 });
 
-test('reactive refresh runs immediately for matching synthetic events while fallback remains bounded', () => {
+test('reactive refresh coalesces burst invalidations while fallback remains bounded', async () => {
   let listener: ((event: any) => void) | null = null;
   let refreshes = 0;
   let fallback: (() => void) | null = null;
@@ -99,7 +103,10 @@ test('reactive refresh runs immediately for matching synthetic events while fall
   listener?.({ v: 1, id: '2', type: 'task.changed', at: new Date().toISOString() });
   assert.equal(refreshes, 1, 'irrelevant events must not refresh');
   listener?.({ v: 1, id: '3', type: 'job.changed', at: new Date().toISOString() });
-  assert.equal(refreshes, 2, 'matching event refreshes without waiting for fallback');
+  listener?.({ v: 1, id: '4', type: 'job.changed', at: new Date().toISOString() });
+  assert.equal(refreshes, 1, 'burst invalidations are queued instead of refreshing repeatedly in the same turn');
+  await Promise.resolve();
+  assert.equal(refreshes, 2, 'matching burst coalesces to one event-driven refresh');
   fallback?.();
   assert.equal(refreshes, 3);
 
@@ -108,7 +115,7 @@ test('reactive refresh runs immediately for matching synthetic events while fall
   assert.equal(cleared, true);
 });
 
-test('reactive refresh fallback runs only while the SSE stream is unavailable', () => {
+test('reactive refresh fallback runs only while the SSE stream is unavailable', async () => {
   let listener: ((event: any) => void) | null = null;
   let availability: { onAvailable?: () => void; onUnavailable?: () => void } = {};
   const intervalCallbacks: Array<() => void> = [];
@@ -117,7 +124,7 @@ test('reactive refresh fallback runs only while the SSE stream is unavailable', 
 
   const stop = client.startReactiveServerRefresh({
     refresh: () => { refreshes += 1; },
-    eventTypes: ['task.changed', 'stream.reset'],
+    eventTypes: ['task.changed'],
     fallbackMs: 60_000,
     subscribe: (next: (event: any) => void, options: any) => {
       listener = next;
@@ -137,11 +144,15 @@ test('reactive refresh fallback runs only while the SSE stream is unavailable', 
   assert.deepEqual(cleared, [1], 'fallback stops as soon as SSE connects');
 
   listener?.({ v: 1, type: 'task.changed', at: new Date().toISOString() });
+  await Promise.resolve();
   assert.equal(refreshes, 2);
+  listener?.({ v: 1, type: 'stream.reset', at: new Date().toISOString() });
+  await Promise.resolve();
+  assert.equal(refreshes, 3, 'stream reset invalidates state even when it is not explicitly listed');
   availability.onUnavailable?.();
   assert.equal(intervalCallbacks.length, 2, 'fallback restarts only after SSE becomes unavailable');
   intervalCallbacks[1]?.();
-  assert.equal(refreshes, 3);
+  assert.equal(refreshes, 4);
   availability.onAvailable?.();
   assert.deepEqual(cleared, [1, 2], 'reconnect clears the outage fallback again');
 

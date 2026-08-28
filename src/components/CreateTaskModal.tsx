@@ -4,7 +4,17 @@
  */
 
 import React, { useState } from 'react';
-import { X, GitBranch, PlusSquare, FileCode, CheckSquare, Sparkles, Image as ImageIcon, Link as LinkIcon , Bot, Zap} from 'lucide-react';
+import {
+  Bot,
+  CheckSquare,
+  FileCode,
+  GitBranch,
+  Image as ImageIcon,
+  Link as LinkIcon,
+  Sparkles,
+  X,
+  Zap,
+} from 'lucide-react';
 import { CustomSelect } from './CustomSelect';
 import { AgentLogo } from './AgentLogo';
 import { Task, TaskPriority, TaskStatus, ChecklistItem, TaskCategory, TaskImage } from '../types';
@@ -13,9 +23,23 @@ import { AGENTS_CONFIG, getModelConfig, defaultModelForAgent, defaultEffortForMo
 
 interface CreateTaskModalProps {
   onClose: () => void;
-  onSubmit: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'logs'>) => void;
+  onSubmit: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'logs'>) => void | Promise<void>;
   parentId?: string;
   parentTitle?: string;
+}
+
+const fieldClass = 'w-full rounded-xl border border-df-border bg-df-surface-raised px-3 py-2.5 text-[11px] text-df-text outline-none transition-colors placeholder:text-df-text-muted focus:border-df-accent focus:ring-2 focus:ring-[var(--df-color-focus-ring)]/20';
+const selectClass = 'w-full rounded-xl border border-df-border bg-df-surface-raised px-3 py-2.5 text-[11px] text-df-text';
+
+function FieldLabel({ children, optional = false }: { children: React.ReactNode; optional?: boolean }) {
+  return (
+    <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+      <span className="min-w-0 truncate text-[9px] font-black uppercase tracking-[0.14em] text-df-text-muted">{children}</span>
+      <span className={`shrink-0 text-[9px] font-semibold ${optional ? 'text-df-text-muted' : 'text-df-accent'}`}>
+        {optional ? 'Optional' : 'Required'}
+      </span>
+    </div>
+  );
 }
 
 export default function CreateTaskModal({ onClose, onSubmit, parentId, parentTitle }: CreateTaskModalProps) {
@@ -33,9 +57,11 @@ export default function CreateTaskModal({ onClose, onSubmit, parentId, parentTit
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [viewingImage, setViewingImage] = useState<TaskImage | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const handlePaste = async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
+  const handlePaste = async (event: React.ClipboardEvent) => {
+    const items = event.clipboardData?.items;
     if (!items) return;
     for (const item of items) {
       if (item.type.startsWith('image/')) {
@@ -49,16 +75,13 @@ export default function CreateTaskModal({ onClose, onSubmit, parentId, parentTit
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await fetch('/api/images/upload', {
-        method: 'POST',
-        body: formData
-      });
-      if (res.ok) {
-        const img = await res.json();
-        setImages(prev => [...prev, img]);
+      const response = await fetch('/api/images/upload', { method: 'POST', body: formData });
+      if (response.ok) {
+        const image = await response.json();
+        setImages((current) => [...current, image]);
       }
-    } catch (err) {
-      console.error('Upload failed:', err);
+    } catch (error) {
+      console.error('Upload failed:', error);
     }
   };
 
@@ -79,370 +102,268 @@ class MyViewModel: ViewModel() {
     setDescription(template);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!title.trim() || submitting) return;
 
     const tagsArray: string[] = [];
-
-    const filesArray = filesInput
-      .split('\n')
-      .map(f => f.trim())
-      .filter(f => f.length > 0);
-
-    const checklistLines = checklistInput
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0);
-
-    const parsedChecklist: ChecklistItem[] = checklistLines.map((line, idx) => ({
-      id: `step-${Date.now()}-${idx}`,
+    const filesArray = filesInput.split('\n').map((file) => file.trim()).filter(Boolean);
+    const checklistLines = checklistInput.split('\n').map((line) => line.trim()).filter(Boolean);
+    const parsedChecklist: ChecklistItem[] = checklistLines.map((line, index) => ({
+      id: `step-${Date.now()}-${index}`,
       text: line,
-      completed: false
+      completed: false,
     }));
 
-    onSubmit({
-      title: title.trim(),
-      description: description.trim(),
-      status,
-      branch: branch.trim() || undefined,
-      priority,
-      category,
-      tags: tagsArray,
-      targetFiles: filesArray,
-      checklist: parsedChecklist,
-      images: images.length > 0 ? images : undefined,
-      specUrl: specUrl.trim() || undefined,
-      agent: agent || '',
-      model: model || '',
-      effort: effort || '',
-      parentId: parentId || undefined
-    });
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        title: title.trim(),
+        description: description.trim(),
+        status,
+        branch: branch.trim() || undefined,
+        priority,
+        category,
+        tags: tagsArray,
+        targetFiles: filesArray,
+        checklist: parsedChecklist,
+        images: images.length > 0 ? images : undefined,
+        specUrl: specUrl.trim() || undefined,
+        agent: agent || '',
+        model: model || '',
+        effort: effort || '',
+        parentId: parentId || undefined,
+      });
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : 'Task creation failed. Review the form and try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in select-text" onPaste={handlePaste}>
-      {/* Outer Close clicking */}
-      <div className="fixed inset-0" onClick={onClose} />
-
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--df-color-backdrop)] p-3 backdrop-blur-xs sm:p-4" onPaste={handlePaste}>
+      <div className="fixed inset-0" onClick={onClose} aria-hidden="true" />
       <ImageViewer image={viewingImage} onClose={() => setViewingImage(null)} />
 
-      {/* Modal Card */}
-      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
-        
-        {/* Header toolbar */}
-        <div className="p-5 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between font-mono text-[#5c493c] dark:text-[#f3eadf]">
-          <div className="flex items-center gap-2">
-            <Sparkles size={18} className="text-[#bf8a50] dark:text-[#d6b56d]" />
-            <div>
-              <h2 className="text-xs font-black text-[#5c493c] dark:text-[#f3eadf] tracking-tight uppercase">
-                {parentId ? 'CREATE_SUBTASK_SPEC' : 'INIT_NEW_SPEC_TICKET'}
-              </h2>
-              {parentTitle && (
-                <p className="text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] mt-0.5 truncate max-w-[320px] font-bold font-sans">
-                  Parent: #{parentId} • {parentTitle}
-                </p>
-              )}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-task-title"
+        className="relative z-10 flex max-h-[calc(100vh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-df-border bg-df-surface shadow-[var(--df-shadow-lg)] sm:max-h-[calc(100vh-2rem)]"
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-df-border px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-df-accent">
+              <Sparkles size={16} />
+              <span className="text-[9px] font-black uppercase tracking-[0.16em]">Task authoring</span>
             </div>
+            <h2 id="create-task-title" className="mt-1 text-base font-black text-df-text">
+              {parentId ? 'Create subtask' : 'Create task'}
+            </h2>
+            <p className="mt-1 max-w-xl text-[10px] leading-relaxed text-df-text-muted">
+              Add the required title first, then fill only the execution context the task actually needs.
+            </p>
+            {parentTitle && (
+              <p className="mt-2 max-w-full truncate rounded-lg bg-df-surface-muted px-2.5 py-1.5 text-[9px] font-semibold text-df-text-muted" title={`${parentId} · ${parentTitle}`}>
+                Parent: {parentId} · {parentTitle}
+              </p>
+            )}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
-          >
-            <X size={17} />
+          <button type="button" onClick={onClose} aria-label="Close create task dialog" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-df-text-muted hover:bg-df-surface-muted hover:text-df-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+            <X size={15} />
           </button>
         </div>
 
-        {/* Input fields Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto scrollbar-thin text-xs font-mono text-[#5c493c] dark:text-[#f3eadf]">
-          
-          {/* Main Title input */}
-          <div className="space-y-1">
-            <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-              Task Name / Ticket Title
-            </label>
-            <input
-              type="text"
-              required
-              autoFocus
-              className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-sans"
-              placeholder="e.g., Setup ViewModel and StateFlow cache in Kotlin"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-          </div>
-
-          {/* Inline grid branch & tag info */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                <GitBranch size={11} className="text-[#b87332] dark:text-[#f3eadf]" /> Git Checkout Branch
-              </label>
-              <input
-                type="text"
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#9d5b12] dark:text-[#f3eadf] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b]"
-                placeholder="feature/swiftui-charts"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-                Target Column Status
-              </label>
-              <CustomSelect
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf]"
-                value={status}
-                onChange={(val) => setStatus(val as TaskStatus)}
-                options={[
-                  { value: 'backlog', label: 'Backlog Lane' },
-                  { value: 'todo', label: 'To Do Lane' },
-                  { value: 'in-progress', label: 'In Progress Lane' },
-                  { value: 'ready-for-review', label: 'Ready for Review Lane' },
-                  { value: 'done', label: 'Done Lane' }
-                ]}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-                Task Category
-              </label>
-              <CustomSelect
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf]"
-                value={category}
-                onChange={(val) => setCategory(val as TaskCategory)}
-                options={[
-                  { value: 'general', label: 'General / Fullstack' },
-                  { value: 'frontend', label: 'Frontend / UI' },
-                  { value: 'backend', label: 'Backend / Infrastructure' }
-                ]}
-              />
-            </div>
-            
-            <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-                Severity Rating
-              </label>
-              <CustomSelect
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 text-xs text-[#3a2f26] dark:text-[#f3eadf]"
-                value={priority}
-                onChange={(val) => setPriority(val as TaskPriority)}
-                options={[
-                  { value: 'low', label: 'Low Severity' },
-                  { value: 'medium', label: 'Medium Severity' },
-                  { value: 'high', label: 'High Severity' }
-                ]}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-                Assigned Agent
-              </label>
-              <CustomSelect
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] font-bold"
-                value={agent}
-                onChange={(val) => {
-                  setAgent(val);
-                  if (val) {
-                    const defaultModel = defaultModelForAgent(val);
-                    setModel(defaultModel);
-                    setEffort(defaultEffortForModel(val, defaultModel));
-                  } else {
-                    setModel('');
-                    setEffort('');
-                  }
-                }}
-                options={[
-                  { value: '', label: 'Unassigned', icon: <Bot size={13} className="opacity-60" /> },
-                  { value: 'Codex', label: 'Codex', icon: <AgentLogo agent="Codex" size={13} /> },
-                  { value: 'Antigravity', label: 'Antigravity', icon: <AgentLogo agent="Antigravity" size={13} /> },
-                  { value: 'Claude', label: 'Claude', icon: <AgentLogo agent="Claude" size={13} /> }
-                ]}
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-                AI Model Spec
-              </label>
-              <CustomSelect
-                className={`w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] font-bold ${!agent ? 'opacity-50 pointer-events-none' : ''}`}
-                value={model}
-                onChange={(val) => {
-                  setModel(val);
-                  if (agent && val) {
-                    setEffort(defaultEffortForModel(agent, val));
-                  } else {
-                    setEffort('');
-                  }
-                }}
-                options={[
-                  { value: '', label: 'None / Default' },
-                  ...(agent ? (AGENTS_CONFIG[agent as import('../lib/agentsConfig').AgentName] || []).map(m => ({
-                    value: m.model_name,
-                    label: m.display_name || m.label || m.model_name
-                  })) : [])
-                ]}
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-                Effort Allocation
-              </label>
-              <CustomSelect
-                className={`w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3 py-2 text-xs text-[#3a2f26] dark:text-[#f3eadf] font-bold ${(!agent || !model) ? 'opacity-50 pointer-events-none' : ''}`}
-                value={effort}
-                onChange={(val) => setEffort(val)}
-                options={
-                  agent && model ? (getModelConfig(agent, model)?.availableEfforts || []).map(eff => ({
-                    value: eff,
-                    label: eff === 'xhigh' ? 'Extra High' : eff.charAt(0).toUpperCase() + eff.slice(1),
-                    icon: <Zap size={13} className="text-[#d89745] dark:text-[#d6b56d]" />
-                  })) : [{ value: '', label: 'No Effort' }]
-                }
-                placeholder="No Effort"
-              />
-            </div>
-          </div>
-
-
-
-          {/* New target files text input area */}
-          <div className="space-y-1">
-            <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-              <FileCode size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Target Files to Edit (One path per line)
-            </label>
-            <textarea
-              className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-20 outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono resize-y text-[#3a2f26] dark:text-[#f3eadf]"
-              placeholder="e.g.&#10;app/src/main/java/com/example/MainActivity.kt&#10;ios/Views/HomeView.swift"
-              value={filesInput}
-              onChange={(e) => setFilesInput(e.target.value)}
-            />
-          </div>
-
-          {/* New checklist steps text input area */}
-          <div className="space-y-1">
-            <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-              <CheckSquare size={12} className="text-[#728f44] dark:text-[#f3eadf]" /> Implementation Steps (One task per line)
-            </label>
-            <textarea
-              className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-20 outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-mono resize-y text-[#3a2f26] dark:text-[#f3eadf]"
-              placeholder="e.g.&#10;Configure Room Entities and Dao database mappings&#10;Add dynamic Material-You dynamic colors support"
-              value={checklistInput}
-              onChange={(e) => setChecklistInput(e.target.value)}
-            />
-          </div>
-
-          {/* Design Image & Spec URL Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-b border-[#ebdcb9]/45 dark:border-[#584a3b]/45 py-3 font-sans">
-            <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                <ImageIcon size={12} className="text-[#bf8a50] dark:text-[#d6b56d]" /> Attached Images (Paste or Select)
-              </label>
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <label className="text-[10px] bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] px-2.5 py-1.5 rounded-lg text-[#5c493c] dark:text-[#f3eadf] hover:bg-[#fffcf6] cursor-pointer inline-flex items-center gap-1 font-bold transition-colors">
-                    <span>Upload Image(s) {images.length > 0 && `(${images.length})`}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => {
-                        const files = Array.from(e.target.files || []);
-                        files.forEach(file => uploadImage(file));
-                      }}
-                    />
-                  </label>
-                  {images.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setImages([])}
-                      className="text-[10px] text-red-500 font-bold hover:underline cursor-pointer"
-                    >
-                      Clear All
-                    </button>
-                  )}
-                </div>
-                {images.length > 0 && (
-                  <div className="flex gap-2 overflow-x-auto pb-1 mt-2">
-                    {images.map((img) => (
-                      <div key={img.id} className="relative border border-[#ebdcb9] dark:border-[#584a3b] rounded-lg overflow-hidden h-14 w-14 shrink-0 bg-white dark:bg-[#1e1914] group cursor-pointer" onClick={() => setViewingImage(img)}>
-                        <img src={img.url} alt={img.filename} className="h-full w-full object-cover" />
-                        <button 
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); setImages(prev => prev.filter((i) => i.id !== img.id)); }}
-                          className="absolute top-0 right-0 bg-red-500 text-white w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity rounded-bl-md"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5 scrollbar-thin">
+            <section className="space-y-3">
+              <div>
+                <p className="text-[10px] font-black text-df-text">Basics</p>
+                <p className="mt-0.5 text-[9px] text-df-text-muted">The title is the only required field in this dialog.</p>
               </div>
-            </div>
 
-            <div className="space-y-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] font-mono uppercase tracking-widest flex items-center gap-1 font-extrabold pl-0.5">
-                <LinkIcon size={12} className="text-[#3c829e] dark:text-[#f3eadf]" /> Specification link / URL
+              <label className="block">
+                <FieldLabel>Task title</FieldLabel>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  aria-required="true"
+                  className={`${fieldClass} text-xs font-semibold`}
+                  placeholder="e.g. Improve project switcher keyboard navigation"
+                  value={title}
+                  onChange={(event) => { setTitle(event.target.value); setSubmitError(null); }}
+                />
               </label>
-              <input
-                type="text"
-                className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-2.5 py-2 text-[11px] text-[#3a2f26] dark:text-[#f3eadf] placeholder-[#c4b3a4] outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] font-sans"
-                placeholder="e.g. Figma link or API Doc URL"
-                value={specUrl}
-                onChange={(e) => setSpecUrl(e.target.value)}
-              />
-              <p className="text-[9px] text-[#8c7463] dark:text-[#f3eadf] font-mono pl-0.5 leading-relaxed">Link to external product design, spreadsheet, or spec sheet.</p>
-            </div>
+
+              <label className="block">
+                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <FieldLabel optional>Detailed description</FieldLabel>
+                  <button type="button" onClick={injectTemplate} className="rounded-lg px-2 py-1 text-[9px] font-bold text-df-accent hover:bg-df-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+                    Use spec template
+                  </button>
+                </div>
+                <textarea
+                  className={`${fieldClass} min-h-28 resize-y leading-relaxed`}
+                  placeholder="Describe the goal, constraints, expected behavior, and useful implementation context."
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                />
+              </label>
+            </section>
+
+            <section className="border-t border-df-border pt-4">
+              <div className="mb-3">
+                <p className="text-[10px] font-black text-df-text">Planning</p>
+                <p className="mt-0.5 text-[9px] text-df-text-muted">Choose where the task starts and how it should be classified.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block min-w-0">
+                  <FieldLabel optional><span className="inline-flex items-center gap-1"><GitBranch size={11} /> Branch</span></FieldLabel>
+                  <input className={`${fieldClass} font-mono`} placeholder="feature/example" value={branch} onChange={(event) => setBranch(event.target.value)} />
+                </label>
+                <div className="min-w-0">
+                  <FieldLabel optional>Starting status</FieldLabel>
+                  <CustomSelect className={selectClass} value={status} onChange={(value) => setStatus(value as TaskStatus)} options={[
+                    { value: 'backlog', label: 'Backlog' },
+                    { value: 'todo', label: 'To Do' },
+                    { value: 'in-progress', label: 'In Progress' },
+                    { value: 'ready-for-review', label: 'Ready for Review' },
+                    { value: 'done', label: 'Done' },
+                  ]} />
+                </div>
+                <div className="min-w-0">
+                  <FieldLabel optional>Category</FieldLabel>
+                  <CustomSelect className={selectClass} value={category} onChange={(value) => setCategory(value as TaskCategory)} options={[
+                    { value: 'general', label: 'General / Fullstack' },
+                    { value: 'frontend', label: 'Frontend / UI' },
+                    { value: 'backend', label: 'Backend / Infrastructure' },
+                  ]} />
+                </div>
+                <div className="min-w-0">
+                  <FieldLabel optional>Priority</FieldLabel>
+                  <CustomSelect className={selectClass} value={priority} onChange={(value) => setPriority(value as TaskPriority)} options={[
+                    { value: 'low', label: 'Low' },
+                    { value: 'medium', label: 'Medium' },
+                    { value: 'high', label: 'High' },
+                  ]} />
+                </div>
+              </div>
+            </section>
+
+            <section className="border-t border-df-border pt-4">
+              <div className="mb-3">
+                <p className="text-[10px] font-black text-df-text">Agent execution <span className="font-semibold text-df-text-muted">· Optional</span></p>
+                <p className="mt-0.5 text-[9px] text-df-text-muted">Leave unassigned to use the normal task defaults.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div className="min-w-0">
+                  <FieldLabel optional>Agent</FieldLabel>
+                  <CustomSelect className={selectClass} value={agent} onChange={(value) => {
+                    setAgent(value);
+                    if (value) {
+                      const defaultModel = defaultModelForAgent(value);
+                      setModel(defaultModel);
+                      setEffort(defaultEffortForModel(value, defaultModel));
+                    } else {
+                      setModel('');
+                      setEffort('');
+                    }
+                  }} options={[
+                    { value: '', label: 'Unassigned', icon: <Bot size={13} className="opacity-60" /> },
+                    { value: 'Codex', label: 'Codex', icon: <AgentLogo agent="Codex" size={13} /> },
+                    { value: 'Antigravity', label: 'Antigravity', icon: <AgentLogo agent="Antigravity" size={13} /> },
+                    { value: 'Claude', label: 'Claude', icon: <AgentLogo agent="Claude" size={13} /> },
+                  ]} />
+                </div>
+                <div className="min-w-0">
+                  <FieldLabel optional>Model</FieldLabel>
+                  <CustomSelect className={`${selectClass} ${!agent ? 'pointer-events-none opacity-50' : ''}`} value={model} onChange={(value) => {
+                    setModel(value);
+                    setEffort(agent && value ? defaultEffortForModel(agent, value) : '');
+                  }} options={[
+                    { value: '', label: 'None / Default' },
+                    ...(agent ? (AGENTS_CONFIG[agent as import('../lib/agentsConfig').AgentName] || []).map((item) => ({
+                      value: item.model_name,
+                      label: item.display_name || item.label || item.model_name,
+                    })) : []),
+                  ]} />
+                </div>
+                <div className="min-w-0">
+                  <FieldLabel optional>Effort</FieldLabel>
+                  <CustomSelect className={`${selectClass} ${(!agent || !model) ? 'pointer-events-none opacity-50' : ''}`} value={effort} onChange={setEffort} options={
+                    agent && model
+                      ? (getModelConfig(agent, model)?.availableEfforts || []).map((item) => ({
+                          value: item,
+                          label: item === 'xhigh' ? 'Extra High' : item.charAt(0).toUpperCase() + item.slice(1),
+                          icon: <Zap size={13} className="text-df-accent" />,
+                        }))
+                      : [{ value: '', label: 'No Effort' }]
+                  } placeholder="No Effort" />
+                </div>
+              </div>
+            </section>
+
+            <section className="border-t border-df-border pt-4">
+              <div className="mb-3">
+                <p className="text-[10px] font-black text-df-text">Scope & evidence <span className="font-semibold text-df-text-muted">· Optional</span></p>
+                <p className="mt-0.5 text-[9px] text-df-text-muted">Add implementation hints only when they make the task safer or easier to execute.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <label className="block min-w-0">
+                  <FieldLabel optional><span className="inline-flex items-center gap-1"><FileCode size={11} /> Target files</span></FieldLabel>
+                  <textarea className={`${fieldClass} min-h-24 resize-y font-mono`} placeholder={'One path per line\nsrc/components/Example.tsx'} value={filesInput} onChange={(event) => setFilesInput(event.target.value)} />
+                </label>
+                <label className="block min-w-0">
+                  <FieldLabel optional><span className="inline-flex items-center gap-1"><CheckSquare size={11} /> Checklist</span></FieldLabel>
+                  <textarea className={`${fieldClass} min-h-24 resize-y`} placeholder={'One step per line\nAdd keyboard navigation'} value={checklistInput} onChange={(event) => setChecklistInput(event.target.value)} />
+                </label>
+                <label className="block min-w-0">
+                  <FieldLabel optional><span className="inline-flex items-center gap-1"><LinkIcon size={11} /> Specification URL</span></FieldLabel>
+                  <input className={fieldClass} placeholder="Figma, Jira, docs, or spreadsheet link" value={specUrl} onChange={(event) => setSpecUrl(event.target.value)} />
+                </label>
+                <div className="min-w-0">
+                  <FieldLabel optional><span className="inline-flex items-center gap-1"><ImageIcon size={11} /> Images</span></FieldLabel>
+                  <div className="rounded-xl border border-df-border bg-df-surface-raised p-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="cursor-pointer rounded-lg border border-df-border px-2.5 py-1.5 text-[9px] font-bold text-df-text hover:bg-df-surface-muted">
+                        Upload images {images.length > 0 && `(${images.length})`}
+                        <input type="file" accept="image/*" multiple className="hidden" onChange={(event) => Array.from(event.target.files || []).forEach((file) => { void uploadImage(file); })} />
+                      </label>
+                      {images.length > 0 && <button type="button" onClick={() => setImages([])} className="text-[9px] font-bold text-df-danger hover:underline">Clear all</button>}
+                    </div>
+                    {images.length > 0 && (
+                      <div className="mt-2 flex max-w-full gap-2 overflow-x-auto pb-1">
+                        {images.map((image) => (
+                          <div key={image.id} className="group relative h-14 w-14 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-df-border bg-df-surface" onClick={() => setViewingImage(image)}>
+                            <img src={image.url} alt={image.filename} className="h-full w-full object-cover" />
+                            <button type="button" aria-label={`Remove ${image.filename}`} onClick={(event) => { event.stopPropagation(); setImages((current) => current.filter((item) => item.id !== image.id)); }} className="absolute right-0 top-0 flex h-5 w-5 items-center justify-center rounded-bl-md bg-df-danger text-white opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100">×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className="mt-2 text-[9px] leading-relaxed text-df-text-muted">Paste images anywhere in this dialog or choose files here.</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {submitError && (
+              <div role="alert" className="max-h-32 overflow-y-auto break-words rounded-xl border border-df-danger bg-[var(--df-color-danger-surface)] px-3 py-2.5 text-[10px] leading-relaxed text-df-danger">
+                <p className="font-black">Could not create task</p>
+                <p className="mt-1 font-semibold">{submitError}</p>
+              </div>
+            )}
           </div>
 
-          {/* Spec details markdown */}
-          <div className="space-y-2">
-            <div className="flex justify-between items-center">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-                Detailed Specs & Guidelines (Markdown)
-              </label>
-              <button
-                type="button"
-                onClick={injectTemplate}
-                className="text-[9px] bg-[#fffbf4] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] text-[#b47320] dark:text-[#f3eadf] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] px-2.5 py-1 rounded-lg transition-colors cursor-pointer font-extrabold shadow-3xs"
-              >
-                + Inject Code Template
-              </button>
-            </div>
-            <textarea
-              className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-24 outline-none focus:border-[#d4994e] dark:border-[#e0a070] dark:focus:border-[#584a3b] resize-y text-[#3a2f26] dark:text-[#f3eadf]"
-              placeholder="Supply code scripts or markdown blueprint notes..."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </div>
-
-          {/* Buttons bar */}
-          <div className="flex gap-3 pt-4 border-t border-[#ebdcb9] dark:border-[#584a3b]">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] text-[#816b5a] dark:text-[#f3eadf] bg-white dark:bg-[#1e1914] hover:bg-[#fffcf6] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] transition-colors text-xs font-extrabold cursor-pointer transition-all"
-            >
-              Discard
+          <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-df-border bg-df-surface px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
+            <button type="button" onClick={onClose} className="h-10 rounded-xl border border-df-border px-4 text-[10px] font-extrabold text-df-text-muted hover:bg-df-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+              Cancel
             </button>
-            <button
-              type="submit"
-              className="flex-1 bg-[#d89745] dark:bg-[#e0a070] hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] font-extrabold py-2.5 rounded-xl text-xs transition-colors shadow-md hover:shadow-orange-550/10 cursor-pointer transition-all"
-            >
-              Commit Ticket ✨
+            <button type="submit" disabled={submitting || !title.trim()} className="h-10 rounded-xl bg-df-primary px-5 text-[10px] font-extrabold text-[var(--df-color-primary-text)] shadow-[var(--df-shadow-sm)] hover:bg-[var(--df-color-primary-hover)] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+              {submitting ? 'Creating task…' : parentId ? 'Create subtask' : 'Create task'}
             </button>
           </div>
         </form>

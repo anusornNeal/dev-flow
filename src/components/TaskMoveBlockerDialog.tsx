@@ -76,76 +76,109 @@ export default function TaskMoveBlockerDialog({
   const model = buildTaskMoveDialogModel(decision);
   const blockers = Array.isArray(decision.blockers) ? decision.blockers : [];
   const Icon = model.isHardBlocked ? ShieldAlert : AlertTriangle;
+  const stateLabel = model.isHardBlocked ? 'Safety blocker' : 'Workflow check';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--df-color-backdrop)] p-3 backdrop-blur-xs sm:p-4">
       <div className="fixed inset-0" onClick={onCancel} aria-hidden="true" />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="task-move-blocker-title"
-        className="relative z-10 flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[#e5d4bb] bg-[#fcfaf5] shadow-2xl dark:border-[#584a3b] dark:bg-[#1e1914]"
+        aria-describedby="task-move-blocker-summary"
+        className="relative z-10 flex max-h-[calc(100vh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-df-border bg-df-surface shadow-[var(--df-shadow-lg)] sm:max-h-[calc(100vh-2rem)]"
       >
-        <div className="flex items-center justify-between border-b border-[#e5d4bb] bg-[#f4ebd9] px-5 py-4 dark:border-[#584a3b] dark:bg-[#292119]">
-          <div className="flex items-center gap-2.5">
-            <Icon size={17} className="text-[#a46c24] dark:text-[#e0a070]" />
-            <div>
-              <h2 id="task-move-blocker-title" className="text-sm font-black text-[#4b382b] dark:text-[#f3eadf]">
-                {model.isHardBlocked ? 'Task move blocked' : 'Confirm task move'}
-              </h2>
-              <p className="mt-0.5 text-[10px] font-mono text-[#8a6e5a] dark:text-[#b8ab9f]">
-                {sourceLabel} → {targetLabel}
-              </p>
+        <div className={`shrink-0 border-b px-5 py-4 ${
+          model.isHardBlocked
+            ? 'border-df-danger bg-[var(--df-color-danger-surface)]'
+            : 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)]'
+        }`}>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                model.isHardBlocked ? 'bg-df-danger text-white' : 'bg-[var(--df-color-warning)] text-white'
+              }`}>
+                <Icon size={16} />
+              </span>
+              <div className="min-w-0">
+                <p className={`text-[9px] font-black uppercase tracking-[0.16em] ${model.isHardBlocked ? 'text-df-danger' : 'text-[var(--df-color-warning)]'}`}>
+                  {stateLabel}
+                </p>
+                <h2 id="task-move-blocker-title" className="mt-1 text-sm font-black text-df-text">
+                  {model.isHardBlocked ? 'Task move blocked' : 'Review before moving'}
+                </h2>
+                <p className="mt-1 truncate text-[9px] font-mono text-df-text-muted" title={`${sourceLabel} → ${targetLabel}`}>
+                  {sourceLabel} → {targetLabel}
+                </p>
+              </div>
             </div>
+            <button type="button" onClick={onCancel} aria-label="Close move dialog" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-df-text-muted hover:bg-df-surface-raised/70 hover:text-df-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+              <X size={15} />
+            </button>
           </div>
-          <button type="button" onClick={onCancel} aria-label="Close move dialog" className="rounded-full p-1.5 text-[#8a6e5a] hover:bg-white dark:text-[#b8ab9f] dark:hover:bg-[#3a2f26]">
-            <X size={15} />
-          </button>
         </div>
 
-        <div className="space-y-5 px-5 py-5 text-xs text-[#5c493c] dark:text-[#f3eadf]">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 text-xs text-df-text scrollbar-thin">
           <section>
-            <h3 className="mb-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-[#a46c24] dark:text-[#e0a070]">What happened</h3>
-            <p className="leading-relaxed">{model.summary}</p>
+            <h3 className="text-[9px] font-black uppercase tracking-[0.14em] text-df-text-muted">What happened</h3>
+            <p id="task-move-blocker-summary" className="mt-1.5 break-words text-[12px] font-extrabold leading-relaxed text-df-text">
+              {model.summary}
+            </p>
+          </section>
+
+          <section className={`rounded-xl border p-3 ${
+            model.isHardBlocked
+              ? 'border-df-danger bg-[var(--df-color-danger-surface)]'
+              : 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)]'
+          }`}>
+            <h3 className="text-[9px] font-black uppercase tracking-[0.14em] text-df-text-muted">What you can do</h3>
+            <ul className="mt-2 list-disc space-y-1.5 pl-4 text-[10px] font-semibold leading-relaxed text-df-text">
+              {model.actions.map((action) => <li key={action} className="break-words">{action}</li>)}
+            </ul>
           </section>
 
           <section>
-            <h3 className="mb-2 text-[10px] font-black uppercase tracking-[0.14em] text-[#a46c24] dark:text-[#e0a070]">Why</h3>
-            <ul className="space-y-2">
+            <h3 className="text-[9px] font-black uppercase tracking-[0.14em] text-df-text-muted">Why</h3>
+            <ul className="mt-2 space-y-2">
               {blockers.map((blocker, index) => (
-                <li key={`${blocker.code}-${index}`} className="rounded-xl border border-[#eadcc6] bg-white/70 px-3 py-2.5 leading-relaxed dark:border-[#4d4033] dark:bg-[#241d17]">
+                <li key={`${blocker.code}-${index}`} className="break-words rounded-xl border border-df-border bg-df-surface-raised px-3 py-2.5 text-[10px] font-semibold leading-relaxed text-df-text">
                   {blocker.message}
                 </li>
               ))}
             </ul>
           </section>
 
-          <section>
-            <h3 className="mb-2 text-[10px] font-black uppercase tracking-[0.14em] text-[#a46c24] dark:text-[#e0a070]">What you can do</h3>
-            <ul className="list-disc space-y-1.5 pl-4 leading-relaxed">
-              {model.actions.map((action) => <li key={action}>{action}</li>)}
-            </ul>
-          </section>
-
-          <details className="rounded-xl border border-[#eadcc6] px-3 py-2 dark:border-[#4d4033]">
-            <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-wide text-[#8a6e5a] dark:text-[#b8ab9f]">Technical details</summary>
-            <div className="mt-2 space-y-2 font-mono text-[10px] text-[#776252] dark:text-[#b8ab9f]">
+          <details className="rounded-xl border border-df-border bg-df-surface-muted px-3 py-2.5">
+            <summary className="cursor-pointer text-[9px] font-black uppercase tracking-[0.12em] text-df-text-muted">Technical details</summary>
+            <div className="mt-2 max-h-44 space-y-3 overflow-auto break-words font-mono text-[9px] leading-relaxed text-df-text-muted">
+              {decision.code && (
+                <div>
+                  <div className="font-bold text-df-text">Decision</div>
+                  <div className="mt-0.5 break-all">{decision.code}</div>
+                </div>
+              )}
               {blockers.map((blocker, index) => (
-                <div key={`${blocker.code}-technical-${index}`}>
-                  <div>{blocker.code}</div>
-                  {blocker.details !== undefined && <pre className="mt-1 overflow-x-auto whitespace-pre-wrap">{JSON.stringify(blocker.details, null, 2)}</pre>}
+                <div key={`${blocker.code}-technical-${index}`} className="min-w-0">
+                  <div className="break-all font-bold text-df-text">{blocker.code}</div>
+                  {blocker.details !== undefined && (
+                    <pre className="mt-1 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-df-surface-raised p-2">{JSON.stringify(blocker.details, null, 2)}</pre>
+                  )}
                 </div>
               ))}
             </div>
           </details>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-[#e5d4bb] bg-[#f4ebd9] px-5 py-4 dark:border-[#584a3b] dark:bg-[#1e1914]">
-          <button type="button" onClick={onCancel} className="rounded-xl border border-[#e5d4bb] bg-white px-4 py-2 text-[10px] font-extrabold uppercase text-[#8a6e5a] dark:border-[#584a3b] dark:bg-[#292119] dark:text-[#f3eadf]">
+        <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-df-border bg-df-surface px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
+          <button type="button" onClick={onCancel} className={`h-10 rounded-xl px-4 text-[10px] font-extrabold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)] ${
+            model.isHardBlocked
+              ? 'bg-df-primary text-[var(--df-color-primary-text)] hover:bg-[var(--df-color-primary-hover)]'
+              : 'border border-df-border text-df-text-muted hover:bg-df-surface-muted'
+          }`}>
             {model.isHardBlocked ? 'Close' : 'Cancel'}
           </button>
           {model.canMoveAnyway && (
-            <button type="button" onClick={onMoveAnyway} className="rounded-xl bg-[#d89745] px-4 py-2 text-[10px] font-extrabold uppercase text-white hover:bg-[#c07c28] dark:bg-[#a46c24] dark:hover:bg-[#8a581c]">
+            <button type="button" onClick={onMoveAnyway} className="h-10 rounded-xl bg-[var(--df-color-warning)] px-4 text-[10px] font-extrabold text-white shadow-[var(--df-shadow-sm)] hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
               Move Anyway
             </button>
           )}

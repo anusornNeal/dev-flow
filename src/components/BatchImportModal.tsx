@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { X, Sparkles, AlertCircle, Terminal, HelpCircle } from 'lucide-react';
+import { AlertCircle, Braces, HelpCircle, Sparkles, X } from 'lucide-react';
 import { getAgentCatalogHelp } from '../lib/agentsConfig';
 
 interface BatchImportModalProps {
@@ -19,33 +19,33 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
 
   const sampleJson = [
     {
-      "title": "Establish Kotlin Compose navigation architecture",
-      "description": "Setup type-safe navigation graph using Jetpack Compose Navigation component with serializable routes.",
-      "status": "backlog",
-      "priority": "high",
-      "branch": "feature/compose-navigation",
-      "category": "frontend",
-      "tags": ["android", "navigation"],
-      "targetFiles": [
-        "app/build.gradle.kts",
-        "app/src/main/java/com/example/devflow/ui/NavGraph.kt"
+      title: 'Establish Kotlin Compose navigation architecture',
+      description: 'Setup type-safe navigation graph using Jetpack Compose Navigation component with serializable routes.',
+      status: 'backlog',
+      priority: 'high',
+      branch: 'feature/compose-navigation',
+      category: 'frontend',
+      tags: ['android', 'navigation'],
+      targetFiles: [
+        'app/build.gradle.kts',
+        'app/src/main/java/com/example/devflow/ui/NavGraph.kt',
       ],
-      "checklist": [
-        { "text": "Add jetpack-navigation compose ksp dependency", "completed": false },
-        { "text": "Define type-safe screens destinations hierarchy", "completed": false }
-      ]
+      checklist: [
+        { text: 'Add jetpack-navigation compose ksp dependency', completed: false },
+        { text: 'Define type-safe screens destinations hierarchy', completed: false },
+      ],
     },
     {
-      "title": "Setup iOS Swift Keychain storage cache",
-      "description": "Create unified secure wrapper for iOS dynamic Keychain queries.",
-      "status": "todo",
-      "priority": "medium",
-      "category": "backend",
-      "tags": ["ios", "security"],
-      "checklist": [
-        { "text": "Create KeychainHelper file wrapping OS queries", "completed": false }
-      ]
-    }
+      title: 'Setup iOS Swift Keychain storage cache',
+      description: 'Create unified secure wrapper for iOS dynamic Keychain queries.',
+      status: 'todo',
+      priority: 'medium',
+      category: 'backend',
+      tags: ['ios', 'security'],
+      checklist: [
+        { text: 'Create KeychainHelper file wrapping OS queries', completed: false },
+      ],
+    },
   ];
 
   const handleApplySample = () => {
@@ -53,20 +53,18 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
     setErrorMsg(null);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!jsonText.trim()) return;
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!jsonText.trim() || importing) return;
 
     setErrorMsg(null);
     setImporting(true);
 
     try {
-      // 1. Initial syntax check
       const parsed = JSON.parse(jsonText.trim());
-      
-      // 2. Validate format structure
+
       if (Array.isArray(parsed)) {
-        const invalidIndex = parsed.findIndex(item => !item || typeof item !== 'object' || !item.title);
+        const invalidIndex = parsed.findIndex((item) => !item || typeof item !== 'object' || !item.title);
         if (invalidIndex !== -1) {
           throw new Error(`Item at position #${invalidIndex + 1} is missing a required "title" property.`);
         }
@@ -78,114 +76,112 @@ export default function BatchImportModal({ onClose, onImport }: BatchImportModal
         throw new Error('Pasted data must be either a JSON Array [...] or a single Task Object {...}');
       }
 
-      // 3. Dispatch action API call to backend
       const success = await onImport(parsed);
       if (success) {
         onClose();
       } else {
         throw new Error('Internal server failed to register schema batch. Check network payload.');
       }
-    } catch (err: any) {
-      console.error(err);
-      setErrorMsg(err.message || 'SyntaxError: Invalid JSON scheme.');
+    } catch (error: any) {
+      console.error(error);
+      setErrorMsg(error.message || 'SyntaxError: Invalid JSON scheme.');
     } finally {
       setImporting(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in select-text">
-      {/* Outer Close clicking */}
-      <div className="fixed inset-0" onClick={onClose} />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--df-color-backdrop)] p-3 backdrop-blur-xs sm:p-4">
+      <div className="fixed inset-0" onClick={onClose} aria-hidden="true" />
 
-      {/* Modal Card */}
-      <div className="bg-[#fcfaf5] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] w-full max-w-xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col justify-between font-sans">
-        
-        {/* Header toolbar */}
-        <div className="p-5 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#ebdcb9]/40 dark:bg-[#584a3b]/40 flex items-center justify-between font-mono text-[#5c493c] dark:text-[#f3eadf]">
-          <div className="flex items-center gap-2">
-            <Terminal size={18} className="text-[#3c829e] dark:text-[#f3eadf]" />
-            <h2 className="text-xs font-black text-[#5c493c] dark:text-[#f3eadf] tracking-tight uppercase">
-              BATCH_IMPORT_JSON_TICKETS
-            </h2>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="batch-import-title"
+        className="relative z-10 flex max-h-[calc(100vh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-df-border bg-df-surface shadow-[var(--df-shadow-lg)] sm:max-h-[calc(100vh-2rem)]"
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-df-border px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-df-info">
+              <Braces size={16} />
+              <span className="text-[9px] font-black uppercase tracking-[0.16em]">Batch authoring</span>
+            </div>
+            <h2 id="batch-import-title" className="mt-1 text-base font-black text-df-text">Import tasks from JSON</h2>
+            <p className="mt-1 max-w-xl text-[10px] leading-relaxed text-df-text-muted">
+              Paste one task object or an array of tasks. Every task must include a title; all other supported fields are optional.
+            </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-white dark:hover:bg-[#292119]/60 transition-all cursor-pointer"
-          >
-            <X size={17} />
+          <button type="button" onClick={onClose} aria-label="Close batch import dialog" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-df-text-muted hover:bg-df-surface-muted hover:text-df-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+            <X size={15} />
           </button>
         </div>
 
-        {/* Input fields Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto scrollbar-thin text-xs font-mono text-[#5c493c] dark:text-[#f3eadf]">
-          
-          <div className="space-y-1">
-            <div className="flex justify-between items-center pr-1">
-              <label className="block text-[10px] text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest font-extrabold pl-0.5">
-                Paste JSON Array or Object
-              </label>
-              <button
-                type="button"
-                onClick={handleApplySample}
-                className="text-[9px] bg-[#fffbf4] dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] text-[#3c829e] dark:text-[#f3eadf] hover:bg-[#fff9ed] dark:hover:bg-[#1e1914] px-2.5 py-1 rounded-lg transition-colors cursor-pointer font-extrabold shadow-3xs flex items-center gap-1"
-              >
-                <HelpCircle size={10} />
-                <span>+ Use Sample JSON Array</span>
-              </button>
-            </div>
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 scrollbar-thin">
+            <section>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-black text-df-text">JSON payload <span className="text-df-accent">· Required</span></p>
+                  <p className="mt-0.5 text-[9px] text-df-text-muted">The input stays editable after validation errors.</p>
+                </div>
+                <button type="button" onClick={handleApplySample} className="inline-flex items-center gap-1.5 rounded-lg border border-df-border px-2.5 py-1.5 text-[9px] font-bold text-df-info hover:bg-df-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+                  <HelpCircle size={11} /> Use sample
+                </button>
+              </div>
 
-            <textarea
-              required
-              className="w-full bg-white dark:bg-[#1e1914] border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl px-3.5 py-2.5 h-64 outline-none focus:border-[#3c829e] dark:border-[#8ba4e8] dark:focus:border-[#584a3b] font-mono resize-y text-[#3a2f26] dark:text-[#f3eadf] text-[11px] leading-relaxed shadow-3xs"
-              placeholder="e.g.&#10;[&#10;  {&#10;    &quot;title&quot;: &quot;Awesome Ticket&quot;,&#10;    &quot;priority&quot;: &quot;high&quot;,&#10;    &quot;status&quot;: &quot;backlog&quot;&#10;  }&#10;]"
-              value={jsonText}
-              onChange={(e) => {
-                setJsonText(e.target.value);
-                setErrorMsg(null);
-              }}
-            />
-          </div>
+              <textarea
+                required
+                aria-required="true"
+                aria-invalid={Boolean(errorMsg)}
+                aria-describedby={errorMsg ? 'batch-import-error' : 'batch-import-help'}
+                className={`min-h-72 w-full resize-y rounded-xl border bg-df-surface-raised px-3 py-3 font-mono text-[10px] leading-relaxed text-df-text outline-none transition-colors placeholder:text-df-text-muted focus:ring-2 focus:ring-[var(--df-color-focus-ring)]/20 ${errorMsg ? 'border-df-danger focus:border-df-danger' : 'border-df-border focus:border-df-info'}`}
+                placeholder={'[\n  {\n    "title": "Example task",\n    "priority": "high",\n    "status": "backlog"\n  }\n]'}
+                value={jsonText}
+                onChange={(event) => {
+                  setJsonText(event.target.value);
+                  setErrorMsg(null);
+                }}
+              />
+              <p id="batch-import-help" className="mt-1.5 text-[9px] leading-relaxed text-df-text-muted">
+                Accepted top level: a task object or an array of task objects.
+              </p>
+            </section>
 
-          {/* Feedback error notice logs */}
-          {errorMsg && (
-            <div className="p-3 bg-[#fdf2f2] dark:bg-[#1e1914] border border-[#fbd5d5] dark:border-[#584a3b] rounded-xl flex items-start gap-2.5 text-red-700 text-[10px] leading-relaxed">
-              <AlertCircle size={14} className="shrink-0 mt-0.5" />
-              <div>
-                <p className="font-extrabold uppercase tracking-wide">Validation Failure Log:</p>
-                <p className="font-semibold">{errorMsg}</p>
+            {errorMsg && (
+              <div id="batch-import-error" role="alert" className="flex max-h-36 items-start gap-2.5 overflow-y-auto break-words rounded-xl border border-df-danger bg-[var(--df-color-danger-surface)] px-3 py-2.5 text-[10px] leading-relaxed text-df-danger">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-black">Import could not continue</p>
+                  <p className="mt-1 whitespace-pre-wrap break-words font-semibold">{errorMsg}</p>
+                </div>
+              </div>
+            )}
+
+            <details className="rounded-xl border border-df-border bg-df-surface-muted px-3 py-2.5 text-[9px] text-df-text-muted">
+              <summary className="cursor-pointer font-black text-df-text">Supported fields</summary>
+              <div className="mt-2 space-y-2 leading-relaxed">
+                <p><strong className="text-df-text">Required:</strong> title.</p>
+                <p>
+                  <strong className="text-df-text">Optional:</strong> description, status, priority, branch, category, tags, targetFiles, checklist, agent, model, and effort {getAgentCatalogHelp()}.
+                </p>
+                <p>Use the sample when you need a known-good shape before replacing it with your own tasks.</p>
+              </div>
+            </details>
+
+            <div className="rounded-xl border border-df-border bg-df-surface-raised px-3 py-2.5 text-[9px] leading-relaxed text-df-text-muted">
+              <div className="flex items-start gap-2">
+                <Sparkles size={12} className="mt-0.5 shrink-0 text-df-info" />
+                <p>Validation checks JSON syntax and the required title field before the payload is sent to the backend.</p>
               </div>
             </div>
-          )}
-
-          {/* Instruction helper guidelines */}
-          <div className="p-3.5 bg-[#f5efdf]/60 dark:bg-[#1e1914]/60 border border-[#ebdcb9] dark:border-[#584a3b] rounded-2xl text-[9px] text-[#856e5f] dark:text-[#f3eadf] leading-relaxed font-sans">
-            <p className="font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5 font-mono text-[#5c493c] dark:text-[#f3eadf]">
-              <Sparkles size={11} className="text-[#3c829e] dark:text-[#f3eadf]" /> Importing Guidelines
-            </p>
-            <ul className="list-disc pl-3.5 space-y-1 font-semibold">
-              <li>Pasted blob must consist of a clean JSON Array containing ticket records.</li>
-              <li>Required property is the ticket <strong>title</strong> string.</li>
-              <li>Optional properties: <strong>description</strong> (markdown string), <strong>status</strong> (backlog, todo, in-progress, ready-for-review, done), <strong>priority</strong> (low, medium, high), <strong>branch</strong> (text), <strong>category</strong> (<strong>frontend</strong>, <strong>backend</strong>, or <strong>general</strong>), <strong>tags</strong> (free-form labels), <strong>targetFiles</strong> (array of paths), <strong>agent</strong>, <strong>model</strong>, <strong>effort</strong> {getAgentCatalogHelp()}, and <strong>checklist</strong> (array of steps with text and completed values).</li>
-            </ul>
           </div>
 
-          {/* Buttons bar */}
-          <div className="flex gap-3 pt-4 border-t border-[#ebdcb9] dark:border-[#584a3b]">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] text-[#816b5a] dark:text-[#f3eadf] bg-white dark:bg-[#1e1914] hover:bg-[#fffcf6] dark:bg-[#1e1914] dark:hover:bg-[#1e1914] transition-all text-xs font-bold font-mono cursor-pointer"
-            >
-              Discard
+          <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-df-border bg-df-surface px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
+            <button type="button" onClick={onClose} className="h-10 rounded-xl border border-df-border px-4 text-[10px] font-extrabold text-df-text-muted hover:bg-df-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+              Cancel
             </button>
-            <button
-              type="submit"
-              disabled={importing || !jsonText.trim()}
-              className="flex-1 bg-[#3c829e] dark:bg-[#e0a070] hover:bg-[#2d6277] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] disabled:bg-gray-300 dark:disabled:bg-[#292119] disabled:cursor-not-allowed text-white dark:text-[#f3eadf] font-extrabold py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer font-mono"
-            >
-              {importing ? 'Importing... 🚀' : 'Commit Batch JSON ✨'}
+            <button type="submit" disabled={importing || !jsonText.trim()} className="h-10 rounded-xl bg-df-primary px-5 text-[10px] font-extrabold text-[var(--df-color-primary-text)] shadow-[var(--df-shadow-sm)] hover:bg-[var(--df-color-primary-hover)] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
+              {importing ? 'Importing tasks…' : 'Import tasks'}
             </button>
           </div>
         </form>

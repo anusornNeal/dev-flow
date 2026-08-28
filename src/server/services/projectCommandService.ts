@@ -172,6 +172,7 @@ export type ProjectCommandDescriptor = {
   cwd: string;
   source: ResolvedCommand['source'];
   configPath?: string;
+  acceptsTargets?: boolean;
 };
 
 export type CommandTerminationResult = {
@@ -466,10 +467,15 @@ function hasCommandTargetRequest(args: Record<string, any>) {
   return Object.prototype.hasOwnProperty.call(args, 'targets');
 }
 
-function resolveCommandTargets(root: string, args: Record<string, any>, acceptsTargets: boolean) {
+function resolveCommandTargets(
+  root: string,
+  args: Record<string, any>,
+  acceptsTargets: boolean,
+  options: { allowMissingRequiredTargets?: boolean } = {},
+) {
   const supplied = hasCommandTargetRequest(args);
   if (!supplied) {
-    if (acceptsTargets) {
+    if (acceptsTargets && options.allowMissingRequiredTargets !== true) {
       throw createApiError(400, 'COMMAND_TARGETS_REQUIRED', 'This verification preset requires at least one focused target path.');
     }
     return [] as string[];
@@ -525,7 +531,12 @@ function resolveCommandTargets(root: string, args: Record<string, any>, acceptsT
   return Array.from(new Set(normalizedTargets));
 }
 
-function resolveAllowedCommand(root: string, command: string, requestArgs: Record<string, any> = {}): ResolvedCommand {
+function resolveAllowedCommand(
+  root: string,
+  command: string,
+  requestArgs: Record<string, any> = {},
+  options: { allowMissingRequiredTargets?: boolean } = {},
+): ResolvedCommand {
   const packageConfig = readPackageScripts(root);
   const isBuiltIn = (ALLOWED_COMMANDS as readonly string[]).includes(command);
   const isSafeBenchmark = isSafeBenchmarkPackageScript(command);
@@ -543,7 +554,7 @@ function resolveAllowedCommand(root: string, command: string, requestArgs: Recor
 
   const configured = loadProjectCommandPreset(root, command);
   if (configured) {
-    const targets = resolveCommandTargets(root, requestArgs, configured.acceptsTargets);
+    const targets = resolveCommandTargets(root, requestArgs, configured.acceptsTargets, options);
     const configuredArgs = [...configured.args];
     const effectiveArgs = [...configuredArgs, ...targets];
     const invocation = configured.executable === 'npm' || configured.executable === 'npx'
@@ -684,6 +695,7 @@ function buildProjectCommandDescriptor(
     args: [...resolvedCommand.args],
     cwd: path.relative(root, cwdPath) || '.',
     source: resolvedCommand.source,
+    acceptsTargets: resolvedCommand.acceptsTargets === true,
     ...(resolvedCommand.configPath ? { configPath: resolvedCommand.configPath } : {}),
   };
 }
@@ -692,6 +704,14 @@ export function describeProjectCommand(state: AppState, args: Record<string, any
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command, args);
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+  return buildProjectCommandDescriptor(root, command, resolvedCommand, cwdPath);
+}
+
+export function describeProjectCommandForPlanning(state: AppState, args: Record<string, any>): ProjectCommandDescriptor {
+  const root = resolveProjectRoot(state, args);
+  const command = resolveCommandLabel(args.command ?? args.preset);
+  const resolvedCommand = resolveAllowedCommand(root, command, args, { allowMissingRequiredTargets: true });
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
   return buildProjectCommandDescriptor(root, command, resolvedCommand, cwdPath);
 }
@@ -918,6 +938,7 @@ export function inspectProjectVerificationPresets(state: AppState, args: Record<
           resourceKey: preset.resourceKey,
           verificationClass: preset.verificationClass,
           sharedResources: [...preset.sharedResources],
+          acceptsTargets: preset.acceptsTargets === true,
         })),
         impactRules,
       })
@@ -926,7 +947,7 @@ export function inspectProjectVerificationPresets(state: AppState, args: Record<
   const impactMapPresent = snapshot.relativePaths.includes(PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH);
   const hasLowCostTargetedPreset = presets.some((preset) => preset.scope === 'targeted' && preset.cost === 'low');
   const shouldSuggestPresetGeneration = presets.length === 0
-    || (changedFiles.length > 0 && plan?.lane === 'fast' && !hasLowCostTargetedPreset);
+    || (changedFiles.length > 0 && plan?.lane === 'fast' && (plan.steps.length === 0 || !hasLowCostTargetedPreset));
   return {
     ok: true,
     readOnly: true,

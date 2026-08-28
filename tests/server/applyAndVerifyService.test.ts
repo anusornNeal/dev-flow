@@ -406,4 +406,73 @@ test('applyAndVerify keeps edit, diff and verification on the requested managed 
   }
 });
 
+test('applyAndVerify forwards mapped focused targets to target-aware verification presets', () => {
+  const root = fixture('target-aware-impact');
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tests', 'value.test.ts'), 'export {};\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'focused.mjs'), [
+    "const target = process.argv[2] || '';",
+    "if (target !== 'tests/value.test.ts') { process.stderr.write(`unexpected target: ${target}\\n`); process.exit(9); }",
+    "process.stdout.write(`focused ${target}\\n`);",
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  test-focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/focused.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '',
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(root, '.devflow', 'verification-impact.json'), JSON.stringify({
+    rules: [{
+      id: 'value-focused',
+      patterns: ['src/value.ts'],
+      checks: [{ command: 'test-focused', targets: ['tests/value.test.ts'] }],
+      lane: 'fast',
+    }],
+  }, null, 2), 'utf8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'target-aware verification fixtures']);
+
+  const result = applyAndVerify(stateFor(root), {
+    projectId: 'project-apply-verify',
+    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 11' }] }],
+    requestedCommands: ['test-focused'],
+    cacheVerificationResults: false,
+    forceFresh: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.impact.mode, 'configured');
+  assert.deepEqual(result.plan.steps[0]?.targets, ['tests/value.test.ts']);
+  assert.match(result.verification[0]?.stdout || '', /focused tests\/value\.test\.ts/);
+});
+
+test('applyAndVerify plans from the complete dirty candidate, not only the latest edit batch', () => {
+  const root = fixture('complete-candidate-impact');
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'verification-impact.json'), JSON.stringify({
+    rules: [{ id: 'value-only', patterns: ['src/value.ts'], commands: ['test'], lane: 'fast' }],
+  }, null, 2), 'utf8');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'impact mapping fixture']);
+  fs.writeFileSync(path.join(root, 'README.md'), 'earlier candidate change\n', 'utf8');
+
+  const result = applyAndVerify(stateFor(root), {
+    projectId: 'project-apply-verify',
+    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 12' }] }],
+    requestedCommands: ['test'],
+    cacheVerificationResults: false,
+    forceFresh: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.impact.mode, 'fallback');
+  assert.equal(result.plan.impact.coveredFiles.includes('src/value.ts'), true);
+  assert.equal(result.plan.impact.unknownFiles.includes('README.md'), true);
+});
+
 test.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));

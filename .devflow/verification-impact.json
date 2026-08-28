@@ -11,7 +11,45 @@
         "typecheck"
       ],
       "lane": "fast",
-      "reason": "Documentation-only changes still receive a lightweight repository sanity check; all unmapped source, test, config, and shared-contract changes fall back to conservative verification planning."
+      "reason": "Documentation-only changes receive a lightweight repository sanity check."
+    },
+    {
+      "id": "task-claim-focused",
+      "patterns": [
+        "src/server/services/taskClaimService.ts",
+        "tests/server/taskClaimService.test.ts"
+      ],
+      "commands": [
+        "test-focused"
+      ],
+      "targets": [
+        "tests/server/taskClaimService.test.ts"
+      ],
+      "lane": "fast",
+      "reason": "Task-claim behavior is covered by its focused server regression suite."
+    },
+    {
+      "id": "project-command-tests",
+      "patterns": [
+        "tests/server/projectCommandService.test.ts",
+        "tests/server/projectCommandVerificationCandidate.test.ts"
+      ],
+      "commands": [
+        "test-command-service"
+      ],
+      "lane": "fast",
+      "reason": "Project-command test changes are covered by the repository project-command preset."
+    },
+    {
+      "id": "zrok-bootstrap-script",
+      "patterns": [
+        "scripts/verify-zrok-bootstrap.ps1"
+      ],
+      "commands": [
+        "test-zrok-bootstrap"
+      ],
+      "lane": "fast",
+      "reason": "The zrok bootstrap verifier is covered by the repository zrok bootstrap preset."
     }
   ]
 }

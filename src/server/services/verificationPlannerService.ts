@@ -37,12 +37,20 @@ export type VerificationCommandDescriptor = {
   resourceKey: string;
   verificationClass?: VerificationExecutionClass;
   sharedResources?: string[];
+  acceptsTargets?: boolean;
+};
+
+export type VerificationImpactCheck = {
+  command: string;
+  targets?: string[];
 };
 
 export type VerificationImpactRule = {
   id?: string;
   patterns: string[];
-  commands: string[];
+  commands?: string[];
+  targets?: string[];
+  checks?: VerificationImpactCheck[];
   lane?: ExecutionLane;
   reason?: string;
 };
@@ -53,6 +61,8 @@ export type VerificationImpactDecision = {
   unknownFiles: string[];
   matchedRuleIds: string[];
   selectedCommands: string[];
+  selectedChecks: VerificationImpactCheck[];
+  unavailableChecks: Array<{ command: string; reason: string }>;
   omittedCommands: Array<{ command: string; reason: string }>;
 };
 
@@ -76,6 +86,7 @@ export type VerificationPlanStep = {
   resourceKey?: string;
   verificationClass?: VerificationExecutionClass;
   sharedResources?: string[];
+  targets?: string[];
   stage?: number;
   reason: string;
 };
@@ -98,6 +109,8 @@ const HIGH_RISK_PATHS = [
   /(^|\/)src\/server\/types\.ts$/i,
   /(^|\/)(migrations?|schema)\//i,
   /(^|\/)(auth|security|payments?|billing)\//i,
+  /(^|\/)\.devflow\/(verification-impact\.json|commands\.(?:yaml|json))$/i,
+  /(^|\/)src\/server\/services\/(verificationPlannerService|projectCommandConfigService|projectCommandService|applyAndVerifyService)\.ts$/i,
 ];
 
 const LOW_RISK_PATHS = [
@@ -194,13 +207,29 @@ function normalizeImpactRules(rules: VerificationImpactRule[] | undefined) {
   if (!Array.isArray(rules)) return [];
   return rules.flatMap((rule, index) => {
     const patterns = unique(Array.isArray(rule?.patterns) ? rule.patterns.map(normalizePath) : []);
-    const commands = unique(Array.isArray(rule?.commands) ? rule.commands.map((entry) => String(entry || '').trim()) : []);
-    if (patterns.length === 0 || commands.length === 0) return [];
+    const legacyCommands = unique(Array.isArray(rule?.commands) ? rule.commands.map((entry) => String(entry || '').trim()) : []);
+    const legacyTargets = unique(Array.isArray(rule?.targets) ? rule.targets.map(normalizePath) : []);
+    const legacyChecks: VerificationImpactCheck[] = legacyCommands
+      .map((command) => ({ command, ...(legacyCommands.length === 1 && legacyTargets.length > 0 ? { targets: legacyTargets } : {}) }));
+    const structuredChecks: VerificationImpactCheck[] = Array.isArray(rule?.checks)
+      ? rule.checks.flatMap((check) => {
+          const command = String(check?.command || '').trim();
+          if (!command) return [];
+          const targets = unique(Array.isArray(check?.targets) ? check.targets.map(normalizePath) : []);
+          return [{ command, ...(targets.length > 0 ? { targets } : {}) }];
+        })
+      : [];
+    const checks = [...legacyChecks, ...structuredChecks].filter((check, checkIndex, array) => {
+      const key = JSON.stringify([check.command, ...(check.targets || []).slice().sort()]);
+      return array.findIndex((candidate) => JSON.stringify([candidate.command, ...(candidate.targets || []).slice().sort()]) === key) === checkIndex;
+    });
+    if (patterns.length === 0 || checks.length === 0) return [];
     const lane = rule.lane === 'safe' || rule.lane === 'full' || rule.lane === 'fast' ? rule.lane : undefined;
     return [{
       id: String(rule.id || `rule-${index + 1}`),
       patterns,
-      commands,
+      commands: unique(checks.map((check) => check.command)),
+      checks,
       lane,
       reason: typeof rule.reason === 'string' ? rule.reason.trim() : '',
     }];
@@ -211,6 +240,7 @@ function evaluateImpact(
   files: string[],
   rules: ReturnType<typeof normalizeImpactRules>,
   availableCommands: string[],
+  resolvedCommands: VerificationCommandDescriptor[],
   risk: VerificationRisk,
 ) {
   const coveredFiles: string[] = [];
@@ -225,8 +255,45 @@ function evaluateImpact(
     }
   }
   const uniqueMatchedRules = matchedRules.filter((rule, index, array) => array.findIndex((candidate) => candidate.id === rule.id) === index);
-  const configuredCommands = unique(uniqueMatchedRules.flatMap((rule) => rule.commands)).filter((command) => availableCommands.includes(command));
-  const completeCoverage = files.length > 0 && rules.length > 0 && unknownFiles.length === 0 && configuredCommands.length > 0;
+  const groupedChecks = new Map<string, { command: string; targets: Set<string>; untargeted: boolean }>();
+  for (const check of uniqueMatchedRules.flatMap((rule) => rule.checks)) {
+    const current = groupedChecks.get(check.command) || { command: check.command, targets: new Set<string>(), untargeted: false };
+    const targets = unique((check.targets || []).map(normalizePath));
+    if (targets.length === 0) current.untargeted = true;
+    else targets.forEach((target) => current.targets.add(target));
+    groupedChecks.set(check.command, current);
+  }
+
+  const available = new Set(availableCommands);
+  const resolvedByCommand = new Map(resolvedCommands.map((entry) => [entry.command, entry]));
+  const configuredChecks: VerificationImpactCheck[] = [];
+  const unavailableChecks: Array<{ command: string; reason: string }> = [];
+  for (const grouped of groupedChecks.values()) {
+    if (!available.has(grouped.command)) {
+      unavailableChecks.push({ command: grouped.command, reason: 'Mapped verification command is not available in the current repository command catalog.' });
+      continue;
+    }
+    const descriptor = resolvedByCommand.get(grouped.command);
+    const targets = Array.from(grouped.targets).sort();
+    if (targets.length > 0 && (!descriptor || descriptor.acceptsTargets !== true)) {
+      unavailableChecks.push({ command: grouped.command, reason: descriptor
+        ? 'Mapped verification targets require a preset that accepts targets.'
+        : 'Mapped verification targets require a resolved command descriptor before coverage can narrow.' });
+      continue;
+    }
+    if (grouped.untargeted && descriptor?.acceptsTargets === true) {
+      unavailableChecks.push({ command: grouped.command, reason: 'Target-aware verification preset requires explicit mapped targets before coverage can narrow.' });
+      continue;
+    }
+    configuredChecks.push({ command: grouped.command, ...(targets.length > 0 ? { targets } : {}) });
+  }
+  const configuredCommands = unique(configuredChecks.map((check) => check.command));
+  const completeCoverage = files.length > 0
+    && rules.length > 0
+    && unknownFiles.length === 0
+    && groupedChecks.size > 0
+    && unavailableChecks.length === 0
+    && configuredChecks.length === groupedChecks.size;
   const mode: 'configured' | 'fallback' = completeCoverage && risk !== 'high' ? 'configured' : 'fallback';
   const lane = uniqueMatchedRules.reduce<ExecutionLane | undefined>((current, rule) => {
     if (!rule.lane) return current;
@@ -239,6 +306,8 @@ function evaluateImpact(
     unknownFiles,
     matchedRuleIds: uniqueMatchedRules.map((rule) => rule.id),
     configuredCommands,
+    configuredChecks,
+    unavailableChecks,
     lane,
     reasons: unique(uniqueMatchedRules.map((rule) => rule.reason).filter(Boolean)),
   };
@@ -327,7 +396,7 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   const requestedCommands = unique(input.requestedCommands || []);
   const resolvedCommands = Array.isArray(input.resolvedCommands) ? input.resolvedCommands : [];
   const availableCommands = unique([...requestedCommands, ...resolvedCommands.map((entry) => entry.command)]);
-  const impactEvaluation = evaluateImpact(files, normalizeImpactRules(input.impactRules), availableCommands, classification.risk);
+  const impactEvaluation = evaluateImpact(files, normalizeImpactRules(input.impactRules), availableCommands, resolvedCommands, classification.risk);
   const tdd = planTddPolicy(classification.risk, input.tdd);
   let lane: ExecutionLane = classification.risk === 'high' ? 'safe' : 'fast';
 
@@ -338,10 +407,17 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   } else if (Array.isArray(input.impactRules) && input.impactRules.length > 0) {
     const detail = impactEvaluation.unknownFiles.length > 0
       ? `unknown changed files: ${impactEvaluation.unknownFiles.join(', ')}`
-      : classification.risk === 'high'
-        ? 'high-risk paths require conservative verification'
-        : 'configured rules did not resolve an executable verification command';
+      : impactEvaluation.unavailableChecks.length > 0
+        ? `mapped checks are not runnable: ${impactEvaluation.unavailableChecks.map((entry) => `${entry.command} (${entry.reason})`).join(', ')}`
+        : classification.risk === 'high'
+          ? 'high-risk paths require conservative verification'
+          : 'configured rules did not resolve an executable verification command';
     reasons.push(`Impact mapping fallback used because ${detail}.`);
+  }
+
+  if (impactEvaluation.unavailableChecks.length > 0 && lane === 'fast') {
+    lane = 'safe';
+    reasons.push('Mapped verification requirements are unavailable, so FAST narrowing is disabled until broader evidence is available.');
   }
 
   if (input.requestedLane === 'full') {
@@ -350,9 +426,11 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   } else if (input.requestedLane === 'safe') {
     lane = 'safe';
     reasons.push('SAFE lane was explicitly requested.');
-  } else if (input.requestedLane === 'fast' && classification.risk === 'high') {
+  } else if (input.requestedLane === 'fast' && (classification.risk === 'high' || impactEvaluation.unavailableChecks.length > 0)) {
     lane = 'safe';
-    reasons.push('FAST request was escalated because high-risk change signals require SAFE verification.');
+    reasons.push(classification.risk === 'high'
+      ? 'FAST request was escalated because high-risk change signals require SAFE verification.'
+      : 'FAST request was escalated because mapped verification requirements are unavailable.');
   } else if (input.requestedLane === 'fast') {
     lane = 'fast';
   }
@@ -360,6 +438,7 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   let selectedResolved: VerificationCommandDescriptor[] = [];
   let commands: string[] = [];
   const mappingMayNarrow = impactEvaluation.mode === 'configured'
+    && lane === 'fast'
     && input.requestedLane !== 'safe'
     && input.requestedLane !== 'full'
     && classification.risk !== 'high';
@@ -372,8 +451,13 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
       if (selectedResolved.length > 0) commands = selectedResolved.map((entry) => entry.command);
     }
   } else {
-    selectedResolved = resolvedCommands.length > 0
-      ? selectResolvedCommands(classification.risk, lane, resolvedCommands)
+    const fallbackResolvedCommands = impactEvaluation.mode === 'fallback'
+      && requestedCommands.length === 0
+      && lane === 'fast'
+      ? resolvedCommands.filter((entry) => entry.scope !== 'targeted')
+      : resolvedCommands;
+    selectedResolved = fallbackResolvedCommands.length > 0
+      ? selectResolvedCommands(classification.risk, lane, fallbackResolvedCommands)
       : [];
     commands = selectedResolved.length > 0
       ? selectedResolved.map((command) => command.command)
@@ -386,17 +470,32 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
     }
   }
 
+  if (impactEvaluation.unavailableChecks.length > 0) {
+    if (resolvedCommands.length > 0) {
+      selectedResolved = selectedResolved.filter((entry) => entry.scope !== 'targeted');
+      commands = selectedResolved.map((entry) => entry.command);
+    } else if (!commands.includes('verify')) {
+      commands = [];
+    }
+    if (commands.length === 0) {
+      reasons.push('No broad or full verification evidence is available to substitute for the unavailable mapped requirement; verification must remain incomplete.');
+    }
+  }
+
   commands = unique(commands);
   const isolated = new Set(input.resourceIsolatedCommands || []);
   const selectedByCommand = new Map(selectedResolved.map((command) => [command.command, command]));
+  const configuredTargetsByCommand = new Map(impactEvaluation.configuredChecks.map((check) => [check.command, check.targets || []]));
   const steps = commands.map((command) => {
     const descriptor = selectedByCommand.get(command);
+    const targets = mappingMayNarrow ? (configuredTargetsByCommand.get(command) || []) : [];
     const mappingReason = impactEvaluation.mode === 'configured' && impactEvaluation.configuredCommands.includes(command)
       ? 'Selected by configured change-impact mapping.'
       : undefined;
     return {
-      checkId: `green:${descriptor?.semanticKey || command}`,
+      checkId: `green:${descriptor?.semanticKey || command}${targets.length > 0 ? `:${targets.join(',')}` : ''}`,
       command,
+      ...(targets.length > 0 ? { targets } : {}),
       ...(isolated.has(command) ? { parallelGroup: 'isolated' } : {}),
       ...(descriptor ? {
         semanticKey: descriptor.semanticKey,
@@ -437,6 +536,8 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
       unknownFiles: impactEvaluation.unknownFiles,
       matchedRuleIds: impactEvaluation.matchedRuleIds,
       selectedCommands: commands,
+      selectedChecks: steps.map((step) => ({ command: step.command, ...(step.targets?.length ? { targets: [...step.targets] } : {}) })),
+      unavailableChecks: impactEvaluation.unavailableChecks,
       omittedCommands,
     },
     tdd,

@@ -366,6 +366,7 @@ export function listProjectCommandPresets(root: string): ProjectCommandPreset[] 
 const MAX_IMPACT_RULES = 100;
 const MAX_IMPACT_PATTERNS = 50;
 const MAX_IMPACT_COMMANDS = 20;
+const MAX_IMPACT_TARGETS = 100;
 const MAX_IMPACT_TEXT = 500;
 
 function validateImpactStringList(value: unknown, field: string, ruleId: string, maxItems: number) {
@@ -378,6 +379,50 @@ function validateImpactStringList(value: unknown, field: string, ruleId: string,
     }
     return entry.trim().replace(/\\/g, '/');
   })));
+}
+
+function validateImpactTargets(root: string, value: unknown, ruleId: string) {
+  const targets = validateImpactStringList(value, 'targets', ruleId, MAX_IMPACT_TARGETS);
+  for (const target of targets) {
+    if (target.includes('*')) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${ruleId}' target '${target}' must be an exact repository-relative file path.`);
+    }
+    let absoluteTarget: string;
+    try {
+      absoluteTarget = resolveSafePath(root, target);
+    } catch {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${ruleId}' target '${target}' must stay inside the repository.`);
+    }
+    try {
+      const stat = fs.lstatSync(absoluteTarget);
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('not-regular-file');
+    } catch {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${ruleId}' target '${target}' must reference an existing regular file.`);
+    }
+  }
+  return targets;
+}
+
+function validateImpactChecks(root: string, value: unknown, ruleId: string) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_IMPACT_COMMANDS) {
+    throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${ruleId}' checks must contain 1-${MAX_IMPACT_COMMANDS} entries.`);
+  }
+  return value.map((rawCheck: any, checkIndex: number) => {
+    if (!rawCheck || typeof rawCheck !== 'object' || Array.isArray(rawCheck)) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${ruleId}' check ${checkIndex + 1} must be an object.`);
+    }
+    for (const key of Object.keys(rawCheck)) {
+      if (key !== 'command' && key !== 'targets') {
+        throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${ruleId}' check ${checkIndex + 1} contains unsupported field '${key}'.`);
+      }
+    }
+    const command = typeof rawCheck.command === 'string' ? rawCheck.command.trim() : '';
+    if (!/^[A-Za-z0-9][A-Za-z0-9:_-]{0,63}$/.test(command)) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${ruleId}' check ${checkIndex + 1} command '${command}' is invalid.`);
+    }
+    if (rawCheck.targets === undefined) return { command };
+    return { command, targets: validateImpactTargets(root, rawCheck.targets, ruleId) };
+  });
 }
 
 export function loadProjectVerificationImpactRules(root: string): VerificationImpactRule[] {
@@ -402,6 +447,7 @@ export function loadProjectVerificationImpactRules(root: string): VerificationIm
     throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Verification impact config requires a 'rules' array with at most ${MAX_IMPACT_RULES} entries.`);
   }
 
+  const seenRuleIds = new Set<string>();
   return parsed.rules.map((raw: any, index: number) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Verification impact rule ${index + 1} must be an object.`);
@@ -409,6 +455,15 @@ export function loadProjectVerificationImpactRules(root: string): VerificationIm
     const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `rule-${index + 1}`;
     if (id.length > 64 || !/^[A-Za-z0-9][A-Za-z0-9:_-]*$/.test(id)) {
       throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Verification impact rule id '${id}' is invalid.`);
+    }
+    if (seenRuleIds.has(id)) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Verification impact rule id '${id}' is duplicated.`);
+    }
+    seenRuleIds.add(id);
+    for (const key of Object.keys(raw)) {
+      if (!['id', 'patterns', 'commands', 'targets', 'checks', 'lane', 'reason'].includes(key)) {
+        throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${id}' contains unsupported field '${key}'.`);
+      }
     }
     const lane = raw.lane === undefined ? undefined : String(raw.lane).trim().toLowerCase();
     if (lane !== undefined && lane !== 'fast' && lane !== 'safe' && lane !== 'full') {
@@ -418,16 +473,26 @@ export function loadProjectVerificationImpactRules(root: string): VerificationIm
     if (reason !== undefined && (reason.length > MAX_IMPACT_TEXT || /[\r\n\0]/.test(reason))) {
       throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${id}' reason is invalid.`);
     }
-    const commands = validateImpactStringList(raw.commands, 'commands', id, MAX_IMPACT_COMMANDS);
+    const commands = raw.commands === undefined ? [] : validateImpactStringList(raw.commands, 'commands', id, MAX_IMPACT_COMMANDS);
     for (const command of commands) {
       if (!/^[A-Za-z0-9][A-Za-z0-9:_-]{0,63}$/.test(command)) {
         throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${id}' command '${command}' is invalid.`);
       }
     }
+    const targets = raw.targets === undefined ? [] : validateImpactTargets(root, raw.targets, id);
+    const checks = raw.checks === undefined ? [] : validateImpactChecks(root, raw.checks, id);
+    if (targets.length > 0 && (commands.length !== 1 || checks.length > 0)) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${id}' rule-level targets require exactly one command and cannot be mixed with checks.`);
+    }
+    if (commands.length === 0 && checks.length === 0) {
+      throw createApiError(400, 'INVALID_VERIFICATION_IMPACT_CONFIG', `Impact rule '${id}' requires commands or checks.`);
+    }
     return {
       id,
       patterns: validateImpactStringList(raw.patterns, 'patterns', id, MAX_IMPACT_PATTERNS),
-      commands,
+      ...(commands.length > 0 ? { commands } : {}),
+      ...(targets.length > 0 ? { targets } : {}),
+      ...(checks.length > 0 ? { checks } : {}),
       ...(lane ? { lane: lane as VerificationImpactRule['lane'] } : {}),
       ...(reason ? { reason } : {}),
     };

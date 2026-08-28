@@ -178,6 +178,159 @@ test('repository verification impact mapping loads from declarative project conf
   }]);
 });
 
+test('target-aware mapped coverage selects only the relevant focused check and exact target', () => {
+  const plan = planVerification({
+    changedFiles: ['src/server/services/taskClaimService.ts', 'tests/server/taskClaimService.test.ts'],
+    resolvedCommands: [
+      { command: 'test-focused', semanticKey: 'focused', scope: 'targeted', cost: 'low', resourceKey: 'focused', acceptsTargets: true },
+      { command: 'test-command-service', semanticKey: 'command', scope: 'targeted', cost: 'low', resourceKey: 'command' },
+      { command: 'test-zrok-bootstrap', semanticKey: 'zrok', scope: 'targeted', cost: 'low', resourceKey: 'zrok' },
+    ],
+    impactRules: [{
+      id: 'task-claim',
+      patterns: ['src/server/services/taskClaimService.ts', 'tests/server/taskClaimService.test.ts'],
+      commands: ['test-focused'],
+      targets: ['tests/server/taskClaimService.test.ts'],
+    }],
+  });
+
+  assert.equal(plan.impact.mode, 'configured');
+  assert.deepEqual(plan.commands, ['test-focused']);
+  assert.deepEqual(plan.steps[0]?.targets, ['tests/server/taskClaimService.test.ts']);
+  assert.deepEqual(plan.impact.selectedChecks, [{ command: 'test-focused', targets: ['tests/server/taskClaimService.test.ts'] }]);
+  assert.deepEqual(plan.impact.omittedCommands.map((entry: any) => entry.command).sort(), ['test-command-service', 'test-zrok-bootstrap']);
+});
+
+test('catalog-only fallback never selects unrelated targeted presets without impact evidence', () => {
+  const plan = planVerification({
+    changedFiles: ['src/server/services/unmappedService.ts'],
+    resolvedCommands: [
+      { command: 'test-command-service', semanticKey: 'command', scope: 'targeted', cost: 'low', resourceKey: 'command' },
+      { command: 'test-zrok-bootstrap', semanticKey: 'zrok', scope: 'targeted', cost: 'low', resourceKey: 'zrok' },
+      { command: 'typecheck', semanticKey: 'typecheck', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+    ],
+    impactRules: [{ id: 'other', patterns: ['src/other/**'], commands: ['test-command-service'] }],
+  });
+
+  assert.equal(plan.impact.mode, 'fallback');
+  assert.deepEqual(plan.commands, ['typecheck']);
+  assert.equal(plan.commands.includes('test-command-service'), false);
+  assert.equal(plan.commands.includes('test-zrok-bootstrap'), false);
+});
+
+test('mapped coverage fails closed when a required command or target capability is unavailable', () => {
+  const missing = planVerification({
+    changedFiles: ['src/example.ts'],
+    requestedCommands: ['test'],
+    impactRules: [{ id: 'missing', patterns: ['src/example.ts'], commands: ['missing-preset'] }],
+  });
+  assert.equal(missing.impact.mode, 'fallback');
+  assert.equal(missing.lane, 'safe');
+  assert.equal(missing.impact.unavailableChecks[0]?.command, 'missing-preset');
+  assert.deepEqual(missing.commands, []);
+
+  const invalidTarget = planVerification({
+    changedFiles: ['src/example.ts'],
+    resolvedCommands: [
+      { command: 'test-focused', semanticKey: 'focused', scope: 'targeted', cost: 'low', resourceKey: 'focused', acceptsTargets: false },
+      { command: 'verify', semanticKey: 'full', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+    impactRules: [{ id: 'targeted', patterns: ['src/example.ts'], checks: [{ command: 'test-focused', targets: ['tests/example.test.ts'] }] }],
+  });
+  assert.equal(invalidTarget.impact.mode, 'fallback');
+  assert.equal(invalidTarget.lane, 'safe');
+  assert.deepEqual(invalidTarget.commands, ['verify']);
+  assert.match(invalidTarget.impact.unavailableChecks[0]?.reason || '', /accepts targets/i);
+});
+
+test('overlapping impact rules union required commands and focused targets deterministically', () => {
+  const plan = planVerification({
+    changedFiles: ['src/example.ts'],
+    resolvedCommands: [
+      { command: 'test-focused', semanticKey: 'focused', scope: 'targeted', cost: 'low', resourceKey: 'focused', acceptsTargets: true },
+      { command: 'test-command-service', semanticKey: 'command', scope: 'targeted', cost: 'low', resourceKey: 'command' },
+    ],
+    impactRules: [
+      { id: 'a', patterns: ['src/example.ts'], checks: [{ command: 'test-focused', targets: ['tests/a.test.ts'] }] },
+      { id: 'b', patterns: ['src/example.ts'], checks: [{ command: 'test-focused', targets: ['tests/b.test.ts'] }], commands: ['test-command-service'] },
+    ],
+  });
+
+  assert.equal(plan.impact.mode, 'configured');
+  assert.deepEqual(plan.commands, ['test-focused', 'test-command-service']);
+  assert.deepEqual(plan.steps.find((step: any) => step.command === 'test-focused')?.targets, ['tests/a.test.ts', 'tests/b.test.ts']);
+});
+
+test('SAFE impact escalation remains authoritative and cannot narrow to a targeted mapped check', () => {
+  const plan = planVerification({
+    changedFiles: ['src/example.ts'],
+    resolvedCommands: [
+      { command: 'test-command-service', semanticKey: 'command', scope: 'targeted', cost: 'low', resourceKey: 'command' },
+      { command: 'verify', semanticKey: 'full', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+    impactRules: [{ id: 'safe', patterns: ['src/example.ts'], commands: ['test-command-service'], lane: 'safe' }],
+  });
+
+  assert.equal(plan.impact.mode, 'configured');
+  assert.equal(plan.lane, 'safe');
+  assert.deepEqual(plan.commands, ['verify']);
+  assert.equal(plan.requiresBroadVerify, true);
+});
+
+test('verification control-plane changes are high risk and cannot self-narrow', () => {
+  const plan = planVerification({
+    changedFiles: ['.devflow/verification-impact.json'],
+    requestedLane: 'fast',
+    resolvedCommands: [
+      { command: 'test-command-service', semanticKey: 'command', scope: 'targeted', cost: 'low', resourceKey: 'command' },
+      { command: 'verify', semanticKey: 'full', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+    impactRules: [{ id: 'self', patterns: ['.devflow/verification-impact.json'], commands: ['test-command-service'] }],
+  });
+
+  assert.equal(plan.risk, 'high');
+  assert.equal(plan.impact.mode, 'fallback');
+  assert.equal(plan.lane, 'safe');
+  assert.deepEqual(plan.commands, ['verify']);
+});
+
+test('impact config rejects duplicate rule ids and loads exact target-aware checks', () => {
+  const duplicateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-impact-duplicate-'));
+  fs.mkdirSync(path.join(duplicateRoot, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(duplicateRoot, '.devflow', 'verification-impact.json'), JSON.stringify({
+    rules: [
+      { id: 'same', patterns: ['src/a.ts'], commands: ['test:a'] },
+      { id: 'same', patterns: ['src/b.ts'], commands: ['test:b'] },
+    ],
+  }));
+  assert.throws(() => loadProjectVerificationImpactRules(duplicateRoot), /duplicated/i);
+
+  const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-impact-target-'));
+  fs.mkdirSync(path.join(targetRoot, '.devflow'), { recursive: true });
+  fs.mkdirSync(path.join(targetRoot, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(targetRoot, 'tests', 'example.test.ts'), 'export {};\n');
+  fs.writeFileSync(path.join(targetRoot, '.devflow', 'verification-impact.json'), JSON.stringify({
+    rules: [
+      {
+        id: 'focused',
+        patterns: ['src/example.ts'],
+        checks: [{ command: 'test-focused', targets: ['tests/example.test.ts'] }],
+      },
+      {
+        id: 'legacy-target-bridge',
+        patterns: ['src/legacy.ts'],
+        commands: ['test-focused'],
+        targets: ['tests/example.test.ts'],
+      },
+    ],
+  }));
+  const targetRules = loadProjectVerificationImpactRules(targetRoot);
+  assert.deepEqual(targetRules[0]?.checks, [
+    { command: 'test-focused', targets: ['tests/example.test.ts'] },
+  ]);
+  assert.deepEqual(targetRules[1]?.targets, ['tests/example.test.ts']);
+});
+
 test('RED may defer only for low/medium risk with obvious proof under saturated resources', () => {
   const low = planVerification({
     changedFiles: ['README.md'],

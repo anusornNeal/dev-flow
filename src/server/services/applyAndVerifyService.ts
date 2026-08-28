@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto';
 import type { AppState } from '../types';
 import { editFilesBatch } from './fileEditBatchService';
 import { applyPreparedEditPlan } from './preparedEditService';
-import { getGitDiff } from './gitService';
+import { getChangedGitFilesForRoot, getGitDiff } from './gitService';
 import {
   attachInfrastructureRecoveryAudit,
   bindProjectCommandVerificationCandidate,
   buildProjectCommandInfrastructureRecovery,
-  describeProjectCommand,
+  describeProjectCommandForPlanning,
   describeProjectCommandResourceProfile,
   isVerificationInfrastructureFailure,
   runProjectCommand,
@@ -39,10 +39,20 @@ function changedPaths(edit: any) {
     .filter(Boolean);
 }
 
+function completeCandidatePaths(state: AppState, args: Record<string, any>, edit: any) {
+  const root = resolveProjectRoot(state, args);
+  const editFiles = changedPaths(edit);
+  const workingFiles = getChangedGitFilesForRoot(root).map((file) => file.path);
+  const suppliedFiles = Array.isArray(args.changedFiles)
+    ? args.changedFiles.map((file: unknown) => String(file || '')).filter(Boolean)
+    : [];
+  return Array.from(new Set([...workingFiles, ...editFiles, ...suppliedFiles].map((file) => file.replace(/\\/g, '/'))));
+}
+
 function buildVerificationPlan(state: AppState, args: Record<string, any>, files: string[]) {
   const requestedCommands = Array.isArray(args.requestedCommands) ? args.requestedCommands : [];
   const impactRules = loadProjectVerificationImpactRules(resolveProjectRoot(state, args));
-  const resolvedCommands = requestedCommands.map((command: string) => describeProjectCommand(state, {
+  const resolvedCommands = requestedCommands.map((command: string) => describeProjectCommandForPlanning(state, {
     ...projectScopeArgs(args),
     command,
   }));
@@ -86,7 +96,7 @@ export function applyAndVerify(state: AppState, args: Record<string, any>) {
     };
   }
 
-  const files = changedPaths(edit);
+  const files = completeCandidatePaths(state, args, edit);
   const plan = buildVerificationPlan(state, args, files);
 
   const noChanges = edit.changed !== true;
@@ -137,6 +147,7 @@ export function applyAndVerify(state: AppState, args: Record<string, any>) {
     const result = runProjectCommand(state, {
       ...projectScopeArgs(args),
       command: step.command,
+      ...(step.targets?.length ? { targets: [...step.targets] } : {}),
       cacheResult: args.cacheVerificationResults !== false,
       forceFresh: args.forceFresh === true,
       maxOutputBytes: args.maxOutputBytes,
@@ -220,7 +231,7 @@ export async function applyAndVerifyAsync(
     return { ok: false, status: 'edit_failed' as const, edit, diff: null, verification: [] as RunProjectCommandResult[], parallelVerification: false };
   }
 
-  const files = changedPaths(edit);
+  const files = completeCandidatePaths(state, args, edit);
   const plan = buildVerificationPlan(state, args, files);
   const noChanges = edit.changed !== true;
   if (noChanges && args.forceVerification !== true) {
@@ -316,13 +327,14 @@ export async function applyAndVerifyAsync(
     for (const cancel of activeCancels) cancel();
   });
 
-  const commandArgs = (command: string) => ({
+  const commandArgs = (command: string, targets?: string[]) => ({
     projectId: args.projectId,
     projectName: args.projectName,
     repo: args.repo,
     repoUrl: args.repoUrl,
     localPath: args.localPath,
     command,
+    ...(targets?.length ? { targets: [...targets] } : {}),
     cacheResult: args.cacheVerificationResults !== false,
     forceFresh: args.forceFresh === true,
     maxOutputBytes: args.maxOutputBytes,
@@ -360,7 +372,7 @@ export async function applyAndVerifyAsync(
   };
 
   const permitDemandForStep = (step: (typeof plan.steps)[number], recovery = false): VerificationPermitDemand => {
-    const profile = describeProjectCommandResourceProfile(state, commandArgs(step.command));
+    const profile = describeProjectCommandResourceProfile(state, commandArgs(step.command, step.targets));
     const prediction = profile.prediction;
     const admissionVector = prediction.confidence === 'high' ? prediction.expected : prediction.upperBound;
     const baseResources = step.sharedResources?.length
@@ -385,7 +397,7 @@ export async function applyAndVerifyAsync(
   let verificationExecutionLease = unrestrictedVerificationExecutionLease;
 
   const runStep = async (step: (typeof plan.steps)[number]) => {
-    const stepArgs = commandArgs(step.command);
+    const stepArgs = commandArgs(step.command, step.targets);
     const runAttempt = async (attemptArgs: Record<string, any>, recovery = false) => {
       const boundCandidate = baseCandidate
         ? bindProjectCommandVerificationCandidate(state, attemptArgs, baseCandidate)

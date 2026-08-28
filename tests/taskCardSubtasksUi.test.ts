@@ -80,6 +80,69 @@ test('TaskCard shows a non-clickable Design badge only when frozen UI evidence e
   assert.doesNotMatch(withoutDesign, /Task has UI Design/);
 });
 
+test('TaskCard keeps long content bounded and makes blocked live work explicit', () => {
+  const title = 'An intentionally very long task title that must remain readable without widening the board lane even when server text keeps going';
+  const branch = 'feature/really-long-branch-name-that-must-never-expand-the-card-beyond-the-lane';
+  const activity = 'Verification is blocked because a very long server-provided diagnostic message needs to wrap inside the card instead of forcing horizontal overflow.';
+  const html = renderToStaticMarkup(React.createElement(TaskCard as any, {
+    task: makeTask({
+      title,
+      branch,
+      priority: 'high',
+      unresolvedBugCount: 2,
+      targetFiles: ['src/a.ts', 'src/b.ts'],
+      checklist: [{ id: '1', text: 'one', completed: true }, { id: '2', text: 'two', completed: false }],
+      liveWork: {
+        blocked: true,
+        phaseLabel: 'verification-with-a-very-long-phase-label-that-must-truncate',
+        ownerLabel: 'Agent with a very long owner label that must truncate safely',
+        activity,
+        phaseCount: 4,
+        phaseIndex: 2,
+        updatedAt: '2026-08-28T13:40:00.000Z',
+      },
+    }),
+    subtasks: [],
+    onSelect: noop,
+    onDelete: noop,
+    onDragStart: noop,
+    onUpdate: noop,
+  }));
+
+  assert.match(html, /min-w-0/);
+  assert.match(html, /overflow-hidden/);
+  assert.match(html, new RegExp(`title="${title}"`));
+  assert.match(html, /aria-label="Live work blocked"/);
+  assert.match(html, />Blocked</);
+  assert.match(html, /line-clamp-2 break-words/);
+  assert.match(html, /group-focus-within:opacity-100/);
+  assert.match(html, /aria-label="Remove task DVF-0493"/);
+  assert.match(html, new RegExp(`title="${branch}"`));
+  assert.match(html, /Bugs 2/);
+  assert.match(html, />High</);
+});
+
+test('TaskCard presents failed execution as one attention state with readable detail', () => {
+  const errorMessage = 'Compilation failed because generated output did not match the expected contract and this detail should remain readable.';
+  const html = renderToStaticMarkup(React.createElement(TaskCard as any, {
+    task: makeTask({
+      agent: 'codex',
+      latestAgentRun: { id: 'run-1', status: 'failed', errorMessage },
+      agentRuns: [{ id: 'run-1', status: 'failed', errorMessage }],
+    }),
+    subtasks: [],
+    onSelect: noop,
+    onDelete: noop,
+    onDragStart: noop,
+    onUpdate: noop,
+  }));
+
+  assert.match(html, /aria-label="Execution state: Failed"/);
+  assert.equal((html.match(/>Failed</g) || []).length, 1);
+  assert.match(html, new RegExp(errorMessage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(html, /text-\[var\(--df-color-danger\)\]/);
+});
+
 test('Task Details subtask section renders more than five children without show-more controls', () => {
   const task = makeTask();
   const children = makeChildren();

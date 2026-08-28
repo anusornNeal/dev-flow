@@ -4,8 +4,21 @@
  */
 
 import React, { useState } from 'react';
-import { GitBranch, Copy, Check, Trash2, FileCode, CheckSquare, Image as ImageIcon, Link as LinkIcon, Lock, AlertTriangle, Ban, CircleCheck, Flame, Coffee, Layout, Server } from 'lucide-react';
-import { Task } from '../types';
+import {
+  AlertTriangle,
+  Check,
+  CheckSquare,
+  CircleCheck,
+  Coffee,
+  FileCode,
+  Flame,
+  Image as ImageIcon,
+  Layout,
+  Link as LinkIcon,
+  Server,
+  Trash2,
+} from 'lucide-react';
+import type { Task } from '../types';
 import { getDisplayModelName } from '../lib/agentsConfig';
 import { getAutoWorkState } from '../lib/autoWorkState';
 import CopyTemplateButton from './CopyTemplateButton';
@@ -22,18 +35,29 @@ interface TaskCardProps {
   onShowLog?: (run: { id: string; status?: string; agent?: string | null; model?: string | null }) => void;
 }
 
+function taskCategoryBadge(task: Task) {
+  if (task.category === 'frontend') {
+    return (
+      <span className="inline-flex max-w-[92px] shrink-0 items-center gap-1 rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-bold text-[var(--df-color-text-muted)]" title="Frontend">
+        <Layout size={9} />
+        <span className="truncate">Frontend</span>
+      </span>
+    );
+  }
+  if (task.category === 'backend') {
+    return (
+      <span className="inline-flex max-w-[92px] shrink-0 items-center gap-1 rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-bold text-[var(--df-color-text-muted)]" title="Backend">
+        <Server size={9} />
+        <span className="truncate">Backend</span>
+      </span>
+    );
+  }
+  return null;
+}
+
 export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDragStart, onUpdate, onShowLog }: TaskCardProps) {
-  const [copied, setCopied] = useState(false);
   const [idCopied, setIdCopied] = useState(false);
   const [isDrag, setIsDrag] = useState(false);
-
-  const handleCopyBranch = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!task.branch) return;
-    navigator.clipboard.writeText(`git checkout -b ${task.branch}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const handleCopyId = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -56,10 +80,9 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const filesCount = task.targetFiles?.length || 0;
   const unresolvedBugCount = task.unresolvedBugCount ?? (task.bugs || []).filter((bug) => ['open', 'fixing', 'fixed', 'reopened'].includes(bug.status)).length;
   const hasEffectiveAssignment = Boolean(task.agent || task.model || task.effort);
-
-  const latestRun = task.latestAgentRun;
   const autoWorkState = getAutoWorkState(task);
-  const liveWorkAgeMs = task.liveWork?.updatedAt ? Math.max(0, Date.now() - Date.parse(task.liveWork.updatedAt)) : null;
+  const liveWork = task.liveWork;
+  const liveWorkAgeMs = liveWork?.updatedAt ? Math.max(0, Date.now() - Date.parse(liveWork.updatedAt)) : null;
   const liveWorkFreshness = liveWorkAgeMs == null || !Number.isFinite(liveWorkAgeMs)
     ? null
     : liveWorkAgeMs < 60_000
@@ -67,20 +90,24 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       : liveWorkAgeMs < 60 * 60_000
         ? `${Math.floor(liveWorkAgeMs / 60_000)}m`
         : `${Math.floor(liveWorkAgeMs / (60 * 60_000))}h`;
-  const settledRunBadge = latestRun && !task.activeAgent && ['failed', 'cancelled', 'succeeded'].includes(latestRun.status)
-    ? latestRun
-    : null;
+
   const runStatusTone = autoWorkState
-    ? ['queued-busy', 'queued', 'launching', 'running'].includes(autoWorkState.kind)
-      ? 'bg-[#fff5e5] text-[#935919] border-[#fde5bd] dark:bg-[#3a2f26] dark:text-[#f3eadf] dark:border-[#584a3b]'
+    ? autoWorkState.kind === 'failed' || autoWorkState.kind === 'timed-out'
+      ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)] text-[var(--df-color-danger)]'
       : autoWorkState.kind === 'ready-for-review'
-        ? 'bg-[#edf7ed] text-[#427931] border-[#c9e7cb] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
-        : autoWorkState.kind === 'failed' || autoWorkState.kind === 'timed-out'
-          ? 'bg-[#fff0ed] text-[#b4432d] border-[#f2c2b8] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
-          : 'bg-[#f2ece5] text-[#6d5a4d] border-[#d6cbbe] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]'
-    : 'bg-[#f2ece5] text-[#6d5a4d] border-[#d6cbbe] dark:bg-[#292119] dark:text-[#f3eadf] dark:border-[#584a3b]';
+        ? 'border-[var(--df-color-success)] bg-[var(--df-color-success-surface)] text-[var(--df-color-success)]'
+        : ['queued-busy', 'queued', 'launching', 'running'].includes(autoWorkState.kind)
+          ? 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)] text-[var(--df-color-warning)]'
+          : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] text-[var(--df-color-text-muted)]'
+    : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] text-[var(--df-color-text-muted)]';
 
-
+  const priorityLabel = task.priority === 'high' ? 'High' : task.priority === 'low' ? 'Low' : 'Medium';
+  const priorityTone = task.priority === 'high'
+    ? 'text-[var(--df-color-danger)]'
+    : task.priority === 'low'
+      ? 'text-[var(--df-color-text-subtle)]'
+      : 'text-[var(--df-color-text-muted)]';
+  const taskIdentity = task.displayId || task.id;
 
   return (
     <div
@@ -91,161 +118,129 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       }}
       onDragEnd={() => setIsDrag(false)}
       onClick={() => onSelect(task)}
-      className={`relative select-none transition-all duration-150 flex flex-col justify-between h-fit w-full p-4 rounded-2xl cursor-grab active:cursor-grabbing group border ${
-        isDrag 
-          ? 'border-dashed border-[#e6b47c] dark:border-[#584a3b] bg-[#faf6ef]/50 dark:bg-[#292119]/50 opacity-60' 
+      className={`group relative flex h-fit w-full min-w-0 select-none flex-col overflow-hidden rounded-[var(--df-radius-lg)] border bg-[var(--df-color-surface-raised)] p-4 text-[var(--df-color-text)] shadow-[var(--df-shadow-sm)] transition-[border-color,box-shadow,opacity] duration-150 cursor-grab active:cursor-grabbing ${
+        isDrag
+          ? 'border-dashed border-[var(--df-color-warning)] opacity-60'
           : isInProgress
-            ? 'bg-[#ffffff] dark:bg-[#292119] border-2 border-[#e3a35a] dark:border-[#d6a549] shadow-md ring-[4px] ring-[#f8ebd9]/40 dark:ring-[#d6a549]/20'
+            ? 'border-[var(--df-color-warning)] shadow-[var(--df-shadow-md)]'
             : isDone
-              ? 'bg-[#f7fdf7] dark:bg-[#292119] border-[#d4ece3] dark:border-[#584a3b] border-l-4 border-l-emerald-500 shadow-2xs'
-              : 'bg-[#ffffff] dark:bg-[#292119] border-[#e8dfcf] dark:border-[#584a3b] hover:border-[#cfc3b0] dark:hover:border-[#584a3b] shadow-sm hover:shadow-md'
+              ? 'border-[var(--df-color-success)] border-l-4'
+              : 'border-[var(--df-color-border)] hover:border-[var(--df-color-border-strong)] hover:shadow-[var(--df-shadow-md)]'
       }`}
       id={`task-card-${task.id}`}
     >
-
-      <div className="flex flex-col h-full pl-0.5">
-        <div className="flex justify-between items-start gap-2 mb-1.5">
-          {/* Prominent Task ID & Locked Agent */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <div 
-              className="text-[15px] font-mono font-black text-[#d89745] dark:text-[#e0a070] cursor-pointer hover:bg-[#ebdcb9] dark:hover:bg-[#584a3b]/40 px-1.5 -ml-1.5 py-0.5 rounded-md transition-colors flex items-center"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCopyId(e as any);
-              }}
-              title="Copy ID"
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleCopyId}
+              className="inline-flex max-w-[132px] items-center gap-1 rounded-md px-1 py-0.5 text-[10px] font-extrabold text-[var(--df-color-accent)] transition-colors hover:bg-[var(--df-color-surface-subtle)]"
+              title={`Copy ${taskIdentity}`}
+              aria-label={`Copy task ID ${taskIdentity}`}
             >
-              #{task.displayId || task.id.slice(0,4)}
-              {idCopied && <Check size={13} className="ml-1 text-emerald-500" />}
-            </div>
-            
-            {/* Category Badges */}
-            {task.category === 'frontend' && (
-              <span className="inline-flex items-center gap-1 bg-[#e0f0f5] dark:bg-[#2a4552] text-[#2b5a6e] dark:text-[#82b8cf] px-1.5 py-0.5 rounded-md text-[10px] font-bold shadow-sm border border-[#c1dce6] dark:border-[#385b6b]">
-                <Layout size={10} />
-                Frontend
-              </span>
-            )}
-            {task.category === 'backend' && (
-              <span className="inline-flex items-center gap-1 bg-[#f0e6e0] dark:bg-[#3d322c] text-[#6e5343] dark:text-[#cfb099] px-1.5 py-0.5 rounded-md text-[10px] font-bold shadow-sm border border-[#decac0] dark:border-[#524138]">
-                <Server size={10} />
-                Backend
-              </span>
-            )}
+              <span className="truncate">#{taskIdentity}</span>
+              {idCopied && <Check size={11} className="shrink-0 text-[var(--df-color-success)]" />}
+            </button>
+            {taskCategoryBadge(task)}
             {task.hasUiDesign && (
-              <span aria-label="Task has UI Design" className="inline-flex items-center gap-1 bg-[#f2e9ff] dark:bg-[#332642] text-[#714b9d] dark:text-[#d8b9f4] px-1.5 py-0.5 rounded-md text-[10px] font-bold shadow-sm border border-[#d9c2f4] dark:border-[#624b7c]">
-                <ImageIcon size={10} />
+              <span aria-label="Task has UI Design" className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-bold text-[var(--df-color-text-muted)]">
+                <ImageIcon size={9} />
                 Design
               </span>
             )}
-
-            {/* In Progress Key */}
-            {isInProgress && (
-              <span title="In Progress">
-                <svg 
-                  xmlns="http://www.w3.org/2000/svg" 
-                  width="13" 
-                  height="13" 
-                  viewBox="0 0 24 24" 
-                  fill="none" 
-                  stroke="currentColor" 
-                  strokeWidth="2.5" 
-                  strokeLinecap="round" 
-                  strokeLinejoin="round" 
-                  className="text-red-500/80 relative -top-[0.5px]"
-                >
-                  <rect x="5" y="10" width="14" height="11" rx="3.5" />
-                  <path d="M8 10V7c0-2.2 1.8-4 4-4s4 1.8 4 4v3" />
-                  <circle cx="12" cy="15.5" r="1.5" fill="currentColor" stroke="none" />
-                </svg>
-              </span>
-            )}
           </div>
 
-          <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(task.id);
-              }}
-              type="button"
-              className="text-gray-400 dark:text-[#b8ab9f] hover:text-red-500 p-1.5 rounded-full hover:bg-[#fff0ed] dark:bg-[#292119] dark:hover:bg-[#292119] transition-all cursor-pointer"
-              title="Remove card"
-            >
-              <Trash2 size={13} />
-            </button>
-          </div>
+          <h4 className="mt-2 line-clamp-3 break-words text-[14px] font-extrabold leading-[1.4] text-[var(--df-color-text-strong)]" title={task.title}>
+            {task.title}
+          </h4>
         </div>
 
-        {/* Title */}
-        <h4 className="text-[13px] font-bold text-[#45372d] dark:text-[#f3eadf] leading-snug line-clamp-3 mb-1.5">
-          {task.title}
-        </h4>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(task.id);
+          }}
+          type="button"
+          className="shrink-0 rounded-md p-1.5 text-[var(--df-color-text-subtle)] opacity-60 transition-[opacity,color,background-color] hover:bg-[var(--df-color-danger-surface)] hover:text-[var(--df-color-danger)] sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-visible:opacity-100"
+          title={`Remove ${taskIdentity}`}
+          aria-label={`Remove task ${taskIdentity}`}
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
 
-        {task.liveWork && (
-          <div className={`mb-2 rounded-xl border px-2.5 py-2 shadow-sm ${
-            task.liveWork.blocked
-              ? 'border-[#efc0b6] bg-[#fff4f1] dark:border-[#75473f] dark:bg-[#3a2925]'
-              : 'border-[#e8c48f] bg-[#fff8ed] dark:border-[#6a5130] dark:bg-[#332c22]'
-          }`}>
-            <div className="flex items-center gap-2 min-w-0">
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${task.liveWork.blocked ? 'bg-[#c9553f]' : 'bg-emerald-500'}`} />
-              <span className="text-[9px] font-mono font-black uppercase tracking-[0.12em] text-[#8a6542] dark:text-[#e6c594]">Live Work</span>
-              <span className={`ml-auto shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-mono font-black ${
-                task.liveWork.blocked
-                  ? 'border-[#e7b2a7] bg-white/60 text-[#ad4936] dark:border-[#75473f] dark:bg-[#2f211f] dark:text-[#f0a08e]'
-                  : 'border-[#e6c493] bg-white/60 text-[#9a642c] dark:border-[#6a5130] dark:bg-[#292119] dark:text-[#efc986]'
-              }`}>{task.liveWork.phaseLabel}</span>
-            </div>
-            <div className="mt-1.5 flex items-center gap-2 min-w-0">
-              <span className="truncate text-[11px] font-bold text-[#4f4034] dark:text-[#f3eadf]">{task.liveWork.ownerLabel}</span>
-              {liveWorkFreshness && <span className="ml-auto shrink-0 text-[9px] font-mono text-[#9b846f] dark:text-[#c9b59e]">{liveWorkFreshness}</span>}
-            </div>
-            {task.liveWork.activity && (
-              <div className="mt-1 truncate text-[9.5px] font-mono text-[#806957] dark:text-[#d8c4ad]" title={task.liveWork.activity}>
-                {task.liveWork.activity}
-              </div>
-            )}
-            <div className="mt-2 flex gap-1" aria-label={`Live work phase: ${task.liveWork.phaseLabel}`}>
-              {Array.from({ length: task.liveWork.phaseCount }).map((_, index) => (
-                <span
-                  key={index}
-                  className={`h-1 flex-1 rounded-full ${
-                    index <= task.liveWork!.phaseIndex
-                      ? task.liveWork!.blocked && index === task.liveWork!.phaseIndex
-                        ? 'bg-[#c9553f] dark:bg-[#e07862]'
-                        : 'bg-[#dca15a] dark:bg-[#d6a549]'
-                      : 'bg-[#eadfce] dark:bg-[#544638]'
-                  }`}
-                />
-              ))}
-            </div>
+      {liveWork && (
+        <div
+          className={`mt-3 min-w-0 rounded-[var(--df-radius-md)] border px-2.5 py-2 ${
+            liveWork.blocked
+              ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
+              : 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)]'
+          }`}
+          aria-label={liveWork.blocked ? 'Live work blocked' : 'Live work active'}
+        >
+          <div className="flex min-w-0 items-center gap-1.5">
+            {liveWork.blocked
+              ? <AlertTriangle size={12} className="shrink-0 text-[var(--df-color-danger)]" />
+              : <CircleCheck size={12} className="shrink-0 text-[var(--df-color-warning)]" />}
+            <span className={`shrink-0 text-[10px] font-extrabold ${liveWork.blocked ? 'text-[var(--df-color-danger)]' : 'text-[var(--df-color-warning)]'}`}>
+              {liveWork.blocked ? 'Blocked' : 'Live work'}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-right text-[9px] font-bold text-[var(--df-color-text-muted)]" title={liveWork.phaseLabel}>
+              {liveWork.phaseLabel}
+            </span>
           </div>
-        )}
 
-        {/* Agent & Run Status Row */}
-        {!task.liveWork && (task.activeAgent || autoWorkState) && (
-          <div className="flex flex-wrap items-center gap-1.5 mb-2">
-            {/* Locked Agent badge */}
+          <div className="mt-1.5 flex min-w-0 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-[var(--df-color-text)]" title={liveWork.ownerLabel}>
+              {liveWork.ownerLabel}
+            </span>
+            {liveWorkFreshness && <span className="shrink-0 text-[9px] font-semibold text-[var(--df-color-text-subtle)]">{liveWorkFreshness}</span>}
+          </div>
+
+          {liveWork.activity && (
+            <div className="mt-1 line-clamp-2 break-words text-[9.5px] leading-relaxed text-[var(--df-color-text-muted)]" title={liveWork.activity}>
+              {liveWork.activity}
+            </div>
+          )}
+
+          <div className="mt-2 flex gap-1" aria-label={`Live work phase: ${liveWork.phaseLabel}`}>
+            {Array.from({ length: liveWork.phaseCount }).map((_, index) => (
+              <span
+                key={index}
+                className={`h-1 min-w-0 flex-1 rounded-full ${
+                  index <= liveWork.phaseIndex
+                    ? liveWork.blocked && index === liveWork.phaseIndex
+                      ? 'bg-[var(--df-color-danger)]'
+                      : 'bg-[var(--df-color-warning)]'
+                    : 'bg-[var(--df-color-border)]'
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!liveWork && (task.activeAgent || autoWorkState) && (
+        <div className="mt-3 min-w-0 rounded-[var(--df-radius-md)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] px-2.5 py-2" aria-label={`Execution state: ${autoWorkState?.label || 'Assigned'}`}>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             {task.activeAgent && (
-              <span className="inline-flex items-center text-[9px] font-mono font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded shadow-sm border border-orange-100 dark:bg-orange-900/30 dark:border-orange-800" title={`Locked by ${task.activeAgent}`}>
-                <AgentLogo agent={task.activeAgent} size={9} className="mr-1" />
-                <span>{task.activeAgent}</span>
+              <span className="inline-flex min-w-0 max-w-[150px] items-center gap-1 rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] px-1.5 py-0.5 text-[9px] font-bold text-[var(--df-color-text-muted)]" title={`Assigned to ${task.activeAgent}`}>
+                <AgentLogo agent={task.activeAgent} size={9} className="shrink-0" />
+                <span className="truncate">{task.activeAgent}</span>
               </span>
             )}
 
-            {/* Run Status Badge */}
             {hasEffectiveAssignment && autoWorkState && (
-              <div className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg border text-[9px] font-mono font-bold ${runStatusTone}`}>
-                <span>{autoWorkState.label}</span>
-              </div>
+              <span className={`inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[9px] font-extrabold ${runStatusTone}`}>
+                {autoWorkState.label}
+              </span>
             )}
-            
-            {/* Log Indicator */}
-            {task.agentRuns && task.agentRuns.filter(r => r.logFile).length > 0 && (
+
+            {task.agentRuns && task.agentRuns.some(r => r.logFile) && (
               <button
                 type="button"
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg border border-gray-300 dark:border-[#4a3b2d] bg-gray-50 dark:bg-[#292119] text-gray-500 dark:text-[#a69685] hover:text-blue-500 hover:border-blue-300 text-[9px] font-mono transition-colors cursor-pointer"
+                className="ml-auto shrink-0 rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] px-1.5 py-0.5 text-[9px] font-bold text-[var(--df-color-text-muted)] transition-colors hover:border-[var(--df-color-info)] hover:text-[var(--df-color-info)]"
                 title="View latest run log"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -257,128 +252,108 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                 Log
               </button>
             )}
-
-            {/* Run Error Message */}
-            {(autoWorkState?.message || settledRunBadge?.errorMessage) && (
-              <div className="w-full text-[9px] font-mono text-[#8a6e5a] dark:text-[#d6b56d] line-clamp-2 mt-0.5">
-                {autoWorkState?.message || settledRunBadge?.errorMessage}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Card Thumbnail Preview (if image is attached) */}
-        {task.images && task.images.length > 0 && (
-          <div className="relative mb-3 mt-1 rounded-lg overflow-hidden border border-[#ebdcb9]/50 dark:border-[#584a3b]/50 h-20 bg-white dark:bg-[#292119]/50">
-            <img 
-              src={task.images[0].url} 
-              alt="Preview" 
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
-              referrerPolicy="no-referrer"
-            />
-            {task.images.length > 1 && (
-              <div className="absolute top-1 right-1 bg-black/60 backdrop-blur-sm text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm">
-                +{task.images.length - 1}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Flex filler to push bottom metadata down */}
-        <div className="flex-1" />
-
-        {/* Unified Bottom Badge Row -> 2 Row Layout */}
-        <div className="flex flex-col gap-1.5 mt-2.5 pt-2.5 border-t border-[#ebdcb9]/30 dark:border-[#584a3b]/30">
-
-          {/* Row 1: Files, Checklist, External Links */}
-          <div className="flex flex-wrap items-center gap-1.5 w-full">
-            {/* Minimal Priority Indicator */}
-            {task.priority !== 'medium' && (
-              <span className={`mr-1.5 transition-opacity ${
-                task.priority === 'high' ? 'text-[#de6b48]/80 dark:text-[#df6b4f]/80 hover:opacity-100' :
-                'text-[#8a725f]/60 dark:text-[#8a7a6a]/80 hover:opacity-100'
-              }`} title={`${task.priority === 'high' ? 'High' : 'Low'} Priority`}>
-                {task.priority === 'high' ? <Flame size={12} strokeWidth={2.5} /> : <Coffee size={12} strokeWidth={2.5} />}
-              </span>
-            )}
-
-            {/* Files */}
-            {filesCount > 0 && (
-              <span className="flex items-center gap-1 text-[#8a725f] dark:text-[#f3eadf] text-[10px] font-mono font-bold mr-1.5" title={`${filesCount} files`}>
-                <FileCode size={12} className="relative -top-[0.5px]" /> 
-                <span className="leading-none mt-[1px]">{filesCount}</span>
-              </span>
-            )}
-
-            {/* Checklist */}
-            {totalSteps > 0 && (
-              <span className={`flex items-center gap-1 text-[10px] font-mono font-bold mr-1.5 ${
-                completedSteps === totalSteps 
-                  ? 'text-emerald-600' 
-                  : 'text-[#8a725f] dark:text-[#f3eadf]'
-              }`} title="Checklist steps">
-                <CheckSquare size={12} className="relative -top-[0.5px]" /> 
-                <span className="leading-none mt-[1px]">{completedSteps}/{totalSteps}</span>
-              </span>
-            )}
-
-            {unresolvedBugCount > 0 && (
-              <span
-                className={`flex items-center gap-1 text-[10px] font-mono font-bold mr-1.5 ${
-                  isDone ? 'text-[#b4432d] dark:text-[#e0a070]' : 'text-[#9b4e3d] dark:text-[#e0a070]'
-                }`}
-                title={isDone ? `Done with ${unresolvedBugCount} unresolved bug${unresolvedBugCount === 1 ? '' : 's'}` : `${unresolvedBugCount} unresolved bug${unresolvedBugCount === 1 ? '' : 's'}`}
-                aria-label={isDone ? `Done with ${unresolvedBugCount} unresolved bugs` : `${unresolvedBugCount} unresolved bugs`}
-              >
-                <AlertTriangle size={12} className="relative -top-[0.5px]" />
-                <span className="leading-none mt-[1px]">{unresolvedBugCount}</span>
-              </span>
-            )}
-
-            {/* Prompt Template Quick Action */}
-            <CopyTemplateButton task={task} variant="icon" className="!p-0.5 !rounded hover:!bg-[#ebdcb9]/30 dark:hover:!bg-[#584a3b]/30 shrink-0 !text-[#8a725f] dark:!text-[#f3eadf] !border-transparent !bg-transparent" />
-            
-            {/* External Links */}
-            {task.specUrl && (
-              <span className="flex items-center text-[#2c6e85] dark:text-[#f3eadf] ml-auto" title="Spec Document">
-                <LinkIcon size={10} />
-              </span>
-            )}
           </div>
 
+          {autoWorkState?.message && (
+            <div className={`mt-1.5 line-clamp-2 break-words text-[9.5px] leading-relaxed ${
+              autoWorkState.kind === 'failed' || autoWorkState.kind === 'timed-out'
+                ? 'text-[var(--df-color-danger)]'
+                : 'text-[var(--df-color-text-muted)]'
+            }`} title={autoWorkState.message}>
+              {autoWorkState.message}
+            </div>
+          )}
         </div>
+      )}
+
+      {task.images && task.images.length > 0 && (
+        <div className="relative mt-3 h-20 overflow-hidden rounded-[var(--df-radius-sm)] border border-[var(--df-color-border)] bg-[var(--df-color-surface)]">
+          <img
+            src={task.images[0].url}
+            alt="Preview"
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+            referrerPolicy="no-referrer"
+          />
+          {task.images.length > 1 && (
+            <div className="absolute right-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-bold text-white shadow-sm backdrop-blur-sm">
+              +{task.images.length - 1}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-[var(--df-color-border)] pt-2.5 text-[10px] font-bold text-[var(--df-color-text-muted)]">
+        <span className={`inline-flex shrink-0 items-center gap-1 ${priorityTone}`} title={`${priorityLabel} priority`} aria-label={`${priorityLabel} priority`}>
+          {task.priority === 'high' && <Flame size={12} />}
+          {task.priority === 'low' && <Coffee size={12} />}
+          <span>{priorityLabel}</span>
+        </span>
+
+        {filesCount > 0 && (
+          <span className="inline-flex shrink-0 items-center gap-1" title={`${filesCount} files`}>
+            <FileCode size={12} />
+            <span>{filesCount}</span>
+          </span>
+        )}
+
+        {totalSteps > 0 && (
+          <span className={`inline-flex shrink-0 items-center gap-1 ${completedSteps === totalSteps ? 'text-[var(--df-color-success)]' : ''}`} title={`Checklist ${completedSteps} of ${totalSteps}`}>
+            <CheckSquare size={12} />
+            <span>{completedSteps}/{totalSteps}</span>
+          </span>
+        )}
+
+        {unresolvedBugCount > 0 && (
+          <span
+            className="inline-flex shrink-0 items-center gap-1 text-[var(--df-color-danger)]"
+            title={isDone ? `Done with ${unresolvedBugCount} unresolved bug${unresolvedBugCount === 1 ? '' : 's'}` : `${unresolvedBugCount} unresolved bug${unresolvedBugCount === 1 ? '' : 's'}`}
+            aria-label={isDone ? `Done with ${unresolvedBugCount} unresolved bugs` : `${unresolvedBugCount} unresolved bugs`}
+          >
+            <AlertTriangle size={12} />
+            <span>Bugs {unresolvedBugCount}</span>
+          </span>
+        )}
+
+        <CopyTemplateButton task={task} variant="icon" className="!h-7 !w-7 !shrink-0 !rounded-md !border-transparent !bg-transparent !p-1 !text-[var(--df-color-text-muted)] hover:!bg-[var(--df-color-surface-subtle)]" />
+
+        {task.specUrl && (
+          <span className="ml-auto inline-flex shrink-0 items-center text-[var(--df-color-info)]" title={`Spec linked: ${task.specUrl}`} aria-label="Spec linked">
+            <LinkIcon size={11} />
+          </span>
+        )}
       </div>
 
-      {/* Subtasks compact section */}
-      {subtasks && subtasks.length > 0 && (
-        <div className="mt-2 p-1.5 bg-[#fdfbf8]/90 dark:bg-[#292119]/90 border border-[#ede3d2] dark:border-[#584a3b] rounded-xl flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
-          <div className="flex justify-between items-center text-[9px] font-mono font-extrabold uppercase text-[#7a6455] dark:text-[#f3eadf] tracking-wide mb-1 select-none">
-            <span className="flex items-center gap-1">🌿 Subtasks ({subtasks.filter(s => s.status === 'done').length}/{subtasks.length})</span>
-            <span className="text-[#a47a32] dark:text-[#f3eadf]">{Math.round((subtasks.filter(s => s.status === 'done').length / subtasks.length) * 100)}% done</span>
+      {subtasks.length > 0 && (
+        <div className="mt-2.5 min-w-0 overflow-hidden rounded-[var(--df-radius-md)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-2" onClick={(e) => e.stopPropagation()}>
+          <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2 text-[9px] font-extrabold text-[var(--df-color-text-muted)]">
+            <span className="min-w-0 truncate">Subtasks {subtasks.filter(s => s.status === 'done').length}/{subtasks.length}</span>
+            <span className="shrink-0 text-[var(--df-color-text-subtle)]">{Math.round((subtasks.filter(s => s.status === 'done').length / subtasks.length) * 100)}%</span>
           </div>
-          <div className="flex flex-col gap-1 pr-0.5">
+
+          <div className="flex min-w-0 flex-col gap-1">
             {subtasks.map(sub => {
               const subDone = sub.status === 'done';
               const subInProgress = sub.status === 'in-progress';
+              const subIdentity = sub.displayId || sub.id;
+              const subStatusLabel = subInProgress ? 'active' : sub.status;
               return (
-                <div 
-                  key={sub.id} 
+                <div
+                  key={sub.id}
                   draggable
                   onDragStart={(e) => {
                     e.stopPropagation();
                     onDragStart(e, sub.id);
                   }}
                   onClick={() => onSelect(sub)}
-                  className={`group/sub flex flex-col gap-0.5 p-1 rounded-xl border text-[10px] cursor-grab active:cursor-grabbing transition-all hover:bg-white dark:hover:bg-[#1e1914] select-none ${
-                    subDone 
-                      ? 'bg-emerald-50/20 border-emerald-100/50 text-gray-400 dark:text-[#b8ab9f]' 
+                  className={`min-w-0 rounded-[var(--df-radius-sm)] border p-1.5 text-[10px] transition-colors cursor-grab active:cursor-grabbing ${
+                    subDone
+                      ? 'border-[var(--df-color-success)] bg-[var(--df-color-success-surface)] text-[var(--df-color-text-muted)]'
                       : subInProgress
-                        ? 'bg-orange-50/40 border-orange-100 text-[#715c4d] dark:text-[#f3eadf] font-semibold'
-                        : 'bg-[#faf8f5]/60 dark:bg-[#292119]/60 border-[#ebdcb9]/20 dark:border-[#584a3b]/20 text-[#5c493c] dark:text-[#f3eadf]'
+                        ? 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)] text-[var(--df-color-text)]'
+                        : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] text-[var(--df-color-text)]'
                   }`}
                 >
-                  <div className="flex items-center gap-1.5 min-w-0 w-full">
-                    {/* Tiny Checkbox style toggle */}
+                  <div className="flex min-w-0 items-center gap-1.5">
                     <button
                       type="button"
                       onClick={(e) => {
@@ -387,37 +362,37 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
                           onUpdate({
                             ...sub,
                             status: sub.status === 'done' ? 'todo' : 'done',
-                            updatedAt: new Date().toISOString()
+                            updatedAt: new Date().toISOString(),
                           });
                         }
                       }}
-                      className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all cursor-pointer shrink-0 ${
-                        subDone 
-                          ? 'bg-emerald-500 border-emerald-500 text-white dark:text-[#f3eadf]' 
-                          : 'bg-white dark:bg-[#292119] border-[#ebdcb9] dark:border-[#584a3b] hover:border-[#d4994e] dark:border-[#e0a070] dark:hover:border-[#584a3b]'
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[9px] transition-colors ${
+                        subDone
+                          ? 'border-[var(--df-color-success)] bg-[var(--df-color-success)] text-white'
+                          : 'border-[var(--df-color-border-strong)] bg-[var(--df-color-surface-raised)] text-[var(--df-color-text-muted)] hover:border-[var(--df-color-accent)]'
                       }`}
+                      aria-label={`${subDone ? 'Reopen' : 'Complete'} subtask ${subIdentity}`}
+                      title={`${subDone ? 'Reopen' : 'Complete'} ${subIdentity}`}
                     >
-                      {subDone && <span className="text-[8px] leading-none mb-0.5">✓</span>}
+                      {subDone ? '✓' : ''}
                     </button>
-                    <span className="shrink-0 rounded bg-[#f3eadf] dark:bg-[#3a2f26] px-1 py-0.5 font-mono text-[8.5px] font-black text-[#8a6020] dark:text-[#e0a070]">{sub.displayId || sub.id}</span>
-                    <span className={`truncate flex-1 hover:underline text-[10px] font-sans ${subDone ? 'line-through' : ''}`}>{sub.title}</span>
+                    <span className="max-w-[88px] shrink-0 truncate rounded bg-[var(--df-color-surface-muted)] px-1 py-0.5 text-[8.5px] font-extrabold text-[var(--df-color-accent)]" title={subIdentity}>
+                      {subIdentity}
+                    </span>
+                    <span className={`min-w-0 flex-1 truncate text-[10px] ${subDone ? 'line-through' : ''}`} title={sub.title}>
+                      {sub.title}
+                    </span>
                   </div>
-                  
-                  {/* Small statuses/agent info */}
-                  <div className="flex items-center gap-1 shrink-0 font-mono text-[8px] font-bold ml-[20px]">
+
+                  <div className="ml-[22px] mt-1 flex min-w-0 items-center gap-1 text-[8px] font-bold text-[var(--df-color-text-muted)]">
                     {sub.model && (
-                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-[#ebdcb9] dark:border-[#584a3b]/40 bg-[#fdfbf7]/50 dark:bg-[#292119]/50 text-[#8a725f] dark:text-[#f3eadf] shadow-sm">
-                        <AgentLogo agent={sub.model} size={8} className="relative -top-[0.5px] text-[#b49f8e] dark:text-[#b8ab9f]" />
-                        <span className="leading-none mt-[1px]">{getDisplayModelName(undefined, sub.model)}</span>
+                      <span className="inline-flex min-w-0 max-w-[132px] items-center gap-1 rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] px-1.5 py-0.5" title={getDisplayModelName(undefined, sub.model)}>
+                        <AgentLogo agent={sub.model} size={8} className="shrink-0" />
+                        <span className="truncate">{getDisplayModelName(undefined, sub.model)}</span>
                       </span>
                     )}
-                    <span className={`px-1 py-0.2 rounded-md uppercase border ${
-                      subDone ? 'bg-emerald-50/50 text-emerald-700 border-emerald-200/30' :
-                      subInProgress ? 'bg-orange-50/50 text-orange-700 border-orange-200/30' :
-                      sub.status === 'todo' ? 'bg-transparent dark:bg-[#292119] text-[#a47a32] dark:text-[#f3eadf] border-[#ebdcb9]/40 dark:border-[#584a3b]' :
-                      'bg-transparent dark:bg-[#292119] text-[#8c7a6e] dark:text-[#b8ab9f] border-[#ebdcb9] dark:border-[#584a3b]/30'
-                    }`}>
-                      {sub.status === 'in-progress' ? 'active' : sub.status}
+                    <span className="max-w-[100px] shrink-0 truncate rounded-md border border-[var(--df-color-border)] px-1 py-0.5 uppercase" title={sub.status}>
+                      {subStatusLabel}
                     </span>
                   </div>
                 </div>
@@ -427,19 +402,14 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
         </div>
       )}
 
-
-
-        {/* Footer Metrics */}
-        <div className="flex items-center justify-between select-none text-[9px] font-mono mt-2.5 pt-2 border-t border-[#ebdcb9]/40 dark:border-[#584a3b]">
-          <span className="text-[#8c7a6e] dark:text-[#d6b56d] italic truncate mr-2" title={task.branch || 'no active branch'}>
-            {task.branch ? `🌿 ${task.branch}` : 'no active branch'}
-          </span>
-          <div className="flex items-center gap-2 font-mono shrink-0">
-            <span className="text-[#9e8b7c] dark:text-[#d6b56d] font-bold" title="Last updated">
-              {isDone ? '✓ merged' : formattedDate}
-            </span>
-          </div>
-        </div>
+      <div className="mt-2.5 flex min-w-0 items-center gap-2 border-t border-[var(--df-color-border)] pt-2 text-[9px] font-semibold text-[var(--df-color-text-subtle)]">
+        <span className="min-w-0 flex-1 truncate" title={task.branch || 'No active branch'}>
+          {task.branch ? `Branch · ${task.branch}` : 'No active branch'}
+        </span>
+        <span className="shrink-0" title="Last updated">
+          {isDone ? 'Merged' : formattedDate}
+        </span>
+      </div>
     </div>
   );
 }

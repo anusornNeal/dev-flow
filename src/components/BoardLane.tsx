@@ -1,7 +1,7 @@
 import React from 'react';
 import type { Task, TaskStatus } from '../types';
 import TaskCard from './TaskCard';
-import { ListTodo, Code, GitMerge, FileText } from 'lucide-react';
+import { Code, FileText, GitMerge, GitPullRequest, ListTodo, Moon, Terminal } from 'lucide-react';
 import { isValidTransition } from '../lib/statusTransitions';
 
 interface ColumnDef {
@@ -30,6 +30,19 @@ interface BoardLaneProps {
   onShowLog?: (args: { taskDisplayId: string; run: { id: string; status?: string; agent?: string | null; model?: string | null } }) => void;
 }
 
+function getColIcon(name: string) {
+  switch (name) {
+    case 'Moon': return <Moon size={14} className="opacity-80" />;
+    case 'ListTodo': return <ListTodo size={14} className="opacity-80" />;
+    case 'Code': return <Code size={14} className="opacity-80" />;
+    case 'Terminal': return <Terminal size={14} className="opacity-80" />;
+    case 'GitMerge': return <GitMerge size={14} className="opacity-80" />;
+    case 'GitPullRequest': return <GitPullRequest size={14} className="opacity-80" />;
+    case 'FileText': return <FileText size={14} className="opacity-80" />;
+    default: return <ListTodo size={14} className="opacity-80" />;
+  }
+}
+
 export function BoardLane({
   column,
   tasks,
@@ -47,94 +60,75 @@ export function BoardLane({
   handleDeleteTask,
   handleDragStart,
   handleUpdateTask,
-  onShowLog
+  onShowLog,
 }: BoardLaneProps) {
-  const getColIcon = (name: string) => {
-    switch (name) {
-      case 'ListTodo': return <ListTodo size={14} className="opacity-80" />;
-      case 'Code': return <Code size={14} className="opacity-80" />;
-      case 'GitMerge': return <GitMerge size={14} className="opacity-80" />;
-      case 'FileText': return <FileText size={14} className="opacity-80" />;
-      default: return <ListTodo size={14} className="opacity-80" />;
-    }
-  };
-
-  const totalStepsInLane = tasks.reduce((sum, t) => sum + (t.checklist?.length || 0), 0);
-  const completedStepsInLane = tasks.reduce((sum, t) => sum + (t.checklist?.filter(item => item.completed).length || 0), 0);
+  const totalStepsInLane = tasks.reduce((sum, task) => sum + (task.checklist?.length || 0), 0);
+  const completedStepsInLane = tasks.reduce((sum, task) => sum + (task.checklist?.filter(item => item.completed).length || 0), 0);
   const isOver = draggedOverColumn === column.id;
-  const draggedTask = draggedTaskId ? allTasks.find(t => t.id === draggedTaskId) : null;
+  const draggedTask = draggedTaskId ? allTasks.find(task => task.id === draggedTaskId) : null;
   const isDraggingAny = draggedTaskId !== null;
-  // It's a valid drop if there's no drag, OR if there's a drag and the transition is valid
-  // (We also treat dragging a task to its current lane as valid for visual purposes)
   const isValidDrop = !isDraggingAny || !draggedTask || column.id === draggedTask.status || isValidTransition(draggedTask.status, column.id);
-  
-  const isInProgressCol = column.id === 'in-progress';
-  const isReviewCol = column.id === 'ready-for-review';
-  const isDoneCol = column.id === 'done';
+  const dropStateLabel = !isDraggingAny ? null : isValidDrop ? 'Drop allowed' : 'Move blocked';
+  const laneCountLabel = hasMore ? `${loadedCount} of ${totalCount}` : `${totalCount}`;
 
   return (
     <div
       onDragOver={(e) => {
         e.preventDefault();
-        if (draggedOverColumn !== column.id) {
-          setDraggedOverColumn(column.id);
-        }
-        if (!isValidDrop) {
-          e.dataTransfer.dropEffect = 'none';
-        }
+        if (draggedOverColumn !== column.id) setDraggedOverColumn(column.id);
+        if (!isValidDrop) e.dataTransfer.dropEffect = 'none';
       }}
       onDragLeave={() => {
-        if (draggedOverColumn === column.id) {
-          setDraggedOverColumn(null);
-        }
+        if (draggedOverColumn === column.id) setDraggedOverColumn(null);
       }}
       onDrop={(e) => handleDrop(e, column.id)}
-      className={`w-[320px] shrink-0 flex flex-col px-5 pt-3 pb-4 transition-all border-r border-[#e5d4bb]/30 dark:border-[#584a3b]/30 ${
-        isDraggingAny && !isValidDrop ? 'opacity-40 grayscale-[0.5]' : ''
+      className={`flex w-[320px] min-w-[320px] max-w-[320px] shrink-0 flex-col overflow-hidden border-r border-[var(--df-color-border)] px-4 pb-4 pt-3 transition-[background-color,border-color,opacity] ${
+        isDraggingAny && !isValidDrop ? 'opacity-55' : ''
       } ${
-        isOver 
-          ? isValidDrop 
-            ? 'bg-[#ffeccb]/20 dark:bg-[#292119]/40 border-dashed border-[#e3a35a] dark:border-[#584a3b] rounded-2xl' 
-            : 'bg-red-50/50 dark:bg-red-950/20 border-dashed border-red-400/60 dark:border-red-900/50 rounded-2xl cursor-not-allowed'
+        isOver
+          ? isValidDrop
+            ? 'rounded-[var(--df-radius-lg)] border border-dashed border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)]'
+            : 'cursor-not-allowed rounded-[var(--df-radius-lg)] border border-dashed border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
           : ''
       }`}
+      aria-label={`${column.label} lane${isOver && dropStateLabel ? `, ${dropStateLabel.toLowerCase()}` : ''}`}
+      data-drop-valid={isDraggingAny ? String(isValidDrop) : undefined}
     >
-      {/* Status header lane metadata */}
-      <div className="flex items-center justify-between mb-4 select-none">
-        <div className="flex items-center gap-2">
-          <span className={`shrink-0 ${
-            isInProgressCol ? 'text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]' : 
-            isReviewCol ? 'text-[#3b5eab] dark:text-[#8ba4e8]' : 
-            isDoneCol ? 'text-[#5fa84a] dark:text-[#8fce7c]' : 
-            'text-[#8a725f] dark:text-[#b8ab9f]'
-          }`}>
+      <div className="mb-3 flex min-w-0 flex-col gap-1.5 select-none">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-[var(--df-color-text-muted)]">
             {getColIcon(column.iconName)}
           </span>
-          
-          <h3 className={`text-[11px] font-bold uppercase tracking-widest font-mono ${
-            isInProgressCol ? 'text-[#8f5e1f] dark:text-[#f3eadf]' : 
-            isReviewCol ? 'text-[#2b3a61] dark:text-[#f3eadf]' : 
-            isDoneCol ? 'text-[#38622c] dark:text-[#f3eadf]' : 
-            'text-[#614e41] dark:text-[#f3eadf]'
-          }`}>
+          <h3 className="min-w-0 flex-1 truncate text-[11px] font-extrabold uppercase tracking-[0.08em] text-[var(--df-color-text-strong)]" title={column.label}>
             {column.label}
           </h3>
-          
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md font-bold text-[#8f7d6e] dark:text-[#887a6c] bg-[#f5ebd6] dark:bg-[#292119]">
-            {hasMore ? `${loadedCount} of ${totalCount}` : totalCount}
+          <span className="shrink-0 rounded-md bg-[var(--df-color-surface-muted)] px-2 py-0.5 text-[10px] font-bold text-[var(--df-color-text-muted)]" aria-label={`${laneCountLabel} tasks loaded`}>
+            {laneCountLabel}
           </span>
         </div>
 
-        {totalStepsInLane > 0 && (
-          <span className="text-[9px] font-mono text-[#a48e7e] dark:text-[#887a6c] uppercase tracking-wider font-bold">
-            {completedStepsInLane}/{totalStepsInLane}
-          </span>
+        {(totalStepsInLane > 0 || (isOver && dropStateLabel)) && (
+          <div className="flex min-w-0 items-center justify-between gap-2 text-[9px] font-semibold text-[var(--df-color-text-subtle)]">
+            {totalStepsInLane > 0 ? (
+              <span className="min-w-0 truncate" title={`Checklist ${completedStepsInLane} of ${totalStepsInLane}`}>
+                Checklist {completedStepsInLane}/{totalStepsInLane}
+              </span>
+            ) : <span />}
+            {isOver && dropStateLabel && (
+              <span
+                className={`shrink-0 font-extrabold ${isValidDrop ? 'text-[var(--df-color-warning)]' : 'text-[var(--df-color-danger)]'}`}
+                aria-live="polite"
+              >
+                {dropStateLabel}
+              </span>
+            )}
+          </div>
         )}
       </div>
 
-      <div className="flex-1 flex flex-col gap-3 overflow-y-auto scrollbar-thin transition-all">
+      <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto scrollbar-thin">
         {tasks.map(task => {
-          const subtasks = allTasks.filter(t => t.parentId === task.id);
+          const subtasks = allTasks.filter(candidate => candidate.parentId === task.id);
           return (
             <TaskCard
               key={task.id}
@@ -154,15 +148,21 @@ export function BoardLane({
             type="button"
             onClick={onLoadMore}
             disabled={loadingMore}
-            className="mt-1 w-full rounded-lg border border-[#dfccb1] dark:border-[#4d4033] bg-white/70 dark:bg-[#241d17] px-3 py-2 text-[10px] font-mono font-bold text-[#7b624f] dark:text-[#c9b7a6] hover:bg-[#fff8ea] dark:hover:bg-[#2c241d] disabled:cursor-wait disabled:opacity-60"
+            className="mt-1 min-h-8 w-full rounded-[var(--df-radius-sm)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] px-3 py-2 text-[10px] font-bold text-[var(--df-color-text-muted)] transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)] disabled:cursor-wait disabled:opacity-60"
           >
             {loadingMore ? 'Loading…' : `Load more · ${loadedCount} of ${totalCount}`}
           </button>
         )}
 
         {tasks.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-24 text-[#bcaea3] dark:text-[#6a5e54] border-2 border-dashed border-[#eaddc6] dark:border-[#382f25] rounded-xl bg-white/40 dark:bg-black/10 mt-2">
-            <span className="text-[10px] font-mono font-medium tracking-wide">Drop card here</span>
+          <div className={`mt-2 flex h-24 min-w-0 flex-col items-center justify-center rounded-[var(--df-radius-md)] border-2 border-dashed px-3 text-center ${
+            isDraggingAny && !isValidDrop
+              ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)] text-[var(--df-color-danger)]'
+              : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] text-[var(--df-color-text-subtle)]'
+          }`}>
+            <span className="text-[10px] font-semibold tracking-wide">
+              {isDraggingAny && !isValidDrop ? 'Cannot drop here' : 'Drop card here'}
+            </span>
           </div>
         )}
       </div>

@@ -125,7 +125,36 @@ function createRunId() {
 
 function normalizeRun(row: any): AgentRun | null {
   if (!row) return null;
-  return row as AgentRun;
+
+  const status = String(row.status || '');
+  if (!(AGENT_RUN_STATUSES as readonly string[]).includes(status)) {
+    throw new Error(`INVALID_AGENT_RUN_STATUS:${status || '<empty>'}`);
+  }
+
+  const nullableString = (value: unknown): string | null => value == null ? null : String(value);
+
+  return {
+    id: String(row.id),
+    taskId: String(row.taskId),
+    projectId: String(row.projectId),
+    agent: String(row.agent),
+    model: nullableString(row.model),
+    effort: nullableString(row.effort),
+    status: status as AgentRunStatus,
+    createdAt: String(row.createdAt),
+    startedAt: nullableString(row.startedAt),
+    endedAt: nullableString(row.endedAt),
+    promptPath: nullableString(row.promptPath),
+    contextRef: nullableString(row.contextRef),
+    logPath: nullableString(row.logPath),
+    errorMessage: nullableString(row.errorMessage),
+    retryOfRunId: nullableString(row.retryOfRunId),
+    triggerSource: nullableString(row.triggerSource),
+  };
+}
+
+function normalizeRuns(rows: any[]): AgentRun[] {
+  return rows.map((row) => normalizeRun(row)!).filter(Boolean);
 }
 
 export function canTransitionAgentRunStatus(from: AgentRunStatus, to: AgentRunStatus): boolean {
@@ -172,7 +201,7 @@ export function getAgentRun(runId: string): AgentRun | null {
 }
 
 export function listAgentRunsForTask(taskId: string): AgentRun[] {
-  return db.prepare('SELECT * FROM agent_runs WHERE taskId = ? ORDER BY createdAt DESC').all(taskId) as AgentRun[];
+  return normalizeRuns(db.prepare('SELECT * FROM agent_runs WHERE taskId = ? ORDER BY createdAt DESC').all(taskId) as any[]);
 }
 
 export function getLatestAgentRunForTask(taskId: string): AgentRun | null {
@@ -220,11 +249,11 @@ export function getActiveRunForProjectAndAgent(projectId: string, agent: string)
 }
 
 export function listActiveRunsForProject(projectId: string): AgentRun[] {
-  return db.prepare(`
+  return normalizeRuns(db.prepare(`
     SELECT * FROM agent_runs
     WHERE projectId = ? AND status IN (${ACTIVE_AGENT_RUN_STATUSES.map(() => '?').join(',')})
     ORDER BY createdAt ASC
-  `).all(projectId, ...ACTIVE_AGENT_RUN_STATUSES) as AgentRun[];
+  `).all(projectId, ...ACTIVE_AGENT_RUN_STATUSES) as any[]);
 }
 
 export function listActiveRunSummariesForProject(projectId: string): ActiveProjectAgentRunSummary[] {

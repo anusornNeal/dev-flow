@@ -201,6 +201,28 @@ test('target-aware mapped coverage selects only the relevant focused check and e
   assert.deepEqual(plan.impact.omittedCommands.map((entry: any) => entry.command).sort(), ['test-backup-integrity', 'test-command-service']);
 });
 
+test('high-risk fallback preserves mapped targets for target-required presets instead of emitting a bare command', () => {
+  const plan = planVerification({
+    changedFiles: ['src/server/services/verificationPlannerService.ts'],
+    resolvedCommands: [
+      { command: 'test-focused', semanticKey: 'focused', scope: 'targeted', cost: 'low', resourceKey: 'focused', acceptsTargets: true },
+      { command: 'typecheck', semanticKey: 'typecheck', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+    ],
+    impactRules: [{
+      id: 'planner-focused',
+      patterns: ['src/server/services/verificationPlannerService.ts'],
+      checks: [{ command: 'test-focused', targets: ['tests/server/verificationPlannerService.test.ts'] }],
+    }],
+  });
+
+  assert.equal(plan.risk, 'high');
+  assert.equal(plan.impact.mode, 'fallback');
+  const focused = plan.steps.find((step: any) => step.command === 'test-focused');
+  assert.ok(focused);
+  assert.deepEqual(focused?.targets, ['tests/server/verificationPlannerService.test.ts']);
+  assert.equal(plan.steps.some((step: any) => step.command === 'test-focused' && !step.targets?.length), false);
+});
+
 test('catalog-only fallback never selects unrelated targeted presets without impact evidence', () => {
   const plan = planVerification({
     changedFiles: ['src/server/services/unmappedService.ts'],

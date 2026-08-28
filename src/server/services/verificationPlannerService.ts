@@ -488,7 +488,8 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   const configuredTargetsByCommand = new Map(impactEvaluation.configuredChecks.map((check) => [check.command, check.targets || []]));
   const steps = commands.map((command) => {
     const descriptor = selectedByCommand.get(command);
-    const targets = mappingMayNarrow ? (configuredTargetsByCommand.get(command) || []) : [];
+    const mappedTargets = configuredTargetsByCommand.get(command) || [];
+    const targets = mappingMayNarrow || descriptor?.acceptsTargets === true ? mappedTargets : [];
     const mappingReason = impactEvaluation.mode === 'configured' && impactEvaluation.configuredCommands.includes(command)
       ? 'Selected by configured change-impact mapping.'
       : undefined;

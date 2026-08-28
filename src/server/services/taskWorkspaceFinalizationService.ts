@@ -19,7 +19,8 @@ import { cleanupSessionWorkspace, getSessionWorkspaceMetadataForRecovery } from 
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration, type WorkspaceIntegrationSuccess } from './workspaceIntegrationService.js';
 import { loadProjectVerificationImpactRules } from './projectCommandConfigService.js';
-import { planVerification, type VerificationPlan } from './verificationPlannerService.js';
+import { inspectProjectVerificationPresets } from './projectCommandService.js';
+import { planVerification, type VerificationImpactCheck, type VerificationPlan } from './verificationPlannerService.js';
 import {
   getExecutionOwnershipState,
   getExecutionSessionOwnershipEpoch,
@@ -35,6 +36,7 @@ import { assertTaskPrerequisitesSatisfied } from './taskDependencyService.js';
 export type TaskWorkspaceFinalizationCheck = {
   name?: string;
   command: string;
+  targets?: string[];
   status: 'passed' | 'failed' | 'not-run';
   scope?: 'targeted' | 'broad' | 'full';
   repoRevision?: string;
@@ -77,6 +79,8 @@ type PostIntegrationRequirement = {
   repoRevision: string;
   requiredCommands: string[];
   missingCommands: string[];
+  requiredChecks: VerificationImpactCheck[];
+  missingChecks: VerificationImpactCheck[];
   broadEvidenceRequired: boolean;
   requiredScope: 'targeted' | 'broad-or-full';
   baseAdvanced: boolean;
@@ -172,6 +176,8 @@ function localOnlyEvidence(task: any, baseBranch: string, commit: string, checks
 }
 
 function planCombinedVerification(
+  state: AppState,
+  projectId: string,
   integration: WorkspaceIntegrationSuccess,
   checks: TaskWorkspaceFinalizationCheck[],
   impactRules: ReturnType<typeof loadProjectVerificationImpactRules>,
@@ -182,17 +188,48 @@ function planCombinedVerification(
     ...coverageCommands.map((command) => String(command || '').trim()),
     ...impactRules.flatMap((rule) => rule.commands.map((command) => String(command || '').trim())),
   ].filter(Boolean)));
+  const inspection = inspectProjectVerificationPresets(state, { projectId });
+  const requestedCommandSet = new Set(requestedCommands);
+  const resolvedCommands = Array.isArray(inspection?.presets) ? inspection.presets.filter((preset: any) => requestedCommandSet.has(String(preset?.command || ''))).map((preset: any) => ({
+    command: preset.command,
+    semanticKey: preset.semanticKey,
+    scope: preset.scope,
+    cost: preset.cost,
+    resourceKey: preset.resourceKey,
+    verificationClass: preset.verificationClass,
+    sharedResources: Array.isArray(preset.sharedResources) ? [...preset.sharedResources] : [],
+    acceptsTargets: preset.acceptsTargets === true,
+  })) : [];
   const sourcePlan = planVerification({
     changedFiles: integration.changedFiles,
     requestedCommands,
+    resolvedCommands,
     impactRules,
   });
   const combinedPlan = planVerification({
     changedFiles: integration.combinedChangedFiles,
     requestedCommands,
+    resolvedCommands,
     impactRules,
   });
   return { sourcePlan, combinedPlan };
+}
+
+function normalizeVerificationTargets(targets: unknown) {
+  return Array.from(new Set((Array.isArray(targets) ? targets : []).map((target) => String(target || '').replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean))).sort();
+}
+
+function verificationRequirementLabel(check: VerificationImpactCheck) {
+  const targets = normalizeVerificationTargets(check.targets);
+  return targets.length > 0 ? `${check.command} ${targets.join(' ')}` : check.command;
+}
+
+function verificationCheckMatchesRequirement(check: TaskWorkspaceFinalizationCheck, requirement: VerificationImpactCheck) {
+  if (String(check.command || '').trim() !== requirement.command) return false;
+  const requiredTargets = normalizeVerificationTargets(requirement.targets);
+  if (requiredTargets.length === 0) return true;
+  const actualTargets = normalizeVerificationTargets(check.targets);
+  return actualTargets.length === requiredTargets.length && actualTargets.every((target, index) => target === requiredTargets[index]);
 }
 
 function evaluatePostIntegrationRequirement(
@@ -214,14 +251,26 @@ function evaluatePostIntegrationRequirement(
   const hasBroadEvidence = hasFullEvidence || revisionBound.some((check) => check.scope === 'broad');
   const broadEvidenceRequired = combinedPlan.requiresBroadVerify;
   const reusableCommands = new Set(coverage?.status === 'covered' && coverage.reusable ? coverage.coveredCommands : []);
-  const missingCommands = hasFullEvidence
+  const requiredChecks: VerificationImpactCheck[] = combinedPlan.steps.map((step) => ({
+    command: step.command,
+    ...(step.targets?.length ? { targets: normalizeVerificationTargets(step.targets) } : {}),
+  }));
+  const missingChecks = hasFullEvidence
     ? []
-    : combinedPlan.commands.filter((command) => !revisionBound.some((check) => check.command === command) && !reusableCommands.has(command));
+    : requiredChecks.filter((requirement) => {
+        if (revisionBound.some((check) => verificationCheckMatchesRequirement(check, requirement))) return false;
+        return normalizeVerificationTargets(requirement.targets).length > 0 || !reusableCommands.has(requirement.command);
+      });
+  const requiredCommands = requiredChecks.map(verificationRequirementLabel);
+  const missingCommands = missingChecks.map(verificationRequirementLabel);
   const reusableCoverageSatisfied = coverage?.status === 'covered'
     && coverage.reusable
-    && missingCommands.length === 0
-    && (combinedPlan.commands.length === 0 || combinedPlan.commands.every((command) => reusableCommands.has(command) || revisionBound.some((check) => check.command === command)));
-  const noCommandsRequired = combinedPlan.commands.length === 0;
+    && missingChecks.length === 0
+    && (requiredChecks.length === 0 || requiredChecks.every((requirement) => {
+      if (revisionBound.some((check) => verificationCheckMatchesRequirement(check, requirement))) return true;
+      return normalizeVerificationTargets(requirement.targets).length === 0 && reusableCommands.has(requirement.command);
+    }));
+  const noCommandsRequired = requiredChecks.length === 0;
   const evidenceSatisfied = !required
     || (!broadEvidenceRequired && noCommandsRequired)
     || (missingCommands.length === 0
@@ -237,8 +286,10 @@ function evaluatePostIntegrationRequirement(
     required: required && !evidenceSatisfied,
     reason,
     repoRevision: revision,
-    requiredCommands: combinedPlan.commands,
+    requiredCommands,
     missingCommands,
+    requiredChecks,
+    missingChecks,
     broadEvidenceRequired,
     requiredScope: broadEvidenceRequired ? 'broad-or-full' : 'targeted',
     baseAdvanced,
@@ -788,7 +839,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           })
         : sourceCoverage;
       const coverageCommands = targetCoverage?.status === 'covered' && targetCoverage.reusable ? targetCoverage.coveredCommands : [];
-      const plans = planCombinedVerification(integration, effectiveChecks, impactRules, coverageCommands);
+      const plans = planCombinedVerification(_state, operation.projectId, integration, effectiveChecks, impactRules, coverageCommands);
       sourcePlan = plans.sourcePlan;
       combinedPlan = plans.combinedPlan;
       postIntegration = evaluatePostIntegrationRequirement(integration, effectiveChecks, sourcePlan, combinedPlan, targetCoverage);
@@ -1032,6 +1083,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
 export type TaskWorkspaceHappyPathTailVerificationRequest = {
   projectId: string;
   command: string;
+  targets?: string[];
   repoRevision: string;
   requiredScope: 'targeted' | 'broad-or-full';
 };
@@ -1145,10 +1197,16 @@ export async function runTaskWorkspaceHappyPathTail(
 
     const postIntegration = result?.postIntegration;
     if (result?.status === 'continuation' && postIntegration?.required === true) {
-      const missingCommands = Array.isArray(postIntegration.missingCommands) ? postIntegration.missingCommands.map((entry: unknown) => String(entry || '').trim()).filter(Boolean) : [];
-      const requiredCommands = Array.isArray(postIntegration.requiredCommands) ? postIntegration.requiredCommands.map((entry: unknown) => String(entry || '').trim()).filter(Boolean) : [];
-      const commandsToRun = missingCommands.length > 0 ? missingCommands : requiredCommands;
-      if (!runPostIntegrationVerification || commandsToRun.length === 0) {
+      const normalizeChecks = (value: unknown): VerificationImpactCheck[] => Array.isArray(value) ? value.flatMap((entry: any) => {
+        const command = String(entry?.command || '').trim();
+        if (!command) return [];
+        const targets = normalizeVerificationTargets(entry?.targets);
+        return [{ command, ...(targets.length ? { targets } : {}) }];
+      }) : [];
+      const missingChecks = normalizeChecks(postIntegration.missingChecks);
+      const requiredChecks = normalizeChecks(postIntegration.requiredChecks);
+      const checksToRun = missingChecks.length > 0 ? missingChecks : requiredChecks;
+      if (!runPostIntegrationVerification || checksToRun.length === 0) {
         return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_VERIFICATION_REQUIRED', String(postIntegration.reason || 'Post-integration verification requires attention.'), { transitions, operationId: operationId || null, postIntegration });
       }
       const project = getProject(String(result?.operation?.projectId || '').trim());
@@ -1162,8 +1220,10 @@ export async function runTaskWorkspaceHappyPathTail(
       }
 
       const checks: TaskWorkspaceFinalizationCheck[] = [];
-      for (const command of commandsToRun) {
-        const verification = await runPostIntegrationVerification({ projectId: project.id, command, repoRevision: expectedHead, requiredScope: postIntegration.requiredScope === 'broad-or-full' ? 'broad-or-full' : 'targeted' });
+      for (const requirement of checksToRun) {
+        const command = requirement.command;
+        const targets = normalizeVerificationTargets(requirement.targets);
+        const verification = await runPostIntegrationVerification({ projectId: project.id, command, ...(targets.length ? { targets } : {}), repoRevision: expectedHead, requiredScope: postIntegration.requiredScope === 'broad-or-full' ? 'broad-or-full' : 'targeted' });
         const after = getRepoRevisionForRoot(project.localPath);
         if (after.head !== expectedHead || after.changedFiles.length > 0) {
           return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_REVISION_DRIFT', 'Integrated project state changed during autonomous post-integration verification.', { transitions, command, expectedHead, observedHead: after.head, changedFiles: after.changedFiles.map((entry) => entry.path) });
@@ -1171,7 +1231,7 @@ export async function runTaskWorkspaceHappyPathTail(
         if (!verification?.ok || verification?.status !== 'succeeded' || verification?.exitCode !== 0) {
           return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_VERIFICATION_FAILED', `Post-integration verification '${command}' failed; autonomous tail stopped without guessing a repair.`, { transitions, command, operationId: operationId || null, verification: { status: verification?.status || 'failed', exitCode: verification?.exitCode ?? null, timedOut: verification?.timedOut === true } });
         }
-        checks.push({ name: `autonomous post-integration: ${command}`, command, status: 'passed', scope: postIntegration.requiredScope === 'broad-or-full' ? 'broad' : 'targeted', repoRevision: expectedHead, summary: 'Autonomous tail ran the finalizer-required post-integration verification against the exact integrated HEAD.' });
+        checks.push({ name: `autonomous post-integration: ${verificationRequirementLabel(requirement)}`, command, ...(targets.length ? { targets } : {}), status: 'passed', scope: postIntegration.requiredScope === 'broad-or-full' ? 'broad' : 'targeted', repoRevision: expectedHead, summary: 'Autonomous tail ran the finalizer-required post-integration verification against the exact integrated HEAD.' });
         transitions.push({ stage: 'post-integration-verification', status: 'passed', detail: command });
       }
       postIntegrationChecks = checks;

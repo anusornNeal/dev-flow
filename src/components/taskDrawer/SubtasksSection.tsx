@@ -22,16 +22,16 @@ export default function SubtasksSection({
   const completionPercent = subTasks.length > 0 ? Math.round((completedSubtasks / subTasks.length) * 100) : 0;
 
   return (
-    <div className="space-y-3 border-t border-[#ebdcb9] pt-4 font-sans dark:border-[#584a3b]">
-      <div className="flex items-center justify-between gap-3">
-        <h4 className="flex items-center gap-1.5 text-[10px] font-bold font-mono uppercase tracking-widest text-[#8a6e5a] dark:text-[#f3eadf]">
-          <PawPrint size={13} className="text-[#d89745] dark:text-[#d6b56d]" /> Subtasks Breakdown ({completedSubtasks}/{subTasks.length})
+    <div className="space-y-3 border-t border-df-border pt-4 font-sans">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h4 className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-df-text-muted">
+          <PawPrint size={13} className="shrink-0 text-df-accent" /> Subtasks Breakdown ({completedSubtasks}/{subTasks.length})
         </h4>
         {canCreateSubtask && (
           <button
             type="button"
             onClick={onCreateSubtask}
-            className="flex cursor-pointer items-center gap-1 rounded-xl bg-[#2a7a8a] px-3 py-1.5 text-[10px] font-extrabold tracking-wide text-white shadow-4xs transition-all hover:bg-[#1a5b67] active:scale-[0.98] dark:bg-[#e0a070] dark:text-[#292119] dark:hover:bg-[#d6b56d]"
+            className="df-button df-button--primary min-h-8 min-w-0 px-3 text-[10px]"
           >
             <Plus size={11} /> Create Subtask Spec
           </button>
@@ -40,14 +40,14 @@ export default function SubtasksSection({
 
       {subTasks.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-3 rounded-xl border border-[#ebdcb9]/65 bg-white px-2.5 py-2 shadow-3xs dark:border-[#584a3b]/65 dark:bg-[#292119]">
-            <div className="h-1 flex-1 overflow-hidden rounded-full bg-[#ede6dc]/60 dark:bg-[#3a2f26]">
+          <div className="flex items-center gap-3 rounded-xl border border-df-border bg-df-surface-raised px-2.5 py-2 shadow-[var(--df-shadow-sm)]">
+            <div className="h-1 flex-1 overflow-hidden rounded-full bg-df-surface-muted" aria-hidden="true">
               <div
-                className="h-full rounded-full bg-[#2a7a8a] transition-all duration-300 dark:bg-[#e0a070]"
+                className="h-full rounded-full bg-df-success transition-all duration-300"
                 style={{ width: `${completionPercent}%` }}
               />
             </div>
-            <span className="shrink-0 text-[9px] font-black font-mono text-[#2a7a8a] dark:text-[#f3eadf]">
+            <span className="shrink-0 font-mono text-[10px] font-black text-df-success">
               {completionPercent}% complete
             </span>
           </div>
@@ -73,63 +73,69 @@ function SubtaskCard({ task, onSelectTask }: SubtaskCardProps) {
   const subInProgress = task.status === 'in-progress';
   const displayId = task.displayId || task.id;
   const statusLabel = subInProgress ? 'active' : task.status;
+  const selectTask = () => onSelectTask?.(task);
+
+  const statusClass = subDone
+    ? 'border-[var(--df-color-success)] bg-[var(--df-color-success-surface)] text-df-success'
+    : subInProgress
+      ? 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)] text-df-warning'
+      : 'border-df-border bg-df-surface-muted text-df-text-muted';
+
+  const priorityClass = task.priority === 'high'
+    ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)] text-df-danger'
+    : task.priority === 'medium'
+      ? 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)] text-df-warning'
+      : 'border-[var(--df-color-success)] bg-[var(--df-color-success-surface)] text-df-success';
 
   return (
     <div
-      onClick={() => {
-        if (onSelectTask) onSelectTask(task);
+      role={onSelectTask ? 'button' : undefined}
+      tabIndex={onSelectTask ? 0 : undefined}
+      aria-label={onSelectTask ? `Open ${displayId}: ${task.title}` : undefined}
+      onClick={selectTask}
+      onKeyDown={(event) => {
+        if (!onSelectTask || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        selectTask();
       }}
-      className={`relative flex cursor-pointer flex-col gap-2 rounded-xl border px-2.5 py-2 transition-all hover:bg-[#fffcf8] hover:shadow-sm active:scale-[0.98] dark:hover:bg-[#1e1914] ${
+      className={`relative flex min-w-0 flex-col gap-2 rounded-xl border px-2.5 py-2 transition-all hover:bg-df-surface-muted hover:shadow-[var(--df-shadow-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--df-color-focus-ring)] ${
         subDone
-          ? 'border-emerald-100/60 bg-[#edf7ed]/20 text-gray-400 dark:border-[#584a3b]/65 dark:bg-[#292119]/55 dark:text-[#b8ab9f]'
+          ? 'border-df-border bg-[var(--df-color-success-surface)] text-df-text-muted'
           : subInProgress
-            ? 'border-[#e3a35a] bg-white shadow-2xs dark:border-[#e0a070]/70 dark:bg-[#292119]'
-            : 'border-[#ebdcb9]/65 bg-white text-[#3a2f26] dark:border-[#584a3b]/65 dark:bg-[#292119] dark:text-[#f3eadf]'
-      }`}
+            ? 'border-[var(--df-color-accent)] bg-df-surface-raised shadow-[var(--df-shadow-sm)]'
+            : 'border-df-border bg-df-surface-raised text-df-text'
+      } ${onSelectTask ? 'cursor-pointer' : ''}`}
     >
       <div className="flex min-w-0 items-start justify-between gap-2">
         <button
           type="button"
           onClick={event => {
             event.stopPropagation();
-            navigator.clipboard.writeText(displayId);
+            void navigator.clipboard.writeText(displayId);
           }}
-          className="inline-flex shrink-0 cursor-pointer items-center rounded-md bg-[#f4eadc] px-1.5 py-0.5 text-[9px] font-black font-mono text-[#8a6020] hover:text-[#d89745] dark:bg-[#3a2f26] dark:text-[#e0a070]"
-          title="Copy Card ID"
+          className="inline-flex max-w-[55%] shrink-0 items-center truncate rounded-md bg-df-surface-muted px-1.5 py-0.5 font-mono text-[10px] font-black text-df-accent hover:text-[var(--df-color-accent-hover)]"
+          title={`Copy ${displayId}`}
+          aria-label={`Copy task ID ${displayId}`}
         >
           {displayId}
         </button>
-        <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-extrabold font-mono uppercase ${
-          subDone
-            ? 'border-emerald-200/60 bg-emerald-50 text-emerald-700 dark:border-emerald-800/50 dark:bg-emerald-950/20 dark:text-emerald-300'
-            : subInProgress
-              ? 'border-orange-200/70 bg-orange-50 text-orange-700 dark:border-orange-800/50 dark:bg-orange-950/20 dark:text-orange-300'
-              : 'border-[#ebdcb9] bg-[#fffaf2] text-[#8a6e5a] dark:border-[#584a3b] dark:bg-[#3a2f26] dark:text-[#b8ab9f]'
-        }`}>
+        <span className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-extrabold uppercase ${statusClass}`}>
           {statusLabel}
         </span>
       </div>
 
-      <p className={`line-clamp-2 min-w-0 text-[11px] font-extrabold leading-[1.35] ${
-        subDone
-          ? 'font-normal text-gray-400 line-through dark:text-[#b8ab9f]'
-          : 'text-[#3e3129] dark:text-[#f3eadf]'
+      <p className={`line-clamp-2 min-w-0 break-words text-[11px] font-extrabold leading-[1.35] ${
+        subDone ? 'font-normal text-[var(--df-color-text-subtle)] line-through' : 'text-[var(--df-color-text-strong)]'
       }`}>
         {task.title}
       </p>
 
-      <div className="flex min-h-4 items-center gap-1 font-mono text-[9px] font-bold">
-        <span className={`rounded-md border px-1.5 py-0.5 uppercase ${
-          task.priority === 'high'
-            ? 'border-[#ffa995] bg-[#ffdacf] text-[#b43a20] dark:border-[#8c4938] dark:bg-[#3a2f26] dark:text-[#f3b39e]'
-            : task.priority === 'medium'
-              ? 'border-[#f0cca3] bg-[#ffecca] text-[#a46c24] dark:border-[#765c3f] dark:bg-[#3a2f26] dark:text-[#efc483]'
-              : 'border-[#bddda4] bg-[#e2f0dc] text-[#4d7e35] dark:border-[#4f6844] dark:bg-[#3a2f26] dark:text-[#b8d8a8]'
-        }`}>
+      <div className="flex min-h-4 min-w-0 flex-wrap items-center gap-1 font-mono text-[10px] font-bold">
+        <span className={`rounded-md border px-1.5 py-0.5 uppercase ${priorityClass}`}>
           {task.priority}
         </span>
         {task.hasUiDesign && (
-          <span className="rounded-md border border-[#c9b6f4] bg-[#f2edff] px-1.5 py-0.5 text-[#6848a8] dark:border-[#66528f] dark:bg-[#332a42] dark:text-[#d2c4f4]">
+          <span className="rounded-md border border-[var(--df-color-info)] bg-[var(--df-color-info-surface)] px-1.5 py-0.5 text-df-info">
             DESIGN
           </span>
         )}

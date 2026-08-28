@@ -86,7 +86,7 @@ export default function TaskInspectorActivityTab(props: TaskInspectorActivityTab
           {props.latestRunLogLoading ? <p className="df-meta">Loading latest run log…</p> : props.latestRunLogError ? <div className="df-feedback df-feedback--danger"><div className="df-feedback__summary">Execution log unavailable</div><div className="df-feedback__detail df-break-technical">{props.latestRunLogError}</div></div> : props.latestRunLogExists && props.latestRunLogTail ? (
             <details className="rounded-xl border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-3">
               <summary className="cursor-pointer text-[11px] font-extrabold text-[var(--df-color-text-muted)]">Show latest log tail</summary>
-              <pre className="df-break-technical mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-[#211a15] p-4 text-[11px] leading-5 text-[#e8dacb]">{props.latestRunLogTail}</pre>
+              <pre className="df-break-technical mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-[var(--df-color-surface-subtle)] p-4 font-mono text-[11px] leading-5 text-df-text">{props.latestRunLogTail}</pre>
               {props.onShowLog && latestRun && <button type="button" onClick={() => props.onShowLog?.({ id: latestRun.id, status: latestRun.status, agent: task.agent, model: task.model })} className="df-button df-button--secondary mt-3 min-h-8">Open log viewer</button>}
             </details>
           ) : <p className="df-meta">No run log is available.</p>}

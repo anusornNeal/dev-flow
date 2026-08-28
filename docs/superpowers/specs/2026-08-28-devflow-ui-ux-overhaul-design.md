@@ -187,6 +187,8 @@ A semantic state keeps the same meaning in both modes. Do not reuse danger red a
 
 The overhaul targets desktop first but must tolerate narrow windows and resizable panels.
 
+DVF-0760 establishes **800 × 600 CSS pixels** as the minimum supported desktop regression floor, matching the repository's existing 800 × 600 UI evidence viewport. At and above this floor, accidental page-level horizontal overflow, clipped controls, and unreachable dialog actions are release blockers; Kanban lane scrolling remains intentional. Below this floor, narrow-container behavior remains best effort rather than a release gate.
+
 - Every flex/grid child that contains variable text should be able to shrink (`min-width: 0` where needed).
 - Prefer wrapping action groups before allowing the entire page to overflow.
 - Dialog actions stack on narrow widths with the safe action remaining easy to reach.

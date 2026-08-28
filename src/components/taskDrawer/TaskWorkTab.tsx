@@ -59,19 +59,19 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
           <WorkSection title="Checklist" icon={<CheckSquare size={15} />}>
             {!isEditing ? (
               <div className="space-y-3">
-                <div className="flex items-center justify-between gap-3 text-[12px] font-bold text-[#7a6656] dark:text-[#c7b8aa]">
+                <div className="flex items-center justify-between gap-3 text-[12px] font-bold text-df-text-muted">
                   <span>{completed} of {checklist.length} complete</span>
                   <span>{checklist.length > 0 ? Math.round((completed / checklist.length) * 100) : 0}%</span>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-[#efe5d6] dark:bg-[#3a3028]"><div className="h-full rounded-full bg-[#6f9d54]" style={{ width: `${checklist.length > 0 ? (completed / checklist.length) * 100 : 0}%` }} /></div>
+                <div className="h-2 overflow-hidden rounded-full bg-df-surface-muted"><div className="h-full rounded-full bg-df-success" style={{ width: `${checklist.length > 0 ? (completed / checklist.length) * 100 : 0}%` }} /></div>
                 <div className="space-y-2">
                   {checklist.map((item) => (
-                    <button key={item.id || item.text} type="button" onClick={() => props.onToggleChecklistItem(item.id || item.text)} className="flex w-full items-start gap-3 rounded-xl border border-[#eadbc5] p-3 text-left hover:bg-[#faf4e9] dark:border-[#584a3b] dark:hover:bg-[#342920]">
-                      <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${item.completed ? 'border-[#6f9d54] bg-[#6f9d54] text-white' : 'border-[#cbb79d]'}`}>{item.completed && <Check size={12} />}</span>
+                    <button key={item.id || item.text} type="button" onClick={() => props.onToggleChecklistItem(item.id || item.text)} className="flex w-full items-start gap-3 rounded-xl border border-df-border p-3 text-left hover:bg-df-surface-muted">
+                      <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${item.completed ? 'border-[var(--df-color-success)] bg-df-success text-white' : 'border-df-border'}`}>{item.completed && <Check size={12} />}</span>
                       <span className={`min-w-0 break-words text-[13px] leading-5 ${item.completed ? 'text-[var(--df-color-text-subtle)] line-through' : 'text-[var(--df-color-text)]'}`}>{item.text}</span>
                     </button>
                   ))}
-                  {checklist.length === 0 && <p className="text-[12px] text-[#9a8879]">No checklist items.</p>}
+                  {checklist.length === 0 && <p className="text-[12px] text-df-text-muted">No checklist items.</p>}
                 </div>
               </div>
             ) : (
@@ -82,7 +82,7 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
                     <button type="button" onClick={() => props.setEditedChecklistList(props.editedChecklistList.filter((_, itemIndex) => itemIndex !== index))} className="rounded-lg px-3 text-[11px] font-bold text-red-600 hover:bg-red-50">Remove</button>
                   </div>
                 ))}
-                <button type="button" onClick={() => props.setEditedChecklistList([...props.editedChecklistList, ''])} className="rounded-lg border border-[#dfccb1] px-3 py-2 text-[11px] font-extrabold text-[#805e42] dark:border-[#584a3b]">Add checklist item</button>
+                <button type="button" onClick={() => props.setEditedChecklistList([...props.editedChecklistList, ''])} className="df-button df-button--secondary min-w-0 px-3 text-[11px]">Add checklist item</button>
               </div>
             )}
           </WorkSection>
@@ -93,7 +93,7 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
                 {(task.targetFiles || []).map((file) => {
                   const { fileName, directory } = splitTargetFilePath(file);
                   return (
-                    <div key={file} className="flex min-w-0 items-center gap-3 rounded-xl border border-[#eadbc5] bg-[#faf6ef] px-3.5 py-3 dark:border-[#584a3b] dark:bg-[#211a15]">
+                    <div key={file} className="flex min-w-0 items-center gap-3 rounded-xl border border-df-border bg-[var(--df-color-surface-subtle)] px-3.5 py-3">
                       <div className="min-w-0 flex-1">
                         <span className="block break-words text-[13px] font-extrabold text-[var(--df-color-text-strong)]">{fileName || file}</span>
                         {directory && <span className="df-break-technical mt-1 block font-mono text-[11px] leading-4 text-[var(--df-color-text-muted)]">{directory}</span>}
@@ -110,7 +110,7 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
                     </div>
                   );
                 })}
-                {(task.targetFiles || []).length === 0 && <p className="text-[12px] text-[#9a8879]">No target files.</p>}
+                {(task.targetFiles || []).length === 0 && <p className="text-[12px] text-df-text-muted">No target files.</p>}
               </div>
             ) : (
               <div className="space-y-2">
@@ -120,7 +120,7 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
                     <button type="button" onClick={() => props.setEditedFilesList(props.editedFilesList.filter((_, fileIndex) => fileIndex !== index))} className="rounded-lg px-3 text-[11px] font-bold text-red-600 hover:bg-red-50">Remove</button>
                   </div>
                 ))}
-                <button type="button" onClick={() => props.setEditedFilesList([...props.editedFilesList, ''])} className="rounded-lg border border-[#dfccb1] px-3 py-2 text-[11px] font-extrabold text-[#805e42] dark:border-[#584a3b]">Add target file</button>
+                <button type="button" onClick={() => props.setEditedFilesList([...props.editedFilesList, ''])} className="df-button df-button--secondary min-w-0 px-3 text-[11px]">Add target file</button>
               </div>
             )}
           </WorkSection>
@@ -188,7 +188,7 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
                 {(task.verificationEvidence || []).length > 0 && (
                   <div className="space-y-2">
                     {(task.verificationEvidence || []).map((check, index) => (
-                      <div key={`${check.name}-${index}`} className="rounded-xl border border-[#eadbc5] p-3 dark:border-[#584a3b]">
+                      <div key={`${check.name}-${index}`} className="rounded-xl border border-df-border p-3">
                         <div className="flex items-center justify-between gap-3"><strong className="text-[12px]">{check.name}</strong><span className={`rounded-md px-2 py-0.5 text-[10px] font-black uppercase ${check.status === 'passed' ? 'bg-emerald-100 text-emerald-700' : check.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{check.status}</span></div>
                         <code className="df-break-technical mt-1 block text-[11px] text-[var(--df-color-text-muted)]">{check.command}</code>
                         {check.summary && <p className="mt-1 break-words text-[12px]">{check.summary}</p>}

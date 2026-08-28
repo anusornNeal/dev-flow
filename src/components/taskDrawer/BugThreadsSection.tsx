@@ -47,7 +47,7 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
 
   if (orderedBugs.length === 0) {
     return (
-      <div className="space-y-2 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
+      <div className="space-y-2 border-t border-df-border pt-5">
         <SectionHeader isAddingBug={isAddingBug} setIsAddingBug={setIsAddingBug} openCount={0} />
         {isAddingBug && (
           <AddBugForm
@@ -56,7 +56,7 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
             onSubmit={submitNewBug}
           />
         )}
-        <p className="text-[10px] text-[#a59182] dark:text-[#d6b56d] italic font-mono pl-1 font-bold">No embedded bug threads.</p>
+        <p className="df-meta pl-1 font-mono italic">No embedded bug threads.</p>
       </div>
     );
   }
@@ -129,7 +129,7 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
   }
 
   return (
-    <div className="space-y-3 border-t border-[#ebdcb9] dark:border-[#584a3b] pt-5">
+    <div className="space-y-3 border-t border-df-border pt-5">
       <SectionHeader isAddingBug={isAddingBug} setIsAddingBug={setIsAddingBug} openCount={orderedBugs.filter(isUnresolved).length} />
       {isAddingBug && <AddBugForm newBug={newBug} setNewBug={setNewBug} onSubmit={submitNewBug} />}
 
@@ -141,38 +141,38 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
             <details
               key={bug.id}
               open={defaultOpen}
-              className="group rounded-2xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#292119] overflow-hidden"
+              className="group overflow-hidden rounded-2xl border border-df-border bg-df-surface"
             >
-              <summary className="list-none cursor-pointer p-3 flex items-start justify-between gap-3 hover:bg-[#f4ebd9] dark:hover:bg-[#3a2f26]/30">
+              <summary className="flex cursor-pointer list-none items-start justify-between gap-3 p-3 hover:bg-df-surface-muted">
                 <div className="min-w-0 space-y-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    {open && <AlertTriangle size={13} className="text-[#b4533a] dark:text-[#e0a070]" />}
-                    <span className="text-xs font-black text-[#4d3d32] dark:text-[#f3eadf]">{bug.title}</span>
-                    <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded-md bg-[#f4ebd9] dark:bg-[#1e1914] text-[#8a6e5a] dark:text-[#d6b56d]">
+                    {open && <AlertTriangle size={13} className="text-df-danger" />}
+                    <span className="text-xs font-black text-[var(--df-color-text-strong)]">{bug.title}</span>
+                    <span className="rounded-md bg-df-surface-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-df-text-muted">
                       {bug.status}
                     </span>
-                    <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded-md bg-[#f1e4df] dark:bg-[#1e1914] text-[#9b4e3d] dark:text-[#e0a070]">
+                    <span className="rounded-md bg-[var(--df-color-danger-surface)] px-1.5 py-0.5 font-mono text-[10px] uppercase text-df-danger">
                       {bug.severity}
                     </span>
                   </div>
                   {bug.actual && (
-                    <p className="text-[10.5px] text-[#6e5340] dark:text-[#f3eadf] line-clamp-2">{bug.actual}</p>
+                    <p className="line-clamp-2 text-[10.5px] text-df-text">{bug.actual}</p>
                   )}
                 </div>
-                <ChevronDown size={14} className="mt-0.5 shrink-0 text-[#8a6e5a] dark:text-[#d6b56d] transition-transform group-open:rotate-180" />
+                <ChevronDown size={14} className="mt-0.5 shrink-0 text-df-text-muted transition-transform group-open:rotate-180" />
               </summary>
 
-              <div className="border-t border-[#ebdcb9] dark:border-[#584a3b] p-3 space-y-3 text-[10.5px] text-[#5c493c] dark:text-[#f3eadf]">
+              <div className="space-y-3 border-t border-df-border p-3 text-[10.5px] text-df-text">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {bug.expected && (
                     <div>
-                      <strong className="block text-[9px] uppercase tracking-widest font-mono text-[#8a6e5a] dark:text-[#d6b56d]">Expected</strong>
+                      <strong className="block font-mono text-[10px] uppercase tracking-widest text-df-text-muted">Expected</strong>
                       <p className="whitespace-pre-wrap">{bug.expected}</p>
                     </div>
                   )}
                   {bug.evidence && (
                     <div>
-                      <strong className="block text-[9px] uppercase tracking-widest font-mono text-[#8a6e5a] dark:text-[#d6b56d]">Evidence</strong>
+                      <strong className="block font-mono text-[10px] uppercase tracking-widest text-df-text-muted">Evidence</strong>
                       <p className="whitespace-pre-wrap">{bug.evidence}</p>
                     </div>
                   )}
@@ -181,7 +181,7 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
                 {bug.relatedAreas && bug.relatedAreas.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {bug.relatedAreas.map((area) => (
-                      <span key={area} className="px-2 py-1 rounded-lg bg-[#f4ebd9] dark:bg-[#1e1914] font-mono text-[9.5px]">
+                      <span key={area} className="rounded-lg bg-df-surface-muted px-2 py-1 font-mono text-[10px]">
                         {area}
                       </span>
                     ))}
@@ -189,14 +189,14 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
                 )}
 
                 <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-1.5 text-[9.5px] font-mono text-[#8a6e5a] dark:text-[#d6b56d]">
+                  <div className="flex items-center gap-1.5 font-mono text-[10px] text-df-text-muted">
                     <History size={12} /> {bug.versions.length} version{bug.versions.length === 1 ? '' : 's'}
                   </div>
                   <div className="flex items-center gap-1.5 flex-wrap justify-end">
                     <select
                       value={variantByBugId[bug.id] || 'standard'}
                       onChange={(event) => setVariantByBugId((prev) => ({ ...prev, [bug.id]: event.target.value as BugFixPromptVariant }))}
-                      className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#f3eadf]"
+                      className="df-control px-2 font-mono text-[10px] font-bold text-df-text-muted"
                       title="Fix prompt variant"
                     >
                       {BUG_FIX_PROMPT_VARIANTS.map((variant) => (
@@ -208,7 +208,7 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
                         type="button"
                         disabled={updatingBugId === bug.id}
                         onClick={() => updateStatus(bug, 'fixed')}
-                        className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#f3eadf] hover:bg-[#f3ead7] dark:hover:bg-[#292119] disabled:opacity-60"
+                        className="df-button df-button--secondary min-w-0 px-2 text-[10px] disabled:opacity-60"
                       >
                         Mark Fixed
                       </button>
@@ -218,7 +218,7 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
                         type="button"
                         disabled={updatingBugId === bug.id}
                         onClick={() => updateStatus(bug, 'verified')}
-                        className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#f3eadf] hover:bg-[#f3ead7] dark:hover:bg-[#292119] disabled:opacity-60"
+                        className="df-button df-button--secondary min-w-0 px-2 text-[10px] disabled:opacity-60"
                       >
                         Verify
                       </button>
@@ -228,7 +228,7 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
                         type="button"
                         disabled={updatingBugId === bug.id}
                         onClick={() => updateStatus(bug, 'reopened')}
-                        className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#f3eadf] hover:bg-[#f3ead7] dark:hover:bg-[#292119] disabled:opacity-60"
+                        className="df-button df-button--secondary min-w-0 px-2 text-[10px] disabled:opacity-60"
                       >
                         Reopen
                       </button>
@@ -236,14 +236,14 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
                     <button
                       type="button"
                       onClick={() => copyPrompt(bug)}
-                      className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#f3eadf] hover:bg-[#f3ead7] dark:hover:bg-[#292119]"
+                      className="df-button df-button--secondary min-w-0 px-2 text-[10px]"
                     >
                       <Copy size={12} /> {copiedBugId === bug.id ? 'Copied' : 'Copy Fix Prompt'}
                     </button>
                   </div>
                 </div>
-                <div className="rounded-xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf7] dark:bg-[#1e1914] p-2 space-y-2">
-                  <p className="text-[9.5px] font-mono text-[#8a6e5a] dark:text-[#d6b56d]">
+                <div className="space-y-2 rounded-xl border border-df-border bg-df-surface p-2">
+                  <p className="font-mono text-[10px] text-df-text-muted">
                     Same behavior failed again: add a version. Different behavior: create a new bug thread.
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -251,26 +251,26 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
                       value={versionDraftByBugId[bug.id]?.prompt || ''}
                       onChange={(event) => setVersionDraftByBugId((prev) => ({ ...prev, [bug.id]: { ...(prev[bug.id] || { summary: '', changedFiles: '' }), prompt: event.target.value } }))}
                       placeholder="Version prompt"
-                      className="md:col-span-3 px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[10px]"
+                      className="df-control md:col-span-3 px-2 text-[10px]"
                     />
                     <input
                       value={versionDraftByBugId[bug.id]?.summary || ''}
                       onChange={(event) => setVersionDraftByBugId((prev) => ({ ...prev, [bug.id]: { ...(prev[bug.id] || { prompt: '', changedFiles: '' }), summary: event.target.value } }))}
                       placeholder="Summary"
-                      className="md:col-span-2 px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[10px]"
+                      className="df-control md:col-span-2 px-2 text-[10px]"
                     />
                     <input
                       value={versionDraftByBugId[bug.id]?.changedFiles || ''}
                       onChange={(event) => setVersionDraftByBugId((prev) => ({ ...prev, [bug.id]: { ...(prev[bug.id] || { prompt: '', summary: '' }), changedFiles: event.target.value } }))}
                       placeholder="Files"
-                      className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119] text-[10px]"
+                      className="df-control px-2 text-[10px]"
                     />
                   </div>
                   <button
                     type="button"
                     onClick={() => submitVersion(bug)}
                     disabled={!versionDraftByBugId[bug.id]?.prompt?.trim()}
-                    className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#292119] text-[10px] font-mono font-bold disabled:opacity-60"
+                    className="df-button df-button--secondary min-w-0 px-2 text-[10px] disabled:opacity-60"
                   >
                     Add Version
                   </button>
@@ -287,15 +287,15 @@ export default function BugThreadsSection({ task, bugs = [], onTaskUpdated }: Bu
 function SectionHeader({ isAddingBug, setIsAddingBug, openCount }: { isAddingBug: boolean; setIsAddingBug: (value: boolean) => void; openCount: number }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <h4 className="text-[10px] font-mono text-[#8a6e5a] dark:text-[#f3eadf] uppercase tracking-widest flex items-center gap-1.5 font-bold">
-        <Bug size={13} className="text-[#b4533a] dark:text-[#e0a070]" /> Bugs to Fix
+      <h4 className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-df-text-muted">
+        <Bug size={13} className="text-df-danger" /> Bugs to Fix
       </h4>
       <div className="flex items-center gap-2">
-        <span className="text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#d6b56d]">{openCount} open</span>
+        <span className="font-mono text-[10px] font-bold text-df-text-muted">{openCount} open</span>
         <button
           type="button"
           onClick={() => setIsAddingBug(!isAddingBug)}
-          className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold text-[#8a6e5a] dark:text-[#f3eadf]"
+          className="df-button df-button--secondary min-w-0 px-2 text-[10px]"
         >
           + Add Bug
         </button>
@@ -310,15 +310,15 @@ function AddBugForm({ newBug, setNewBug, onSubmit }: {
   onSubmit: () => void;
 }) {
   return (
-    <div className="rounded-2xl border border-[#ebdcb9] dark:border-[#584a3b] bg-[#fffdfa] dark:bg-[#292119] p-3 space-y-2">
-      <input value={newBug.title} onChange={(event) => setNewBug((prev) => ({ ...prev, title: event.target.value }))} placeholder="Bug title" className="w-full px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
+    <div className="space-y-2 rounded-2xl border border-df-border bg-df-surface p-3">
+      <input value={newBug.title} onChange={(event) => setNewBug((prev) => ({ ...prev, title: event.target.value }))} placeholder="Bug title" className="df-control w-full px-2 text-[10px]" />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        <input value={newBug.actual} onChange={(event) => setNewBug((prev) => ({ ...prev, actual: event.target.value }))} placeholder="Actual" className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
-        <input value={newBug.expected} onChange={(event) => setNewBug((prev) => ({ ...prev, expected: event.target.value }))} placeholder="Expected" className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
-        <input value={newBug.evidence} onChange={(event) => setNewBug((prev) => ({ ...prev, evidence: event.target.value }))} placeholder="Evidence / notes" className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
-        <input value={newBug.relatedAreas} onChange={(event) => setNewBug((prev) => ({ ...prev, relatedAreas: event.target.value }))} placeholder="Related files / areas" className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] text-[10px]" />
+        <input value={newBug.actual} onChange={(event) => setNewBug((prev) => ({ ...prev, actual: event.target.value }))} placeholder="Actual" className="df-control px-2 text-[10px]" />
+        <input value={newBug.expected} onChange={(event) => setNewBug((prev) => ({ ...prev, expected: event.target.value }))} placeholder="Expected" className="df-control px-2 text-[10px]" />
+        <input value={newBug.evidence} onChange={(event) => setNewBug((prev) => ({ ...prev, evidence: event.target.value }))} placeholder="Evidence / notes" className="df-control px-2 text-[10px]" />
+        <input value={newBug.relatedAreas} onChange={(event) => setNewBug((prev) => ({ ...prev, relatedAreas: event.target.value }))} placeholder="Related files / areas" className="df-control px-2 text-[10px]" />
       </div>
-      <button type="button" onClick={onSubmit} disabled={!newBug.title.trim()} className="px-2 py-1 rounded-lg border border-[#ebdcb9] dark:border-[#584a3b] bg-[#faf7f0] dark:bg-[#1e1914] text-[10px] font-mono font-bold disabled:opacity-60">
+      <button type="button" onClick={onSubmit} disabled={!newBug.title.trim()} className="df-button df-button--secondary min-w-0 px-2 text-[10px] disabled:opacity-60">
         Create Bug
       </button>
     </div>

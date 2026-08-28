@@ -57,7 +57,7 @@ export default function AutoWorkToggle() {
       if (newValue) {
         setPreflightError(err instanceof Error ? err.message : 'Auto Work could not be enabled.');
       }
-      setAutoWork(!newValue); // Revert on failure
+      setAutoWork(!newValue);
     } finally {
       setSaving(false);
     }
@@ -65,38 +65,47 @@ export default function AutoWorkToggle() {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-[#fdfbf6] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl h-[34px]">
-        <Loader2 size={12} className="text-[#d89745] dark:text-[#e0a070] animate-spin" />
+      <div className="df-control flex h-[34px] min-h-[34px] items-center gap-2 px-3" role="status" aria-label="Loading Auto Work setting">
+        <Loader2 size={12} className="animate-spin text-df-accent" />
+        <span className="df-meta">Auto Work</span>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <div 
-        className="flex items-center gap-2 px-3 py-1.5 bg-[#fdfbf6] dark:bg-[#292119] border border-[#e5d4bb] dark:border-[#584a3b] rounded-xl shadow-2xs h-[34px] cursor-pointer hover:bg-[#faf7f0] dark:hover:bg-[#1e1914] transition-colors"
+    <div className="flex max-w-[280px] flex-col items-end gap-1">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={autoWork}
+        disabled={saving}
         onClick={toggleAutoWork}
+        className="df-control flex h-[34px] min-h-[34px] items-center gap-2 px-3 shadow-[var(--df-shadow-sm)]"
         title="Automatically trigger agents when a task is moved to the 'Ready To Do' (todo) lane"
       >
-        <span className="text-[10px] font-bold font-mono text-[#a46c24] dark:text-[#f3eadf] select-none flex items-center gap-1">
+        <span className="flex select-none items-center gap-1 font-mono text-[10px] font-bold text-df-text">
           {saving && <Loader2 size={10} className="animate-spin" />}
           Auto Work
         </span>
-        <button
-          className={`flex items-center p-0.5 rounded-full transition-colors w-7 border ${
-            autoWork 
-              ? 'bg-[#d89745] dark:bg-[#e0a070] border-[#c07c28] dark:border-[#584a3b] justify-end' 
-              : 'bg-[#ebe5da] dark:bg-[#292119] border-[#ddd0ba] dark:border-[#584a3b] justify-start'
+        <span
+          aria-hidden="true"
+          className={`flex w-7 items-center rounded-full border p-0.5 transition-colors ${
+            autoWork
+              ? 'justify-end border-df-accent bg-df-accent'
+              : 'justify-start border-df-border bg-df-surface-muted'
           }`}
         >
-          <div className="w-3.5 h-3.5 rounded-full bg-white dark:bg-[#292119] shadow-sm" />
-        </button>
-      </div>
+          <span className="h-3.5 w-3.5 rounded-full bg-df-surface-raised shadow-sm" />
+        </span>
+      </button>
 
       {preflightError && (
-        <div className="max-w-[260px] flex items-start gap-1.5 px-2 py-1 rounded-lg border border-[#f0c48f] dark:border-[#584a3b] bg-[#fff7eb] dark:bg-[#292119] text-[10px] font-mono font-bold text-[#9a5b13] dark:text-[#f3eadf]">
-          <AlertTriangle size={11} className="shrink-0 mt-[1px]" />
-          <span>{preflightError}</span>
+        <div className="df-feedback df-feedback--warning max-w-[280px]" role="alert">
+          <div className="df-feedback__summary flex items-center gap-1.5">
+            <AlertTriangle size={11} className="shrink-0" />
+            Auto Work blocked
+          </div>
+          <div className="df-feedback__detail df-break-technical">{preflightError}</div>
         </div>
       )}
     </div>

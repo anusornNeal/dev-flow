@@ -101,8 +101,8 @@ export default function AgentRunLogModal({
       <div className="df-dialog relative z-10 flex h-[80vh] w-full max-w-3xl flex-col overflow-hidden font-sans" role="dialog" aria-modal="true" aria-label="Agent run log">
         <div className="df-dialog-header flex items-center justify-between gap-3 p-4">
           <div className="flex items-center gap-2 min-w-0">
-            <FileText size={16} className="text-[#a46c24] dark:text-[#f3eadf] shrink-0" />
-            <h2 className="text-xs font-black text-[#5c493c] dark:text-[#f3eadf] tracking-tight uppercase truncate">
+            <FileText size={16} className="shrink-0 text-df-accent" />
+            <h2 className="truncate text-xs font-black uppercase tracking-tight text-[var(--df-color-text-strong)]">
               Run Log · {headerLabel}
             </h2>
           </div>
@@ -117,9 +117,9 @@ export default function AgentRunLogModal({
           </button>
         </div>
 
-        <div className="px-4 py-2 border-b border-[#ebdcb9]/60 dark:border-[#584a3b]/60 flex flex-wrap items-center gap-2 text-[10px] font-mono text-[#8a6e5a] dark:text-[#b8ab9f]">
+        <div className="flex flex-wrap items-center gap-2 border-b border-df-border px-4 py-2 font-mono text-[10px] text-df-text-muted">
           {subtitleParts.length > 0 && (
-            <span className="px-1.5 py-0.5 rounded-md border border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#292119]">
+            <span className="rounded-md border border-df-border bg-df-surface-raised px-1.5 py-0.5">
               {subtitleParts.join(' · ')}
             </span>
           )}
@@ -133,9 +133,9 @@ export default function AgentRunLogModal({
           </span>
         </div>
 
-        <div className="flex-1 overflow-auto p-4 bg-[#f7f3ea] dark:bg-[#14110d]">
+        <div className="flex-1 overflow-auto bg-[var(--df-color-surface-subtle)] p-4">
           {loading && (
-            <div className="flex items-center justify-center h-full text-[#8a6e5a] dark:text-[#b8ab9f] text-xs font-mono gap-2">
+            <div className="flex h-full items-center justify-center gap-2 font-mono text-xs text-df-text-muted">
               <Loader2 size={14} className="animate-spin" />
               Loading log…
             </div>
@@ -149,13 +149,13 @@ export default function AgentRunLogModal({
           )}
 
           {!loading && !error && !exists && (
-            <div className="flex items-center justify-center h-full text-[#8a6e5a] dark:text-[#b8ab9f] text-xs font-mono">
+            <div className="flex h-full items-center justify-center font-mono text-xs text-df-text-muted">
               No log file for this run yet.
             </div>
           )}
 
           {!loading && !error && exists && (
-            <pre className="text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words text-[#45372d] dark:text-[#f3eadf]">
+            <pre className="break-words whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-df-text">
               {content && content.length > 0 ? content : '(empty log)'}
             </pre>
           )}

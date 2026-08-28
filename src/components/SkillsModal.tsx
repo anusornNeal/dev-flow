@@ -77,22 +77,22 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
       <div className="fixed inset-0" onClick={onClose} />
 
       <div className="df-dialog relative z-10 flex h-[85vh] w-full max-w-6xl overflow-hidden select-none" role="dialog" aria-modal="true" aria-label="Authoring skills">
-        <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex flex-col">
-          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0">
-            <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg flex items-center gap-2">
-              <FileText size={20} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
+        <div className="flex w-1/3 min-w-0 flex-col border-r border-df-border bg-df-surface">
+          <div className="flex shrink-0 items-center justify-between border-b border-df-border px-6 py-4">
+            <h2 className="flex min-w-0 items-center gap-2 font-sans text-lg font-extrabold text-[var(--df-color-text-strong)]">
+              <FileText size={20} className="shrink-0 text-df-accent" />
               Authoring skill
             </h2>
-            <span className="text-[10px] font-mono uppercase tracking-wider text-[#8c7463] dark:text-[#f3eadf]">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-df-text-muted">
               Authoring only
             </span>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
             {loading ? (
-              <div className="text-sm font-mono text-[#8c7463] dark:text-[#f3eadf] p-2">Loading skills...</div>
+              <div className="p-2 font-mono text-sm text-df-text-muted">Loading skills...</div>
             ) : skills.length === 0 ? (
-              <div className="text-sm font-mono text-[#8c7463] dark:text-[#f3eadf] p-2">No skills available.</div>
+              <div className="p-2 font-mono text-sm text-df-text-muted">No skills available.</div>
             ) : (
               skills.map((skill) => {
                 const isSelected = skill.id === selectedSkillId;
@@ -103,18 +103,18 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                     onClick={() => setSelectedSkillId(skill.id)}
                     className={`flex items-center w-full justify-between p-3 rounded-xl border transition-all text-left ${
                       isSelected
-                        ? 'bg-[#ffecca] dark:bg-[#1e1914] border-[#e3a35a] dark:border-[#584a3b] shadow-sm text-[#935919] dark:text-[#e0a070] dark:text-[#d6b56d]'
-                        : 'bg-white dark:bg-[#1e1914] border-[#e5d4bb] dark:border-[#584a3b] hover:bg-[#faf6ef] dark:hover:bg-[#584a3b]/40 text-[#534135] dark:text-[#f3eadf]'
+                        ? 'border-df-accent bg-[var(--df-color-surface-subtle)] text-df-accent shadow-[var(--df-shadow-sm)]'
+                         : 'border-df-border bg-df-surface-raised text-df-text hover:bg-df-surface-muted'
                     }`}
                   >
                     <div className="flex-1 min-w-0 pr-6">
                       <div className="flex min-w-0 items-center gap-1.5 break-words text-sm font-extrabold">
                         {skill.name}
                         <span title="Protected Master Skill">
-                          <Lock size={10} className="text-[#c4a991] dark:text-[#d6b56d]" />
+                          <Lock size={10} className="text-df-text-muted" />
                         </span>
                       </div>
-                      <div className="text-[10px] font-mono text-[#8a725f] dark:text-[#f3eadf] mt-1 line-clamp-1">
+                      <div className="mt-1 line-clamp-1 font-mono text-[10px] text-df-text-muted">
                         {skill.description}
                       </div>
                     </div>
@@ -125,10 +125,10 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
           </div>
         </div>
 
-        <div className="w-2/3 flex flex-col bg-[#f5f2eb] dark:bg-[#1e1914]">
-          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex items-center justify-between shrink-0 h-[69px]">
+        <div className="flex w-2/3 min-w-0 flex-col bg-df-canvas">
+          <div className="flex h-[69px] shrink-0 items-center justify-between border-b border-df-border bg-df-surface px-6 py-4">
             {loading ? (
-              <div className="text-sm font-mono text-[#8c7463] dark:text-[#f3eadf]">Loading details...</div>
+              <div className="font-mono text-sm text-df-text-muted">Loading details...</div>
             ) : selectedSkill ? (
               <div className="flex-1 flex items-center justify-between">
                 <div>
@@ -136,10 +136,10 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                   <p className="df-meta mt-1 break-words font-mono">{selectedSkill.description}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="bg-[#fff7eb] dark:bg-[#1e1914] border border-[#f0d9b2] dark:border-[#584a3b] text-[#9a6a27] dark:text-[#f3eadf] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                  <span className="flex items-center gap-1.5 rounded-lg border border-df-border bg-df-surface-muted px-3 py-1.5 text-xs font-bold text-df-text-muted shadow-[var(--df-shadow-sm)]">
                     <Lock size={14} /> Master skill
                   </span>
-                  <div className="w-px h-5 bg-[#ebdcb9] dark:bg-[#584a3b] mx-1" />
+                  <div className="mx-1 h-5 w-px bg-df-border" />
                   <button
                     type="button"
                     onClick={onClose}
@@ -168,23 +168,23 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
 
           <div className="flex-1 p-4 overflow-hidden flex flex-col relative select-text">
             {loading ? (
-              <div className="flex-1 flex items-center justify-center text-[#8a6e5a] dark:text-[#f3eadf] font-mono text-sm">
+              <div className="flex flex-1 items-center justify-center font-mono text-sm text-df-text-muted">
                 Loading skill...
               </div>
             ) : !selectedSkill ? (
-              <div className="flex-1 flex items-center justify-center text-[#8a6e5a] dark:text-[#f3eadf] font-mono text-sm">
+              <div className="flex flex-1 items-center justify-center font-mono text-sm text-df-text-muted">
                 No skill content available.
               </div>
             ) : (
               <div className="flex-1 flex flex-col relative h-full">
-                <div className="flex-1 overflow-y-auto w-full p-6 border rounded-xl bg-[#fdfbf6] dark:bg-[#1e1914] border-[#ebdcb9] dark:border-[#584a3b] text-[#534135]/90 dark:text-[#f3eadf]/90 cursor-default h-full">
+                <div className="h-full w-full flex-1 cursor-default overflow-y-auto rounded-xl border border-df-border bg-df-surface p-6 text-df-text">
                   {selectedSkill.content.trim() === '' ? (
                     <div className="h-full flex flex-col items-center justify-center text-center opacity-50">
-                      <FileText size={48} className="text-[#8c7463] dark:text-[#f3eadf] mb-4" />
-                      <p className="text-sm font-mono text-[#8c7463] dark:text-[#f3eadf]">This skill has no content yet.</p>
+                      <FileText size={48} className="mb-4 text-df-text-muted" />
+                      <p className="font-mono text-sm text-df-text-muted">This skill has no content yet.</p>
                     </div>
                   ) : (
-                    <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                    <div className="prose prose-sm max-w-none text-df-text prose-headings:font-extrabold prose-a:text-df-accent dark:prose-invert">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {selectedSkill.content}
                       </ReactMarkdown>
@@ -193,7 +193,7 @@ export default function SkillsModal({ onClose }: SkillsModalProps) {
                 </div>
 
                 <div className="absolute inset-x-0 bottom-4 text-center pointer-events-none">
-                  <span className="bg-[#fdfbf6]/90 dark:bg-[#1e1914]/90 backdrop-blur-sm text-[#8c7463] dark:text-[#f3eadf] text-[10px] font-mono font-bold px-3 py-1.5 rounded-full border border-[#ebdcb9] dark:border-[#584a3b] shadow-sm">
+                  <span className="rounded-full border border-df-border bg-df-surface/90 px-3 py-1.5 font-mono text-[10px] font-bold text-df-text-muted shadow-[var(--df-shadow-sm)] backdrop-blur-sm">
                     Read-Only Mode
                   </span>
                 </div>

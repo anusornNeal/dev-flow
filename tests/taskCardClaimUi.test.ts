@@ -5,27 +5,29 @@ import fs from 'node:fs';
 const source = fs.readFileSync('src/components/TaskCard.tsx', 'utf8');
 
 test('TaskCard renders Live Work directly from the server projection', () => {
-  assert.match(source, /task\.liveWork/);
-  assert.match(source, />Live Work</);
-  assert.match(source, /task\.liveWork\.ownerLabel/);
-  assert.match(source, /task\.liveWork\.phaseLabel/);
-  assert.match(source, /task\.liveWork\.activity/);
-  assert.match(source, /task\.liveWork!?\.phaseIndex/);
-  assert.match(source, /task\.liveWork\.phaseCount/);
+  assert.match(source, /const liveWork = task\.liveWork/);
+  assert.match(source, /\{liveWork && \(/);
+  assert.match(source, /Live work/);
+  assert.match(source, /liveWork\.ownerLabel/);
+  assert.match(source, /liveWork\.phaseLabel/);
+  assert.match(source, /liveWork\.activity/);
+  assert.match(source, /liveWork\.phaseIndex/);
+  assert.match(source, /liveWork\.phaseCount/);
   assert.match(source, /liveWorkFreshness/);
 });
 
 test('TaskCard avoids duplicate managed and legacy run status blocks', () => {
-  assert.match(source, /!task\.liveWork && \(task\.activeAgent \|\| autoWorkState\)/);
+  assert.match(source, /!liveWork && \(task\.activeAgent \|\| autoWorkState\)/);
   assert.doesNotMatch(source, /กำลังทำ ·/);
   assert.doesNotMatch(source, /const activeClaim =/);
 });
 
-test('TaskCard keeps blocked state and dark-mode presentation explicit', () => {
-  assert.match(source, /task\.liveWork\.blocked/);
+test('TaskCard keeps blocked state and theme presentation explicit', () => {
+  assert.match(source, /liveWork\.blocked/);
   assert.match(source, /Live work phase:/);
-  assert.match(source, /dark:bg/);
-  assert.match(source, /dark:border/);
+  assert.match(source, /var\(--df-color-danger-surface\)/);
+  assert.match(source, /var\(--df-color-warning-surface\)/);
+  assert.match(source, /var\(--df-color-border\)/);
 });
 
 test('TaskCard no longer exposes inline agent, model, or effort assignment controls', () => {

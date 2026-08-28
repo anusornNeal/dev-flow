@@ -87,13 +87,13 @@ function SpecSummary({ spec }: { spec: Record<string, unknown> }) {
           {purpose && <div className="mt-0.5 break-words text-[var(--df-color-text-muted)]">{purpose}</div>}
         </div>
       )}
-      <details className="rounded-xl border border-[#eadbc5] bg-white/70 p-3 dark:border-[#584a3b] dark:bg-[#211a15]/80">
-        <summary className="cursor-pointer text-[11px] font-extrabold text-[#7d6048] dark:text-[#e2d5ca]">Full structured spec</summary>
+      <details className="rounded-xl border border-df-border bg-df-surface-raised p-3">
+        <summary className="cursor-pointer text-[11px] font-extrabold text-df-text-muted">Full structured spec</summary>
         <div className="mt-3 space-y-3">
           {detailEntries.map(([key, value]) => (
             <div key={key}>
-              <div className="mb-1 text-[10px] font-black uppercase tracking-[0.08em] text-[#9a6427] dark:text-[#e0a070]">{key}</div>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-[#fbf7f1] p-2 text-[10px] leading-5 text-[#5d493a] dark:bg-[#18130f] dark:text-[#e7d9cc]">{JSON.stringify(value, null, 2)}</pre>
+              <div className="mb-1 text-[10px] font-black uppercase tracking-[0.08em] text-df-accent">{key}</div>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-[var(--df-color-surface-subtle)] p-2 font-mono text-[10px] leading-5 text-df-text">{JSON.stringify(value, null, 2)}</pre>
             </div>
           ))}
         </div>
@@ -143,14 +143,14 @@ function CurrentEvidenceCard({ item, previous }: { item: TaskUiEvidence; previou
   const title = item.title || item.previewId;
   const frozenPreviewUrl = withPrimaryScreen(item.frozenPreviewUrl, item.primaryScreenId);
   return (
-    <article className="overflow-hidden rounded-2xl border border-[#eadbc5] bg-white/80 dark:border-[#584a3b] dark:bg-[#292119]/70">
+    <article className="overflow-hidden rounded-2xl border border-df-border bg-df-surface">
       {item.screenshotUrl && frozenPreviewUrl ? (
         <a
           href={frozenPreviewUrl}
           target="_blank"
           rel="noopener noreferrer"
           aria-label={`Open Design: ${title}`}
-          className="group relative block cursor-pointer border-b border-[#eadbc5] dark:border-[#584a3b]"
+          className="group relative block cursor-pointer border-b border-df-border"
         >
           <img src={item.screenshotUrl} alt={`${title} UI preview`} className="max-h-[420px] w-full object-contain" />
           <span className="pointer-events-none absolute bottom-3 right-3 inline-flex items-center gap-1.5 rounded-lg border border-white/70 bg-black/70 px-2.5 py-1.5 text-[11px] font-extrabold text-white shadow-sm">
@@ -158,7 +158,7 @@ function CurrentEvidenceCard({ item, previous }: { item: TaskUiEvidence; previou
           </span>
         </a>
       ) : item.screenshotUrl ? (
-        <img src={item.screenshotUrl} alt={`${title} UI preview`} className="max-h-[420px] w-full border-b border-[#eadbc5] object-contain dark:border-[#584a3b]" />
+        <img src={item.screenshotUrl} alt={`${title} UI preview`} className="max-h-[420px] w-full border-b border-df-border object-contain" />
       ) : null}
       <div className="space-y-3 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -174,11 +174,11 @@ function CurrentEvidenceCard({ item, previous }: { item: TaskUiEvidence; previou
         </div>
         <SpecSummary spec={item.spec} />
         {previous.length > 0 && (
-          <details className="rounded-xl border border-[#eadbc5] p-3 dark:border-[#584a3b]">
-            <summary className="cursor-pointer text-[11px] font-extrabold text-[#7d6048] dark:text-[#e2d5ca]">Previous revisions ({previous.length})</summary>
+          <details className="rounded-xl border border-df-border p-3">
+            <summary className="cursor-pointer text-[11px] font-extrabold text-df-text-muted">Previous revisions ({previous.length})</summary>
             <div className="mt-3 space-y-2">
               {previous.map((older) => (
-                <div key={older.evidenceId} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#f8f1e6] px-3 py-2 dark:bg-[#211a15]">
+                <div key={older.evidenceId} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--df-color-surface-subtle)] px-3 py-2">
                   <EvidenceMeta item={older} />
                   {older.frozenPreviewUrl && <PreviewLink href={withPrimaryScreen(older.frozenPreviewUrl, older.primaryScreenId)}>Open Preview</PreviewLink>}
                 </div>
@@ -211,7 +211,7 @@ export default function UiDesignEvidenceSection({
           <p className="df-meta mt-1 break-words">Frozen task evidence. Preview links refresh with the current DevFlow runtime.</p>
         </div>
         {onRefresh && (
-          <button type="button" onClick={onRefresh} disabled={loading} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#dfccb1] bg-white px-2.5 py-1.5 text-[11px] font-extrabold text-[#7d6048] disabled:cursor-default disabled:opacity-50 dark:border-[#584a3b] dark:bg-[#211a15] dark:text-[#e2d5ca]">
+          <button type="button" onClick={onRefresh} disabled={loading} className="df-button df-button--secondary min-h-8 min-w-0 px-2.5 text-[11px]">
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
             {loading ? 'Refreshing…' : 'Refresh'}
           </button>
@@ -230,11 +230,11 @@ export default function UiDesignEvidenceSection({
           {groups.map((group) => <CurrentEvidenceCard key={group.previewId} item={group.current} previous={group.previous} />)}
         </div>
       ) : loading ? (
-        <div className="py-5 text-center text-[12px] font-semibold text-[#927d6c] dark:text-[#ad9d91]">Loading UI Design evidence…</div>
+        <div className="py-5 text-center text-[12px] font-semibold text-df-text-muted">Loading UI Design evidence…</div>
       ) : null}
 
       {nextCursor && onLoadMore && (
-        <button type="button" onClick={onLoadMore} disabled={loadingMore} className="mt-3 w-full cursor-pointer rounded-lg border border-[#dfccb1] bg-white px-3 py-2 text-[11px] font-extrabold text-[#7d6048] disabled:cursor-default disabled:opacity-50 dark:border-[#584a3b] dark:bg-[#211a15] dark:text-[#e2d5ca]">
+        <button type="button" onClick={onLoadMore} disabled={loadingMore} className="df-button df-button--secondary mt-3 w-full text-[11px]">
           {loadingMore ? 'Loading previous revisions…' : 'Load previous revisions'}
         </button>
       )}

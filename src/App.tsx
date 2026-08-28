@@ -503,8 +503,8 @@ export default function App() {
 
   if (!mounted) {
     return (
-      <div className="min-h-screen bg-[#faf6ef] dark:bg-[#292119] flex flex-col items-center justify-center text-[#8a6e5a] dark:text-[#f3eadf] font-mono text-xs gap-3">
-        <Cat size={40} className="text-[#d89745] dark:text-[#e0a070] animate-bounce" />
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-df-canvas font-mono text-xs text-df-text-muted" role="status" aria-live="polite">
+        <Cat size={40} className="animate-bounce text-df-accent" />
         <p>Starting DevFlow...</p>
       </div>
     );
@@ -572,7 +572,7 @@ export default function App() {
           />
 
           {persistenceError && (
-            <div className="mx-5 mt-4 rounded-xl border border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)] px-4 py-3 text-[11px] font-mono font-bold text-[var(--df-color-warning)]">
+            <div role="alert" className="df-feedback df-feedback--warning mx-5 mt-4 font-mono font-bold">
               Persistence warning: {persistenceError}
             </div>
           )}
@@ -619,7 +619,7 @@ export default function App() {
       </div>
 
       {/* Compact truthful context bar */}
-      <footer className="flex h-7 shrink-0 items-center justify-between gap-4 border-t border-df-border bg-df-surface px-4 text-[9px] font-mono font-semibold text-df-text-muted">
+      <footer className="flex h-7 shrink-0 items-center justify-between gap-4 border-t border-df-border bg-df-surface px-4 text-[10px] font-mono font-semibold text-df-text-muted">
         <div className="min-w-0 truncate" title={activeProject?.name || undefined}>
           {activeProject ? `${activeProject.taskIdPrefix || 'Project'} · ${activeProject.name}` : 'No active project'}
         </div>

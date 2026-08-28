@@ -129,19 +129,19 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
       <div className="df-dialog relative z-10 flex h-[85vh] w-full max-w-6xl overflow-hidden select-none" role="dialog" aria-modal="true" aria-label="Global prompt template">
         
         {/* Left Sidebar: Section List */}
-        <div className="w-1/3 border-r border-[#ebdcb9] dark:border-[#584a3b] bg-[#fdfbf6] dark:bg-[#1e1914] flex flex-col">
-          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0">
-            <h2 className="text-[#534135] dark:text-[#f3eadf] font-extrabold font-sans text-lg flex items-center gap-2">
-              <FileText size={20} className="text-[#d89745] dark:text-[#e0a070] dark:text-[#d6b56d]" />
+        <div className="flex w-1/3 min-w-0 flex-col border-r border-df-border bg-df-surface">
+          <div className="flex shrink-0 items-center justify-between border-b border-df-border px-6 py-4">
+            <h2 className="flex min-w-0 items-center gap-2 font-sans text-lg font-extrabold text-[var(--df-color-text-strong)]">
+              <FileText size={20} className="shrink-0 text-df-accent" />
               Global Prompt Template
             </h2>
           </div>
           
-          <div className="p-4 border-b border-[#ebdcb9] dark:border-[#584a3b] shrink-0 bg-[#f4ebd9] dark:bg-[#1e1914]">
+          <div className="shrink-0 border-b border-df-border bg-df-surface-muted p-4">
              <button
                 onClick={handlePreviewFinalPrompt}
                 disabled={loadingPreview}
-                className="w-full py-2 bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] font-bold rounded-lg shadow-sm hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] transition-colors flex items-center justify-center gap-2 text-xs"
+                className="df-button df-button--primary w-full text-xs"
               >
                 <Eye size={14} />
                 {loadingPreview ? 'Loading Preview...' : 'Preview Final Prompt'}
@@ -150,9 +150,9 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
 
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
             {loading ? (
-              <div className="text-sm font-mono text-[#8c7463] dark:text-[#f3eadf] p-2">Loading template...</div>
+              <div className="p-2 font-mono text-sm text-df-text-muted">Loading template...</div>
             ) : sections.length === 0 ? (
-              <div className="text-sm font-mono text-[#8c7463] dark:text-[#f3eadf] p-2">No sections found.</div>
+              <div className="p-2 font-mono text-sm text-df-text-muted">No sections found.</div>
             ) : (
               <div className="flex flex-col gap-2">
                 {sections.map((section, idx) => {
@@ -168,36 +168,36 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
                       }}
                       className={`text-left p-3 rounded-xl border transition-all flex flex-col gap-1 ${
                         isSelected
-                          ? 'border-[#d89745] dark:border-[#e0a070] bg-[#fff9ee] dark:bg-[#1e1914] shadow-sm'
+                          ? 'border-df-accent bg-[var(--df-color-surface-subtle)] shadow-[var(--df-shadow-sm)]'
                           : missingRequired 
                             ? 'border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-900/20 opacity-80'
-                            : 'border-[#ebdcb9] dark:border-[#584a3b] bg-white dark:bg-[#1e1914] hover:border-[#d8c5aa] dark:border-[#584a3b] dark:hover:border-[#6b5a48] hover:shadow-xs'
+                             : 'border-df-border bg-df-surface-raised hover:border-[var(--df-color-border-strong)] hover:shadow-[var(--df-shadow-sm)]'
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-[#534135] dark:text-[#f3eadf] font-mono flex items-center gap-1.5">
-                           <span className="text-[9px] text-[#b89b82] dark:text-[#8c7463]">{String(section.order).padStart(2, '0')}.</span>
+                        <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] font-bold text-df-text">
+                           <span className="text-[10px] text-df-text-muted">{String(section.order).padStart(2, '0')}.</span>
                            {section.title}
                         </span>
-                        <ChevronRight size={14} className={isSelected ? "text-[#d89745] dark:text-[#e0a070]" : "text-[#c2ae9a] dark:text-[#6b5a48] opacity-0 group-hover:opacity-100"} />
+                        <ChevronRight size={14} className={isSelected ? "text-df-accent" : "text-df-text-muted opacity-0 group-hover:opacity-100"} />
                       </div>
                       <div className="flex items-center gap-2 text-[9px] uppercase tracking-widest font-bold">
                         {section.sourceType === 'override' ? (
-                          <span className="text-[#8c7463] dark:text-[#8c7463] bg-[#f4ebd9] dark:bg-[#1e1914] px-1.5 py-0.5 rounded flex items-center gap-1">
+                          <span className="flex items-center gap-1 rounded bg-df-surface-muted px-1.5 py-0.5 text-df-text-muted">
                             <Lock size={8} /> Master
                           </span>
                         ) : (
-                          <span className="text-[#8c7463] dark:text-[#8c7463] bg-[#f4ebd9] dark:bg-[#1e1914] px-1.5 py-0.5 rounded flex items-center gap-1">
+                          <span className="flex items-center gap-1 rounded bg-df-surface-muted px-1.5 py-0.5 text-df-text-muted">
                             <Lock size={8} /> Master
                           </span>
                         )}
                         {section.required ? (
-                          <span className="text-[#b89b82] dark:text-[#8c7463]">Required</span>
+                          <span className="text-df-text-muted">Required</span>
                         ) : (
-                          <span className="text-[#b89b82] dark:text-[#8c7463]">Optional</span>
+                          <span className="text-df-text-muted">Optional</span>
                         )}
                         {missingRequired && (
-                           <span className="text-red-500 flex items-center gap-1">
+                           <span className="flex items-center gap-1 text-df-danger">
                              <Ban size={8} /> Missing
                            </span>
                         )}
@@ -211,14 +211,14 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
         </div>
 
         {/* Right Content Area */}
-        <div className="flex-1 flex flex-col bg-[#fffdfa] dark:bg-[#1e1914] min-w-0">
-          <div className="px-6 py-4 border-b border-[#ebdcb9] dark:border-[#584a3b] flex items-center justify-between shrink-0 bg-[#fdfbf6] dark:bg-[#1e1914]">
+        <div className="flex min-w-0 flex-1 flex-col bg-df-surface">
+          <div className="flex shrink-0 items-center justify-between border-b border-df-border bg-df-surface px-6 py-4">
             {previewContent !== null ? (
                <div className="flex flex-col gap-1">
-                  <h3 className="text-[#534135] dark:text-[#f3eadf] font-extrabold text-lg flex items-center gap-2">
+                  <h3 className="flex items-center gap-2 text-lg font-extrabold text-[var(--df-color-text-strong)]">
                     Final Prompt Preview
                   </h3>
-                  <span className="text-xs font-mono text-[#8C7565] dark:text-[#8c7463]">
+                  <span className="font-mono text-xs text-df-text-muted">
                      Rendered sequence of all sections
                   </span>
                </div>
@@ -239,7 +239,7 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
                           setIsEditingOverride(true);
                           setEditContent(selectedSection.sourceType === 'override' ? (selectedSection.overrideContent || '') : (selectedSection.masterContent || ''));
                         }}
-                        className="px-3 py-1.5 text-xs font-bold bg-[#f4ebd9] dark:bg-[#1e1914] text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:bg-[#584a3b] dark:hover:bg-[#382b1d] rounded-lg transition-colors flex items-center gap-1.5 border border-[#d8c5aa] dark:border-[#584a3b]"
+                        className="df-button df-button--secondary min-w-0 px-3 text-xs"
                      >
                         <Edit2 size={12} /> Edit Master
                      </button>
@@ -251,14 +251,14 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
                           setIsEditingOverride(false);
                           setEditContent(selectedSection.masterContent || '');
                         }}
-                        className="px-3 py-1.5 text-xs font-bold text-[#7a6455] dark:text-[#f3eadf] hover:bg-[#ebdcb9] dark:hover:bg-[#382b1d] rounded-lg transition-colors"
+                        className="df-button df-button--secondary min-w-0 px-3 text-xs"
                       >
                         Cancel
                       </button>
                       <button
                         onClick={handleSaveOverride}
                         disabled={saving}
-                        className="px-3 py-1.5 text-xs font-bold bg-[#d89745] dark:bg-[#e0a070] text-white dark:text-[#f3eadf] hover:bg-[#c08234] dark:bg-[#e0a070] dark:hover:bg-[#d6b56d] dark:bg-[#e0a070] rounded-lg transition-colors flex items-center gap-1.5"
+                        className="df-button df-button--primary min-w-0 px-3 text-xs"
                       >
                         <Save size={12} /> {saving ? 'Saving...' : 'Save Master'}
                       </button>
@@ -280,7 +280,7 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
             </button>
           </div>
 
-          <div className="flex-1 overflow-hidden relative bg-[#fffdfa] dark:bg-[#1e1914]">
+          <div className="relative flex-1 overflow-hidden bg-df-surface">
              {previewContent !== null ? (
                 <div className="absolute inset-0 p-6 overflow-y-auto space-y-4">
                   {previewSections && previewSections.length > 0 ? (
@@ -290,17 +290,17 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
                       
                       return (
                         <div key={idx} className="flex flex-col gap-2">
-                          <div className="font-mono text-sm font-bold text-[#534135] dark:text-[#f3eadf] flex items-center gap-2">
-                            <span className="text-[#d89745] dark:text-[#e0a070]">{orderStr}</span>
+                          <div className="flex items-center gap-2 font-mono text-sm font-bold text-[var(--df-color-text-strong)]">
+                            <span className="text-df-accent">{orderStr}</span>
                             {sec.skillId}
                           </div>
-                          <div className="border border-[#ebdcb9] dark:border-[#584a3b] rounded-xl overflow-hidden shadow-sm bg-[#fffdfa] dark:bg-[#1e1914] min-h-[60px] p-4">
+                          <div className="min-h-[60px] overflow-hidden rounded-xl border border-df-border bg-df-surface-raised p-4 shadow-[var(--df-shadow-sm)]">
                             {sec.isEmpty ? (
-                              <div className="text-center text-[#8C7565] dark:text-[#8c7463] font-mono text-xs italic py-4 opacity-60">
+                              <div className="py-4 text-center font-mono text-xs italic text-df-text-muted opacity-60">
                                 Empty in preview
                               </div>
                             ) : (
-                              <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                              <div className="prose prose-sm max-w-none text-df-text prose-headings:font-extrabold prose-a:text-df-accent dark:prose-invert">
                                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                   {sec.content}
                                 </ReactMarkdown>
@@ -311,7 +311,7 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
                       );
                     })
                   ) : (
-                    <div className="prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf]">
+                    <div className="prose prose-sm max-w-none text-df-text prose-headings:font-extrabold prose-a:text-df-accent dark:prose-invert">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {previewContent}
                       </ReactMarkdown>
@@ -323,21 +323,21 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
                   <textarea
                     value={editContent}
                     onChange={(e) => setEditContent(e.target.value)}
-                    className="absolute inset-0 w-full h-full p-6 bg-transparent border-none outline-none font-mono text-sm text-[#534135] dark:text-[#f3eadf] resize-none focus:ring-0 leading-relaxed"
+                    className="absolute inset-0 h-full w-full resize-none border-none bg-transparent p-6 font-mono text-sm leading-relaxed text-df-text outline-none focus:ring-0"
                     spellCheck={false}
                     placeholder="Edit the global prompt template section..."
                   />
                ) : (
                   <div className="absolute inset-0 p-6 overflow-y-auto">
                      {selectedSection.effectiveContent ? (
-                       <div className={`prose prose-sm prose-orange max-w-none prose-headings:font-extrabold prose-a:text-[#d89745] dark:prose-invert dark:prose-headings:text-[#e0a070] dark:text-[#f3eadf] ${selectedSection.sourceType === 'master' ? 'opacity-80' : ''}`}>
+                       <div className={`prose prose-sm max-w-none text-df-text prose-headings:font-extrabold prose-a:text-df-accent dark:prose-invert ${selectedSection.sourceType === 'master' ? 'opacity-80' : ''}`}>
                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
                            {selectedSection.effectiveContent}
                          </ReactMarkdown>
                        </div>
                      ) : (
                        <div className="h-full flex items-center justify-center">
-                         <div className="text-center text-[#8C7565] dark:text-[#8c7463] font-mono text-sm flex flex-col items-center gap-2">
+                         <div className="flex flex-col items-center gap-2 text-center font-mono text-sm text-df-text-muted">
                            <Ban size={24} className="opacity-50" />
                            <p>No content available for this section.</p>
                          </div>
@@ -346,7 +346,7 @@ export default function TemplateModal({ onClose }: TemplateModalProps) {
                   </div>
                )
              ) : (
-               <div className="h-full flex items-center justify-center text-[#8C7565] dark:text-[#8c7463] font-mono text-sm">
+               <div className="flex h-full items-center justify-center font-mono text-sm text-df-text-muted">
                  Select a section to view or edit
                </div>
              )}

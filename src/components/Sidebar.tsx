@@ -186,13 +186,15 @@ export default function Sidebar({
     { value: 'low', label: 'Low', count: priorityCounts.low },
   ];
 
+  const priorityGridClass = width < 272 ? 'grid-cols-1' : 'grid-cols-2';
+
   return (
     <aside
       className="relative flex h-auto w-full shrink-0 select-none flex-col border-b border-df-border bg-df-surface lg:h-full lg:w-auto lg:border-b-0 lg:border-r"
       style={{ width: `${width}px` }}
       aria-label="Primary navigation"
     >
-      <div className="flex items-center gap-3 border-b border-df-border px-4 py-3">
+      <div className="flex items-center gap-3 border-b border-df-border px-3.5 py-2.5">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-df-primary text-[10px] font-black text-[var(--df-color-primary-text)]">
           DF
         </div>
@@ -211,7 +213,7 @@ export default function Sidebar({
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 scrollbar-thin">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 scrollbar-thin">
         <section>
           <p className="px-2 text-[9px] font-black uppercase tracking-[0.16em] text-df-text-muted">Navigate</p>
           <nav className="mt-2 space-y-1" aria-label="Workspace destinations">
@@ -223,7 +225,7 @@ export default function Sidebar({
                   type="button"
                   onClick={() => setPage(page)}
                   aria-current={active ? 'page' : undefined}
-                  className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)] ${
+                  className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)] ${
                     active
                       ? 'border-[var(--df-color-border-strong)] bg-df-surface-muted text-df-text'
                       : 'border-transparent text-df-text-muted hover:border-df-border hover:bg-df-surface-muted hover:text-df-text'
@@ -245,9 +247,9 @@ export default function Sidebar({
           </nav>
         </section>
 
-        <section className="mt-5 border-t border-df-border pt-4">
+        <section className="mt-4 border-t border-df-border pt-3.5">
           <p className="px-2 text-[9px] font-black uppercase tracking-[0.16em] text-df-text-muted">Board project</p>
-          <div className="mt-2 min-w-0 rounded-xl border border-df-border bg-df-surface-muted p-3">
+          <div className="mt-1.5 min-w-0 rounded-xl border border-df-border bg-df-surface-muted p-2.5">
             <div className="flex min-w-0 items-center gap-2">
               <span className="shrink-0 rounded-md bg-df-surface-raised px-2 py-1 text-[9px] font-black text-df-accent">
                 {activeProject?.taskIdPrefix || '—'}
@@ -284,7 +286,7 @@ export default function Sidebar({
               )}
             </div>
 
-            <label className="mt-2 flex items-center gap-2 rounded-xl border border-df-border bg-df-surface-raised px-3 py-2.5 focus-within:ring-2 focus-within:ring-[var(--df-color-focus-ring)]">
+            <label className="mt-2 flex items-center gap-2 rounded-xl border border-df-border bg-df-surface-raised px-3 py-2 focus-within:ring-2 focus-within:ring-[var(--df-color-focus-ring)]">
               <Search size={14} className="shrink-0 text-df-text-muted" />
               <input
                 type="search"
@@ -300,7 +302,7 @@ export default function Sidebar({
               <div className="flex items-center gap-1.5 px-2 text-[9px] font-bold text-df-text-muted">
                 <Filter size={11} /> Priority
               </div>
-              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+              <div className={`mt-1.5 grid ${priorityGridClass} gap-1.5`}>
                 {priorityOptions.map((option) => {
                   const active = selectedPriority === option.value;
                   return (
@@ -309,7 +311,7 @@ export default function Sidebar({
                       type="button"
                       onClick={() => setSelectedPriority(option.value)}
                       aria-pressed={active}
-                      className={`flex min-w-0 items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-[9px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)] ${
+                      className={`flex min-w-0 items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-[9px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)] ${
                         active
                           ? 'border-[var(--df-color-border-strong)] bg-df-surface-muted text-df-text'
                           : 'border-df-border bg-df-surface-raised text-df-text-muted hover:bg-df-surface-muted hover:text-df-text'
@@ -326,7 +328,7 @@ export default function Sidebar({
             {allTags.length > 0 && (
               <div className="mt-3">
                 <p className="px-2 text-[9px] font-bold text-df-text-muted">Tags</p>
-                <div className="mt-1.5 flex max-h-28 flex-wrap gap-1.5 overflow-y-auto px-0.5 py-0.5">
+                <div className="mt-1.5 flex max-h-32 flex-wrap gap-1.5 overflow-y-auto px-0.5 py-0.5">
                   <button
                     type="button"
                     onClick={() => setSelectedTag('all')}
@@ -342,9 +344,9 @@ export default function Sidebar({
                       onClick={() => setSelectedTag(tag)}
                       aria-pressed={selectedTag === tag}
                       title={`${tag} (${count})`}
-                      className={`flex max-w-full items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold ${selectedTag === tag ? 'border-[var(--df-color-border-strong)] bg-df-surface-muted text-df-text' : 'border-df-border bg-df-surface-raised text-df-text-muted'}`}
+                      className={`flex min-w-0 max-w-full items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold ${selectedTag === tag ? 'border-[var(--df-color-border-strong)] bg-df-surface-muted text-df-text' : 'border-df-border bg-df-surface-raised text-df-text-muted'}`}
                     >
-                      <span className="max-w-[140px] truncate">{tag}</span>
+                      <span className="min-w-0 truncate">{tag}</span>
                       <span className="shrink-0 font-mono opacity-70">{count}</span>
                     </button>
                   ))}
@@ -368,12 +370,12 @@ export default function Sidebar({
         )}
       </div>
 
-      <div className="border-t border-df-border p-3">
+      <div className="border-t border-df-border px-2.5 py-2">
         <button
           type="button"
           onClick={onOpenSettings}
           title="Settings"
-          className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left text-[10px] font-extrabold text-df-text-muted transition-colors hover:border-df-border hover:bg-df-surface-muted hover:text-df-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+          className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2 text-left text-[10px] font-extrabold text-df-text-muted transition-colors hover:border-df-border hover:bg-df-surface-muted hover:text-df-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
         >
           <Settings size={15} />
           <span>Settings</span>

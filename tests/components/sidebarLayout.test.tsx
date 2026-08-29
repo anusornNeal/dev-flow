@@ -51,15 +51,33 @@ test('expanded sidebar uses persisted width and exposes an accessible horizontal
   assert.match(html, /aria-label="Collapse sidebar"/);
 });
 
-test('navigation exposes one aria-current destination and keeps long project/filter labels truncatable', () => {
+test('navigation exposes one aria-current destination and lets long labels use available width', () => {
   const html = renderSidebar({ activePage: 'previews' });
   assert.equal((html.match(/aria-current="page"/g) || []).length, 1);
   assert.match(html, /UI Previews/);
 
   const source = fs.readFileSync('src/components/Sidebar.tsx', 'utf8');
   assert.match(source, /title=\{activeProject\?\.name\}/);
-  assert.match(source, /max-w-\[140px\] truncate/);
+  assert.doesNotMatch(source, /max-w-\[140px\]/);
+  assert.match(source, /min-w-0 truncate/);
   assert.match(source, /Board filters are scoped to Sprint Board/);
+});
+
+test('priority filters stack at the minimum sidebar width and return to two columns at the default width', () => {
+  const narrowHtml = renderSidebar({ width: 240 });
+  const defaultHtml = renderSidebar({ width: 288 });
+  assert.match(narrowHtml, /grid grid-cols-1 gap-1\.5/);
+  assert.match(defaultHtml, /grid grid-cols-2 gap-1\.5/);
+  assert.match(narrowHtml, /All priorities/);
+});
+
+test('shared interaction CSS gives enabled click targets a pointer while preserving disabled semantics', () => {
+  const css = fs.readFileSync('src/index.css', 'utf8');
+  assert.match(css, /button:not\(:disabled\)/);
+  assert.match(css, /\.df-button:not\(\[aria-disabled="true"\]\)/);
+  assert.match(css, /cursor: pointer/);
+  assert.match(css, /:where\(button, input, textarea, select\):disabled/);
+  assert.match(css, /cursor: not-allowed/);
 });
 
 test('sidebar keeps global Board/Preview navigation without resurrecting Atlas state', () => {

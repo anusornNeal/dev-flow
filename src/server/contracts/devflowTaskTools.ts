@@ -263,7 +263,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/sync-git`, { responseMode: responseMode || 'summary' }), body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'submit_task_for_review', description: 'Evaluate review readiness and submit only when the review-specific checklist, verification, branch, clean-tree, and publication requirements are satisfied. Readiness gaps are returned as structured reasons for this review operation; they are quality debt, not global lifecycle authority over DONE reconciliation.',
+    name: 'submit_task_for_review', description: 'Optional human/reviewer workflow: evaluate review readiness and submit only when the task is deliberately being routed for review. Review-specific checklist, verification, branch, clean-tree, and publication requirements apply to this operation; readiness gaps are quality debt, not managed lifecycle authority and are not a prerequisite for authoritative finalization to DONE.',
     inputSchema: {
       type: 'object', properties: {
         ...taskIdentifierProperty,
@@ -306,12 +306,12 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
-    name: 'move_task_status', description: 'Move a task to a new lane/status while preserving hard ownership and operation-safety constraints. Checklist, verification, publication, and other quality/readiness debt do not require manualOverride merely to reconcile lifecycle status; manualOverride remains only for exceptional bypassable safety gates.',
+    name: 'move_task_status', description: 'Move a task to a new board/manual workflow lane while preserving hard ownership and operation-safety constraints. The status graph is board workflow policy, not managed execution lifecycle authority. Checklist, verification, publication, and other quality/readiness debt do not require manualOverride merely to reconcile lifecycle status; manualOverride remains only for exceptional bypassable safety gates.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, status: { type: 'string', enum: VALID_STATUSES }, ...booleanFlagSchema.properties, ...manualMoveOverrideProperties, ...mutationResponseModeProperty }, required: ['taskId', 'status'] }, outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move`, { responseMode: responseMode || 'summary' }), body: body.manualOverride ? { ...body, intent: 'manual' } : body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'move_task_to_status', description: 'Move a task to a target status by following the allowed transition path automatically. Quality/readiness debt may coexist with terminal status and is reported separately; hard ownership, pending-operation, dependency, and other material safety constraints remain authoritative. manualOverride is reserved for exceptional bypassable safety gates.',
+    name: 'move_task_to_status', description: 'Move a task through the allowed board/manual transition path to a target status. This transition path is workflow policy, not a prerequisite chain for managed finalization. Quality/readiness debt may coexist with terminal status and is reported separately; hard ownership, pending-operation, dependency, and other material safety constraints remain authoritative. manualOverride is reserved for exceptional bypassable safety gates.',
     inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, status: { type: 'string', enum: VALID_STATUSES }, ...booleanFlagSchema.properties, ...manualMoveOverrideProperties, ...mutationResponseModeProperty }, required: ['taskId', 'status'] }, outputSchema: { type: 'object' },
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move-to`, { responseMode: responseMode || 'summary' }), body: body.manualOverride ? { ...body, intent: 'manual' } : body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },

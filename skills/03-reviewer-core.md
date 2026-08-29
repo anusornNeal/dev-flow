@@ -3,6 +3,8 @@
 ## Purpose
 This is the canonical ChatGPT policy for reviewing DevFlow cards in `ready-for-review` and for handling review defects on existing tasks. Compatibility reviewer documents are non-authoritative.
 
+`ready-for-review` is an optional human/reviewer workflow lane, not a prerequisite for managed execution finalization. Managed execution may reach `done` directly from authoritative finalization evidence; this reviewer policy applies only when work is deliberately routed into `ready-for-review`.
+
 `ready-for-review` means the implementation needs real inspection. A reviewer must evaluate the actual work and either complete the card or return it to implementation with precise current guidance.
 
 ## Core rule

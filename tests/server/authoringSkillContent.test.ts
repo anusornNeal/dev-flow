@@ -96,6 +96,8 @@ test('03 is the canonical reviewer and the legacy reviewer is only a compatibili
   assert.match(reviewerCore, /open_task_bug/);
   assert.match(reviewerCore, /Latest explicit user|latest explicit user/i);
   assert.match(reviewerCore, /repository implementation|implementation evidence/i);
+  assert.match(reviewerCore, /optional human\/reviewer workflow lane/i);
+  assert.match(reviewerCore, /managed execution[\s\S]*done[\s\S]*directly/i);
 
   assert.equal(Buffer.byteLength(legacyReviewer) <= 2_000, true, `legacy reviewer should be a thin pointer, got ${Buffer.byteLength(legacyReviewer)}`);
   assert.match(legacyReviewer, /compatibility/i);
@@ -174,6 +176,8 @@ test('07 owns implementation, verification, task workspace lifecycle, and termin
   assert.match(executionSkill, /authoritative GREEN[\s\S]*DevFlow-owned|DevFlow-owned[\s\S]*authoritative GREEN/i);
   assert.match(executionSkill, /verification-only[\s\S]*non-autonomous|non-autonomous[\s\S]*verification-only/i);
   assert.match(executionSkill, /structured attention|structured[\s\S]*recovery/i);
+  assert.match(executionSkill, /does not require `submit_task_for_review`/i);
+  assert.match(executionSkill, /ready-for-review[\s\S]*only when[\s\S]*(?:human|reviewer)/i);
 });
 
 test('08 owns only board orchestration and delegates implementation policy to 07', () => {

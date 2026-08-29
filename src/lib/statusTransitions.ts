@@ -1,5 +1,6 @@
 import { TaskStatus } from '../types';
 
+// Board/manual workflow policy only. Managed execution finalization may project authoritative terminal evidence directly to DONE without walking this graph.
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   'backlog': ['todo'],
   'todo': ['backlog', 'in-progress'],

@@ -68,3 +68,15 @@ test('MCP move tools describe readiness debt separately from lifecycle status au
     assert.equal((overrideRequest.body as any).intent, 'manual');
   }
 });
+
+test('board status tools keep ready-for-review as workflow policy rather than managed lifecycle authority', () => {
+  const submit = getToolDefinitionByName('submit_task_for_review')!;
+  assert.match(submit.description, /optional human\/reviewer workflow/i);
+  assert.match(submit.description, /not a prerequisite.*finalization.*DONE/i);
+
+  for (const name of ['move_task_status', 'move_task_to_status']) {
+    const tool = getToolDefinitionByName(name)!;
+    assert.match(tool.description, /board\/manual|workflow policy/i);
+    assert.match(tool.description, /not .*managed.*lifecycle|not a prerequisite chain.*managed finalization/i);
+  }
+});

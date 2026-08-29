@@ -65,6 +65,8 @@ For continue-until-terminal intent, the authoritative final verification is the 
 
 Once authoritative GREEN verification accepts that terminal handoff, deterministic closure is DevFlow-owned: task-owned commit, repository-policy integration/finalization, any required post-integration verification, safe cleanup, and DONE continue without another reasoning-agent mutation call. GREEN verification, a clean commit, pending finalization, or cleanup are not response boundaries after autonomous-tail admission. Resume reasoning only for structured attention or recovery.
 
+Managed closure does not require `submit_task_for_review` or a synthetic `ready-for-review` transition before `done`. Route work to `ready-for-review` only when human/reviewer inspection or an explicit review/publication workflow is actually intended.
+
 Ordinary verification-only, investigation, debugging, or evidence-gathering commands that do not carry terminal completion intent remain non-autonomous and must not unexpectedly commit or finalize work. Failed or stale verification, ownership ambiguity, conflicts, unsafe drift, and cleanup impossibility still stop in structured attention rather than forcing completion.
 
 If no autonomous tail was admitted, or continuation explicitly requires manual recovery, prefer `finalize_task_workspace` as the fallback local terminal flow after the claimed workspace is clean, committed, and required checks pass. It owns repository-policy integration, evidence synchronization, task completion, and safe workspace cleanup when eligible.

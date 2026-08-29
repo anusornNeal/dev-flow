@@ -86,28 +86,70 @@ function resolveWorkflowHealthResponseMode(args: Record<string, any>): WorkflowH
   return 'full';
 }
 
-function compactFailureGroups(groups: Array<{ toolName: string; count: number; statuses: string[]; examples: any[] }>) {
-  return groups.map(({ toolName, count, statuses }) => ({ toolName, count, statuses }));
+type FailedJobRecoveryGroup = {
+  toolName: string;
+  recoveryCategory: string;
+  recoveryStrategy: string;
+  count: number;
+  statuses: string[];
+  examples: any[];
+};
+
+function compactFailureGroups(groups: FailedJobRecoveryGroup[]) {
+  return groups.map(({ toolName, recoveryCategory, recoveryStrategy, count, statuses }) => ({
+    toolName,
+    recoveryCategory,
+    recoveryStrategy,
+    count,
+    statuses,
+  }));
 }
 
 function summarizeFailedJobGroups(failures: any[]) {
-  const groups = new Map<string, { toolName: string; count: number; statuses: string[]; examples: any[] }>();
+  const groups = new Map<string, FailedJobRecoveryGroup>();
   for (const failure of failures) {
     const toolName = String(failure?.toolName || 'unknown');
-    const group = groups.get(toolName) || { toolName, count: 0, statuses: [], examples: [] };
+    const recoveryCategory = String(failure?.recovery?.category || 'terminal');
+    const recoveryStrategy = String(failure?.recovery?.strategy || 'stop');
+    const key = `${toolName}\u0000${recoveryCategory}\u0000${recoveryStrategy}`;
+    const group = groups.get(key) || {
+      toolName,
+      recoveryCategory,
+      recoveryStrategy,
+      count: 0,
+      statuses: [],
+      examples: [],
+    };
     group.count += 1;
     const status = String(failure?.status || '').trim();
     if (status && !group.statuses.includes(status)) group.statuses.push(status);
     if (group.examples.length < 3) {
+      const recovery = failure?.recovery && typeof failure.recovery === 'object' ? {
+        code: failure.recovery.code,
+        category: failure.recovery.category,
+        strategy: failure.recovery.strategy,
+        retrySamePayload: failure.recovery.retrySamePayload === true,
+        autoApply: failure.recovery.autoApply === true,
+        requiresFreshSource: failure.recovery.requiresFreshSource === true,
+        requiresFreshPreview: failure.recovery.requiresFreshPreview === true,
+        guidance: String(failure.recovery.guidance || '').slice(0, 500),
+      } : undefined;
       group.examples.push({
         jobId: failure?.jobId,
         status: failure?.status,
-        failureSummary: failure?.failureSummary || '',
+        failureSummary: String(failure?.failureSummary || '').slice(0, 500),
+        ...(failure?.errorCode ? { errorCode: failure.errorCode } : {}),
+        ...(recovery ? { recovery } : {}),
+        recoveryClassification: failure?.recoveryClassification,
       });
     }
-    groups.set(toolName, group);
+    groups.set(key, group);
   }
-  return Array.from(groups.values()).sort((left, right) => right.count - left.count);
+  return Array.from(groups.values()).sort((left, right) =>
+    right.count - left.count
+    || left.toolName.localeCompare(right.toolName)
+    || left.recoveryCategory.localeCompare(right.recoveryCategory)
+    || left.recoveryStrategy.localeCompare(right.recoveryStrategy));
 }
 
 export const CHATGPT_HARNESS_HEALTH_VERSION = 'chatgpt-harness-health.v2' as const;

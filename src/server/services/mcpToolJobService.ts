@@ -1405,12 +1405,20 @@ export function getQueueMetrics() {
       waitTelemetry: summarizeQueueWaitTelemetry(),
       phaseTelemetry: summarizeJobPhaseTelemetry(),
       durable,
-      failures: failedJobs.slice(0, 10).map(job => ({
-        jobId: job.jobId,
-        toolName: job.toolName,
-        status: job.status,
-        failureSummary: job.failureSummary || getLastLog(job.jobId).slice(-500)
-      }))
+      failures: failedJobs.slice(0, 10).map(job => {
+        const structuredErrorCode = getTerminalJobErrorCode(job.jobId);
+        const errorCode = structuredErrorCode || (job.status === 'timed_out' ? 'JOB_TIMED_OUT' : undefined);
+        const recovery = recoveryPolicyForJobStatus(job.status, errorCode);
+        return {
+          jobId: job.jobId,
+          toolName: job.toolName,
+          status: job.status,
+          failureSummary: job.failureSummary || getLastLog(job.jobId).slice(-500),
+          ...(errorCode ? { errorCode } : {}),
+          ...(recovery ? { recovery } : {}),
+          recoveryClassification: job.recoveryClassification,
+        };
+      })
     },
     recentJobs: recentJobs.map(buildJobSummary).filter(Boolean)
   };

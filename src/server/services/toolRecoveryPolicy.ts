@@ -178,6 +178,6 @@ export function recoveryPolicyForJobStatus(status: string, errorCode?: string) {
   if (status === 'queued') return getToolRecoveryPolicy('JOB_QUEUED');
   if (status === 'running') return getToolRecoveryPolicy('JOB_RUNNING');
   if (status === 'timed_out') return getToolRecoveryPolicy(errorCode || 'JOB_TIMED_OUT');
-  if (status === 'failed' && errorCode) return getToolRecoveryPolicy(errorCode);
+  if (status === 'failed') return getToolRecoveryPolicy(errorCode);
   return null;
 }

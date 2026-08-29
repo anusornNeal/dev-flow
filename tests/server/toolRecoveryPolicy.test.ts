@@ -64,6 +64,20 @@ test('unknown and validation failures terminate rather than guessing a recovery'
   }
 });
 
+test('failed job status without a structured code falls back to conservative terminal recovery', async () => {
+  const policy = await loadPolicy();
+  const failed = policy!.recoveryPolicyForJobStatus('failed');
+  assert.equal(failed?.code, 'UNKNOWN_ERROR');
+  assert.equal(failed?.category, 'terminal');
+  assert.equal(failed?.strategy, 'stop');
+  assert.equal(failed?.autoApply, false);
+
+  const timedOut = policy!.recoveryPolicyForJobStatus('timed_out');
+  assert.equal(timedOut?.code, 'JOB_TIMED_OUT');
+  assert.equal(timedOut?.category, 'automatic');
+  assert.equal(timedOut?.strategy, 'narrow-scope-or-increase-timeout');
+});
+
 test('recovery budget stops at max steps and detects same-payload strategy loops', async () => {
   const policy = await loadPolicy();
   assert.equal(typeof policy?.evaluateRecoveryAttempt, 'function');

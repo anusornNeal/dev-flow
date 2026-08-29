@@ -42,6 +42,8 @@ const {
   claimJob,
   requeueJobForRecovery,
   requestJobCancellation,
+  writeJobResult,
+  getJob,
 } = await import('../../src/server/repositories/mcpToolJobRepository.js');
 
 function git(root: string, args: string[]) {
@@ -834,6 +836,50 @@ test('getWorkflowHealth groups failed tool jobs by tool name', () => {
   assert.equal(result.diagnostics.failedJobGroups[0].toolName, 'run_project_command');
   assert.equal(result.diagnostics.failedJobGroups[0].count >= 1, true);
   assert.match(result.recommendations.join('\n'), /run_project_command/);
+});
+
+test('workflow health groups failed durable jobs by existing recovery category and strategy without mutating them', () => {
+  const repo = createRepo('failed-tool-recovery-policy');
+  const jobs = [
+    { id: 'job-health-policy-fallback', status: 'failed', code: 'SEARCH_BACKEND_UNAVAILABLE', summary: 'search backend unavailable' },
+    { id: 'job-health-policy-invalid', status: 'failed', code: 'INVALID_ARGS', summary: 'invalid request' },
+    { id: 'job-health-policy-timeout', status: 'timed_out', code: undefined, summary: 'timed out' },
+    { id: 'job-health-policy-unknown', status: 'failed', code: 'SOMETHING_NEW', summary: 'unknown structured failure' },
+    { id: 'job-health-policy-prose-only', status: 'failed', code: undefined, summary: 'SEARCH_BACKEND_UNAVAILABLE appears only in prose' },
+  ] as const;
+
+  for (const job of jobs) {
+    createJob(job.id, 'search_local_files', { query: job.id }, `repo:${repo}`);
+    if (job.code) writeJobResult(job.id, { error: { code: job.code } });
+    updateJobStatus(job.id, { status: job.status, failureSummary: job.summary });
+  }
+  const beforeStatuses = jobs.map((job) => getJob(job.id)?.status);
+
+  const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' });
+  const groups = full.diagnostics.failedJobGroups.filter((group: any) => group.toolName === 'search_local_files');
+  const strategies = new Set(groups.map((group: any) => `${group.recoveryCategory}:${group.recoveryStrategy}`));
+  assert.equal(strategies.has('automatic:fallback-search'), true);
+  assert.equal(strategies.has('automatic:narrow-scope-or-increase-timeout'), true);
+  assert.equal(strategies.has('terminal:stop'), true);
+
+  const examples = groups.flatMap((group: any) => group.examples || []);
+  const fallback = examples.find((example: any) => example.jobId === 'job-health-policy-fallback');
+  assert.equal(fallback?.errorCode, 'SEARCH_BACKEND_UNAVAILABLE');
+  assert.equal(fallback?.recovery?.strategy, 'fallback-search');
+  assert.equal(fallback?.recoveryClassification, getJob('job-health-policy-fallback')?.recoveryClassification);
+  const timeout = examples.find((example: any) => example.jobId === 'job-health-policy-timeout');
+  assert.equal(timeout?.errorCode, 'JOB_TIMED_OUT');
+  assert.equal(timeout?.recovery?.strategy, 'narrow-scope-or-increase-timeout');
+  const proseOnly = examples.find((example: any) => example.jobId === 'job-health-policy-prose-only');
+  assert.equal(proseOnly?.errorCode, undefined);
+  assert.equal(proseOnly?.recovery?.category, 'terminal');
+  assert.equal(proseOnly?.recovery?.strategy, 'stop');
+  assert.deepEqual(jobs.map((job) => getJob(job.id)?.status), beforeStatuses, 'health inspection must not mutate jobs');
+
+  const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' });
+  const compactGroups = compact.failures.groups.filter((group: any) => group.toolName === 'search_local_files');
+  assert.equal(compactGroups.some((group: any) => group.recoveryStrategy === 'fallback-search'), true);
+  assert.equal(compactGroups.every((group: any) => !('examples' in group)), true);
 });
 
 test('workflow health exposes durable stale job state even when no in-memory runner owns it', () => {

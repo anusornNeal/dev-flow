@@ -1,63 +1,62 @@
 // DVF-0685: finalization reuses authoritative coverage when relevant inputs remain unchanged.
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import type { AppState } from '../types.js';
 import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
 import { getProject } from '../repositories/projectRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import {
-  createTaskFinalizationOperation,
   getLatestTaskFinalizationOperation,
   getTaskFinalizationOperation,
-  updateTaskFinalizationOperation,
   type TaskFinalizationOperationRecord,
 } from '../repositories/taskFinalizationOperationRepository.js';
 import { createApiError } from './api.js';
 import { normalizeVerificationEvidence } from './taskGitWorkflowService.js';
 import { projectTaskCompletionAfterFinalization, terminalizeTaskExecutionForFinalization } from './taskClaimService.js';
-import { cleanupSessionWorkspace, createRevisionVerificationWorkspace, getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
+import { cleanupSessionWorkspace, getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
-import { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration, type WorkspaceIntegrationSuccess } from './workspaceIntegrationService.js';
+import { reconstructRecordedWorkspaceIntegration, type WorkspaceIntegrationSuccess } from './workspaceIntegrationService.js';
 import { loadProjectVerificationImpactRules } from './projectCommandConfigService.js';
-import { inspectProjectVerificationPresets, runProjectCommand, type RunProjectCommandResult } from './projectCommandService.js';
-import { planVerification, type VerificationImpactCheck, type VerificationPlan } from './verificationPlannerService.js';
-import {
-  getExecutionOwnershipState,
-  getExecutionSessionOwnershipEpoch,
-} from './executionSessionService.js';
-import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
-import { buildTaskCommitPlan, commitTaskOwnedChanges, resolveTaskVerificationCoverage, type TaskVerificationCoverageResolution } from './taskCommitPlanService.js';
+import type { VerificationPlan } from './verificationPlannerService.js';
+import { getExecutionOwnershipState } from './executionSessionService.js';
+import { resolveTaskVerificationCoverage, type TaskVerificationCoverageResolution } from './taskCommitPlanService.js';
 import { summarizeQualityDebt, type TaskQualityDebtSummary } from './qualityDebtService.js';
 import { withSyncLock } from './lockAndIdempotencyService.js';
-import { evaluateExecutionContinuation } from './executionContinuationService.js';
-import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { assertTaskPrerequisitesSatisfied } from './taskDependencyService.js';
+import {
+  evaluatePostIntegrationRequirement,
+  executeRevisionBoundPostIntegrationVerification,
+  planCombinedVerification,
+  type PostIntegrationRequirement,
+  type TaskWorkspaceFinalizationCheck,
+} from './taskWorkspaceFinalizationVerificationService.js';
+import {
+  assertOperationStillBound,
+  executionContinuationForOperation,
+  freezeDetachedIntegratedFinalizationOperation,
+  freezeNewFinalizationOperation,
+  isDetachedIntegratedOperation,
+  operationContinuation,
+  operationFailure,
+  recoverRecordedIntegration,
+  updateOperation,
+  type DetachedIntegratedFinalizationEvidence,
+} from './taskWorkspaceFinalizationOperationService.js';
+import {
+  runTaskWorkspaceHappyPathTailWithFinalizer,
+  type TaskWorkspaceHappyPathTailInput,
+  type TaskWorkspaceHappyPathTailVerificationRunner,
+} from './taskWorkspaceHappyPathTailService.js';
 
-export type TaskWorkspaceFinalizationCheck = {
-  name?: string;
-  command: string;
-  targets?: string[];
-  status: 'passed' | 'failed' | 'not-run';
-  scope?: 'targeted' | 'broad' | 'full';
-  repoRevision?: string;
-  summary?: string;
-  output?: string;
-  recordedAt?: string;
-  failureKind?: 'timeout' | 'command-failed' | 'command-error' | 'workspace-setup';
-};
-
-export type DetachedIntegratedFinalizationEvidence = {
-  sourceHead: string;
-  baseRevision: string;
-  baseBranch: string;
-  executionSessionId: string | null;
-  ownershipEpochId: string | null;
-  candidateId?: string | null;
-  candidateRepoRevision?: string | null;
-  ownedFingerprint?: string | null;
-  integration: WorkspaceIntegrationSuccess;
-};
-
+export {
+  __classifyPostIntegrationCommandResultForTests,
+  __evaluatePostIntegrationRequirementForTests,
+} from './taskWorkspaceFinalizationVerificationService.js';
+export type { TaskWorkspaceFinalizationCheck } from './taskWorkspaceFinalizationVerificationService.js';
+export type { DetachedIntegratedFinalizationEvidence } from './taskWorkspaceFinalizationOperationService.js';
+export type {
+  TaskWorkspaceHappyPathTailInput,
+  TaskWorkspaceHappyPathTailVerificationRequest,
+} from './taskWorkspaceHappyPathTailService.js';
 export type OwnerBreakGlassFinalizationAuthority = {
   operationId: string;
   reason: string;
@@ -74,24 +73,6 @@ export type TaskWorkspaceFinalizationInput = {
   detachedIntegrated?: DetachedIntegratedFinalizationEvidence;
   ownerBreakGlass?: OwnerBreakGlassFinalizationAuthority;
   deferPostIntegrationVerification?: boolean;
-};
-
-type PostIntegrationRequirement = {
-  required: boolean;
-  reason: string;
-  repoRevision: string;
-  requiredCommands: string[];
-  missingCommands: string[];
-  requiredChecks: VerificationImpactCheck[];
-  missingChecks: VerificationImpactCheck[];
-  broadEvidenceRequired: boolean;
-  requiredScope: 'targeted' | 'broad-or-full';
-  baseAdvanced: boolean;
-  nextAction: {
-    action: 'RUN_POST_INTEGRATION_VERIFICATION_AND_RETRY';
-    tool: 'finalize_task_workspace';
-    bindChecksToRepoRevision: true;
-  };
 };
 
 function normalizeOwnerBreakGlassAuthority(value: unknown): OwnerBreakGlassFinalizationAuthority | null {
@@ -212,249 +193,6 @@ function localOnlyEvidence(task: any, baseBranch: string, commit: string, checks
   };
   return { gitEvidence, verificationEvidence, task: { ...task, gitEvidence, verificationEvidence, updatedAt: recordedAt } };
 }
-
-function planCombinedVerification(
-  state: AppState,
-  projectId: string,
-  integration: WorkspaceIntegrationSuccess,
-  checks: TaskWorkspaceFinalizationCheck[],
-  impactRules: ReturnType<typeof loadProjectVerificationImpactRules>,
-  coverageCommands: string[] = [],
-) {
-  const requestedCommands = Array.from(new Set([
-    ...checks.map((check) => String(check.command || '').trim()),
-    ...coverageCommands.map((command) => String(command || '').trim()),
-    ...impactRules.flatMap((rule) => rule.commands.map((command) => String(command || '').trim())),
-  ].filter(Boolean)));
-  const inspection = inspectProjectVerificationPresets(state, { projectId });
-  const requestedCommandSet = new Set(requestedCommands);
-  const resolvedCommands = Array.isArray(inspection?.presets) ? inspection.presets.filter((preset: any) => requestedCommandSet.has(String(preset?.command || ''))).map((preset: any) => ({
-    command: preset.command,
-    semanticKey: preset.semanticKey,
-    scope: preset.scope,
-    cost: preset.cost,
-    resourceKey: preset.resourceKey,
-    verificationClass: preset.verificationClass,
-    sharedResources: Array.isArray(preset.sharedResources) ? [...preset.sharedResources] : [],
-    acceptsTargets: preset.acceptsTargets === true,
-  })) : [];
-  const sourcePlan = planVerification({
-    changedFiles: integration.changedFiles,
-    requestedCommands,
-    resolvedCommands,
-    impactRules,
-  });
-  const combinedPlan = planVerification({
-    changedFiles: integration.combinedChangedFiles,
-    requestedCommands,
-    resolvedCommands,
-    impactRules,
-  });
-  return { sourcePlan, combinedPlan };
-}
-
-function normalizeVerificationTargets(targets: unknown) {
-  return Array.from(new Set((Array.isArray(targets) ? targets : []).map((target) => String(target || '').replace(/\\/g, '/').replace(/^\.\//, '').trim()).filter(Boolean))).sort();
-}
-
-function verificationRequirementLabel(check: VerificationImpactCheck) {
-  const targets = normalizeVerificationTargets(check.targets);
-  return targets.length > 0 ? `${check.command} ${targets.join(' ')}` : check.command;
-}
-
-function verificationCheckMatchesRequirement(check: TaskWorkspaceFinalizationCheck, requirement: VerificationImpactCheck) {
-  if (String(check.command || '').trim() !== requirement.command) return false;
-  const requiredTargets = normalizeVerificationTargets(requirement.targets);
-  if (requiredTargets.length === 0) return true;
-  const actualTargets = normalizeVerificationTargets(check.targets);
-  return actualTargets.length === requiredTargets.length && actualTargets.every((target, index) => target === requiredTargets[index]);
-}
-
-type PostIntegrationCommandFailureKind = NonNullable<TaskWorkspaceFinalizationCheck['failureKind']>;
-
-function classifyPostIntegrationCommandResult(result: Pick<RunProjectCommandResult, 'ok' | 'status' | 'timedOut' | 'exitCode'>): PostIntegrationCommandFailureKind | null {
-  if (result.ok) return null;
-  if (result.timedOut || result.status === 'timed_out') return 'timeout';
-  return 'command-failed';
-}
-
-export function __classifyPostIntegrationCommandResultForTests(result: Pick<RunProjectCommandResult, 'ok' | 'status' | 'timedOut' | 'exitCode'>) {
-  return classifyPostIntegrationCommandResult(result);
-}
-
-
-function evaluatePostIntegrationRequirement(
-  integration: WorkspaceIntegrationSuccess,
-  checks: TaskWorkspaceFinalizationCheck[],
-  sourcePlan: VerificationPlan,
-  combinedPlan: VerificationPlan,
-  coverage: TaskVerificationCoverageResolution | null = null,
-): PostIntegrationRequirement {
-  const baseAdvanced = integration.baseHeadBefore !== integration.baseRevision;
-  const planEscalated = combinedPlan.risk !== sourcePlan.risk
-    || combinedPlan.lane !== sourcePlan.lane
-    || combinedPlan.requiresBroadVerify !== sourcePlan.requiresBroadVerify
-    || combinedPlan.commands.some((command) => !sourcePlan.commands.includes(command));
-  const required = baseAdvanced || combinedPlan.risk === 'high' || planEscalated;
-  const revision = integration.baseHeadAfter;
-  const revisionChecks = checks.filter((check) => String(check.repoRevision || '').trim() === revision);
-  const revisionBound = revisionChecks.filter((check) => check.status === 'passed');
-  const revisionAttempts = revisionChecks.filter((check) => check.status !== 'not-run');
-  const hasFullEvidence = revisionBound.some((check) => check.scope === 'full');
-  const hasBroadEvidence = hasFullEvidence || revisionBound.some((check) => check.scope === 'broad');
-  const broadEvidenceRequired = combinedPlan.requiresBroadVerify;
-  const reusableCommands = new Set(coverage?.status === 'covered' && coverage.reusable ? coverage.coveredCommands : []);
-  const requiredChecks: VerificationImpactCheck[] = combinedPlan.steps.map((step) => ({
-    command: step.command,
-    ...(step.targets?.length ? { targets: normalizeVerificationTargets(step.targets) } : {}),
-  }));
-  let missingChecks = hasFullEvidence
-    ? []
-    : requiredChecks.filter((requirement) => {
-        if (revisionBound.some((check) => verificationCheckMatchesRequirement(check, requirement))) return false;
-        return normalizeVerificationTargets(requirement.targets).length > 0 || !reusableCommands.has(requirement.command);
-      });
-  const reusableCoverageSatisfied = coverage?.status === 'covered'
-    && coverage.reusable
-    && missingChecks.length === 0
-    && (requiredChecks.length === 0 || requiredChecks.every((requirement) => {
-      if (revisionBound.some((check) => verificationCheckMatchesRequirement(check, requirement))) return true;
-      return normalizeVerificationTargets(requirement.targets).length === 0 && reusableCommands.has(requirement.command);
-    }));
-  if (required && broadEvidenceRequired && !hasBroadEvidence && !reusableCoverageSatisfied && missingChecks.length === 0 && requiredChecks.length > 0) {
-    missingChecks = [requiredChecks.find((requirement) => normalizeVerificationTargets(requirement.targets).length === 0) || requiredChecks[0]];
-  }
-  const requiredCommands = requiredChecks.map(verificationRequirementLabel);
-  const missingCommands = missingChecks.map(verificationRequirementLabel);
-  const noCommandsRequired = requiredChecks.length === 0;
-  const evidenceSatisfied = !required
-    || (!broadEvidenceRequired && noCommandsRequired)
-    || (missingCommands.length === 0
-      && (reusableCoverageSatisfied || (broadEvidenceRequired ? hasBroadEvidence : revisionBound.length > 0)));
-
-  let reason = 'Pre-integration evidence remains valid for the integrated state.';
-  if (required && revisionAttempts.some((check) => check.status === 'failed') && missingChecks.length > 0) {
-    reason = `Post-integration verification was attempted at the integrated revision, but these requirements are still non-passing: ${missingCommands.join(', ')}.`;
-  } else if (required && evidenceSatisfied && reusableCoverageSatisfied) reason = 'Reusable authoritative verification coverage remains valid for the integrated affected inputs, dependencies, command configuration, and environment.';
-  else if (required && baseAdvanced) reason = 'The target branch advanced after the workspace base revision and reusable coverage is incomplete, so combined-state verification must be revision-bound to the integrated HEAD.';
-  else if (required && combinedPlan.risk === 'high') reason = 'High-risk combined changes require revision-bound post-integration verification.';
-  else if (required && planEscalated) reason = 'Combined-state impact escalated the verification plan after integration.';
-
-
-  return {
-    required: required && !evidenceSatisfied,
-    reason,
-    repoRevision: revision,
-    requiredCommands,
-    missingCommands,
-    requiredChecks,
-    missingChecks,
-    broadEvidenceRequired,
-    requiredScope: broadEvidenceRequired ? 'broad-or-full' : 'targeted',
-    baseAdvanced,
-    nextAction: {
-      action: 'RUN_POST_INTEGRATION_VERIFICATION_AND_RETRY',
-      tool: 'finalize_task_workspace',
-      bindChecksToRepoRevision: true,
-    },
-  };
-}
-
-
-export function __evaluatePostIntegrationRequirementForTests(input: {
-  integration: WorkspaceIntegrationSuccess;
-  checks: TaskWorkspaceFinalizationCheck[];
-  sourcePlan: VerificationPlan;
-  combinedPlan: VerificationPlan;
-  coverage?: TaskVerificationCoverageResolution | null;
-}) {
-  return evaluatePostIntegrationRequirement(input.integration, input.checks, input.sourcePlan, input.combinedPlan, input.coverage || null);
-}
-
-function executeRevisionBoundPostIntegrationVerification(
-  state: AppState,
-  project: { id: string; localPath?: string | null },
-  operationId: string,
-  requirement: PostIntegrationRequirement,
-) {
-  const checks: TaskWorkspaceFinalizationCheck[] = [];
-  let cleanup: { removed: boolean; cleanupError?: string } = { removed: false };
-  let setup: { status: 'succeeded' | 'failed'; error?: string } = { status: 'succeeded' };
-  let sandbox: ReturnType<typeof createRevisionVerificationWorkspace> | null = null;
-  try {
-    sandbox = createRevisionVerificationWorkspace(project, requirement.repoRevision, operationId);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setup = { status: 'failed', error: message };
-    for (const required of requirement.missingChecks) {
-      const targets = normalizeVerificationTargets(required.targets);
-      checks.push({
-        name: `post-integration: ${verificationRequirementLabel(required)}`,
-        command: required.command,
-        ...(targets.length > 0 ? { targets } : {}),
-        status: 'failed',
-        failureKind: 'workspace-setup',
-        scope: requirement.broadEvidenceRequired ? 'broad' : 'targeted',
-        repoRevision: requirement.repoRevision,
-        summary: `Verify-only workspace setup failed: ${message}`,
-        recordedAt: new Date().toISOString(),
-      });
-    }
-    return { checks, cleanup, repoRevision: requirement.repoRevision, setup };
-  }
-
-  try {
-    for (const required of requirement.missingChecks) {
-      const targets = normalizeVerificationTargets(required.targets);
-      try {
-        const result = runProjectCommand(state, {
-          localPath: sandbox.root,
-          command: required.command,
-          ...(targets.length > 0 ? { targets } : {}),
-          forceFresh: true,
-          responseMode: 'compact',
-        });
-        const failureKind = classifyPostIntegrationCommandResult(result);
-        checks.push({
-          name: `post-integration: ${verificationRequirementLabel(required)}`,
-          command: required.command,
-          ...(targets.length > 0 ? { targets } : {}),
-          status: result.ok ? 'passed' : 'failed',
-          ...(failureKind ? { failureKind } : {}),
-          scope: requirement.broadEvidenceRequired ? 'broad' : 'targeted',
-          repoRevision: sandbox.repoRevision,
-          summary: result.ok
-            ? 'Passed in isolated verify-only workspace at the integrated revision.'
-            : failureKind === 'timeout'
-              ? `Verification timed out after ${result.durationMs}ms.`
-              : `Verification failed with exit code ${result.exitCode ?? 'unknown'}.`,
-          output: [result.stdout, result.stderr].filter(Boolean).join('\n').slice(0, 8000),
-          recordedAt: new Date().toISOString(),
-        });
-      } catch (error) {
-        checks.push({
-          name: `post-integration: ${verificationRequirementLabel(required)}`,
-          command: required.command,
-          ...(targets.length > 0 ? { targets } : {}),
-          status: 'failed',
-          failureKind: 'command-error',
-          scope: requirement.broadEvidenceRequired ? 'broad' : 'targeted',
-          repoRevision: sandbox.repoRevision,
-          summary: error instanceof Error ? error.message : String(error),
-          recordedAt: new Date().toISOString(),
-        });
-      }
-    }
-  } finally {
-    try {
-      cleanup = sandbox.cleanup();
-    } catch (error) {
-      cleanup = { removed: false, cleanupError: error instanceof Error ? error.message : String(error) };
-    }
-  }
-  return { checks, cleanup, repoRevision: sandbox.repoRevision, setup };
-}
-
 export type TaskFinalizationFaultBoundary =
   | 'after-freeze'
   | 'after-integration'
@@ -477,338 +215,6 @@ function injectFinalizationFault(boundary: TaskFinalizationFaultBoundary) {
   error.code = 'TASK_FINALIZATION_FAULT_INJECTED';
   throw error;
 }
-
-function finalizationOperationIdentity(input: {
-  taskId: string;
-  workspaceId: string;
-  executionSessionId: string | null;
-  ownershipEpochId: string | null;
-  sourceHead: string;
-  baseRevision: string;
-  baseBranch: string;
-  candidateId: string | null;
-  candidateRepoRevision: string | null;
-  ownedFingerprint: string | null;
-  completedChecklistIds: string[];
-}) {
-  const digest = crypto.createHash('sha256');
-  for (const value of [
-    input.taskId,
-    input.workspaceId,
-    input.executionSessionId || '',
-    input.ownershipEpochId || '',
-    input.sourceHead,
-    input.baseRevision,
-    input.baseBranch,
-    input.candidateId || '',
-    input.candidateRepoRevision || '',
-    input.ownedFingerprint || '',
-    ...input.completedChecklistIds,
-  ]) {
-    digest.update(String(value));
-    digest.update('\0');
-  }
-  return `finalize-${digest.digest('hex').slice(0, 32)}`;
-}
-
-function operationFailure(error: any, phase: string, boundary?: string) {
-  return {
-    phase,
-    ...(boundary ? { boundary } : {}),
-    code: String(error?.payload?.code || error?.code || 'TASK_FINALIZATION_FAILED').slice(0, 160),
-    message: String(error?.payload?.message || error?.message || 'Task finalization failed.').slice(0, 500),
-    observedAt: new Date().toISOString(),
-  };
-}
-
-function updateOperation(
-  operation: TaskFinalizationOperationRecord,
-  patch: Parameters<typeof updateTaskFinalizationOperation>[1],
-) {
-  return updateTaskFinalizationOperation(operation.id, { ...patch, updatedAt: new Date().toISOString() }) || operation;
-}
-
-function executionContinuationForOperation(state: AppState, operation: TaskFinalizationOperationRecord) {
-  if (!operation.executionSessionId) return null;
-  try {
-    return evaluateExecutionContinuation(state, operation.executionSessionId, { workspaceId: operation.workspaceId });
-  } catch {
-    return null;
-  }
-}
-
-function operationContinuation(
-  state: AppState,
-  operation: TaskFinalizationOperationRecord,
-  code: 'POST_INTEGRATION_FINALIZATION_REQUIRED' | 'POST_INTEGRATION_VERIFICATION_REQUIRED',
-  message: string,
-  context: Record<string, unknown> = {},
-) {
-  return {
-    status: 'continuation' as const,
-    code,
-    message,
-    operation: getTaskFinalizationOperation(operation.id) || operation,
-    ...(executionContinuationForOperation(state, operation) ? { executionContinuation: executionContinuationForOperation(state, operation) } : {}),
-    continuation: {
-      code,
-      operationId: operation.id,
-      phase: (getTaskFinalizationOperation(operation.id) || operation).phase,
-      error: (getTaskFinalizationOperation(operation.id) || operation).failure || undefined,
-      nextAction: {
-        action: 'RETRY_FINALIZE_TASK_WORKSPACE' as const,
-        tool: 'finalize_task_workspace' as const,
-        operationId: operation.id,
-        reintegrate: false as const,
-      },
-    },
-    ...context,
-  };
-}
-
-function assertTaskFinalizationBranchAuthority(task: any, baseBranch: string, workspaceId: string) {
-  const taskBranch = String(task?.branch || '').trim();
-  if (!taskBranch || taskBranch === baseBranch) return;
-  throw createApiError(409, 'TASK_WORKSPACE_BRANCH_AUTHORITY_MISMATCH', `Task '${task.displayId || task.id}' targets '${taskBranch}', but finalization is frozen to '${baseBranch}'.`, {
-    affectedId: task.id,
-    details: { taskBranch, workspaceBaseBranch: baseBranch, workspaceId },
-  });
-}
-
-function freezeNewFinalizationOperation(task: any, workspaceId: string, submittedChecks: TaskWorkspaceFinalizationCheck[], completedChecklistIds: string[]) {
-  const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
-  if (!metadata) throw createApiError(404, 'WORKSPACE_NOT_FOUND', `Workspace '${workspaceId}' was not found.`, { affectedId: workspaceId });
-  if (metadata.projectId !== task.projectId) {
-    throw createApiError(409, 'TASK_WORKSPACE_PROJECT_MISMATCH', 'Task and workspace belong to different projects.', {
-      affectedId: task.id,
-      details: { taskProjectId: task.projectId, workspaceProjectId: metadata.projectId },
-    });
-  }
-  assertTaskFinalizationBranchAuthority(task, metadata.baseBranch, workspaceId);
-
-  const inspection = inspectWorkspaceRecovery(workspaceId);
-  if (inspection.dirtyFiles.length > 0) {
-    return { blocked: { status: 'needs-recovery' as const, code: 'WORKSPACE_DIRTY' as const, inspection } };
-  }
-  if (inspection.disposition === 'stale-registry' || inspection.disposition === 'needs-recovery') {
-    return { blocked: { status: 'needs-recovery' as const, code: 'WORKSPACE_RECOVERY_REQUIRED' as const, inspection } };
-  }
-  const sourceHead = String(inspection.sourceHead || '').trim();
-  if (!sourceHead) throw createApiError(409, 'FINALIZATION_SOURCE_HEAD_REQUIRED', 'A committed source HEAD is required before finalization.', { affectedId: workspaceId });
-
-  const active = listExecutionSessionsForTask(task.id).filter((entry) => entry.status === 'active');
-  const scoped = active.filter((entry) => entry.workspaceId === workspaceId);
-  const foreign = active.filter((entry) => entry.workspaceId !== workspaceId);
-  if (scoped.length > 1 || foreign.length > 0) {
-    throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_AMBIGUOUS', 'Finalization requires one bounded execution authority for the selected workspace.', {
-      affectedId: task.id,
-      details: { workspaceId, scopedExecutionSessionIds: scoped.map((entry) => entry.id), foreignExecutionSessionIds: foreign.map((entry) => entry.id) },
-    });
-  }
-  const execution = scoped[0] || null;
-  const ownershipEpochId = execution
-    ? getExecutionSessionOwnershipEpoch(execution.id).ownershipEpochId
-    : String(task.claim?.ownershipEpochId || '').trim() || null;
-  let authority: ReturnType<typeof computeLifecycleAuthoritySnapshot> | null = null;
-  try {
-    authority = computeLifecycleAuthoritySnapshot(task.id, { workspaceId });
-  } catch {}
-  const candidate = authority?.verification.candidate || null;
-  const frozen = {
-    taskId: task.id,
-    workspaceId,
-    executionSessionId: execution?.id || null,
-    ownershipEpochId: ownershipEpochId || null,
-    sourceHead,
-    baseRevision: metadata.baseRevision,
-    baseBranch: metadata.baseBranch,
-    candidateId: candidate?.candidateId || null,
-    candidateRepoRevision: candidate?.repoRevision || null,
-    ownedFingerprint: authority?.verification.ownedFingerprint || null,
-  };
-  const id = finalizationOperationIdentity({ ...frozen, completedChecklistIds });
-  const now = new Date().toISOString();
-  const operation = createTaskFinalizationOperation({
-    id,
-    projectId: task.projectId,
-    ...frozen,
-    phase: 'frozen',
-    status: 'active',
-    verification: { submittedChecks, completedChecklistIds },
-    createdAt: now,
-    updatedAt: now,
-  });
-  return { operation, metadata, inspection };
-}
-
-function freezeDetachedIntegratedFinalizationOperation(
-  task: any,
-  workspaceId: string,
-  submittedChecks: TaskWorkspaceFinalizationCheck[],
-  completedChecklistIds: string[],
-  detached: DetachedIntegratedFinalizationEvidence,
-) {
-  const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
-  if (metadata && fs.existsSync(metadata.root)) {
-    throw createApiError(409, 'DETACHED_FINALIZATION_LIVE_WORKSPACE', 'Detached integrated finalization is allowed only when the selected managed workspace root is unavailable.', {
-      affectedId: workspaceId,
-    });
-  }
-  const integration = detached.integration;  assertTaskFinalizationBranchAuthority(task, detached.baseBranch, workspaceId);
-
-  if (integration.workspaceId !== workspaceId
-    || integration.sourceHead !== detached.sourceHead
-    || integration.baseRevision !== detached.baseRevision
-    || integration.baseBranch !== detached.baseBranch
-    || integration.status !== 'succeeded'
-    || integration.alreadyIntegrated !== true
-    || integration.patchEquivalent === true) {
-    throw createApiError(409, 'DETACHED_FINALIZATION_EVIDENCE_MISMATCH', 'Detached finalization requires exact already-integrated evidence bound to the selected task/workspace/base revision.', {
-      affectedId: workspaceId,
-      details: { integration },
-    });
-  }
-  const frozen = {
-    taskId: task.id,
-    workspaceId,
-    executionSessionId: detached.executionSessionId || null,
-    ownershipEpochId: detached.ownershipEpochId || null,
-    sourceHead: detached.sourceHead,
-    baseRevision: detached.baseRevision,
-    baseBranch: detached.baseBranch,
-    candidateId: detached.candidateId || null,
-    candidateRepoRevision: detached.candidateRepoRevision || null,
-    ownedFingerprint: detached.ownedFingerprint || null,
-  };
-  const id = finalizationOperationIdentity({ ...frozen, completedChecklistIds });
-  const now = new Date().toISOString();
-  const operation = createTaskFinalizationOperation({
-    id,
-    projectId: task.projectId,
-    ...frozen,
-    phase: 'frozen',
-    status: 'active',
-    integration: integration as any,
-    verification: {
-      submittedChecks,
-      completedChecklistIds,
-      detachedIntegrated: true,
-      detachedEvidence: {
-        sourceHead: detached.sourceHead,
-        baseRevision: detached.baseRevision,
-        baseBranch: detached.baseBranch,
-        executionSessionId: detached.executionSessionId || null,
-        ownershipEpochId: detached.ownershipEpochId || null,
-      },
-    },
-    createdAt: now,
-    updatedAt: now,
-  });
-  return { operation };
-}
-
-function isDetachedIntegratedOperation(operation: TaskFinalizationOperationRecord | null | undefined) {
-  return operation?.verification?.detachedIntegrated === true;
-}
-
-function assertOperationStillBound(operation: TaskFinalizationOperationRecord, task: any, metadata: ReturnType<typeof getSessionWorkspaceMetadataForRecovery>) {  assertTaskFinalizationBranchAuthority(task, operation.baseBranch, operation.workspaceId);
-
-  if (operation.taskId !== task.id || operation.projectId !== task.projectId) {
-    throw createApiError(409, 'FINALIZATION_OPERATION_TASK_MISMATCH', 'Finalization operation is bound to another task/project.', {
-      affectedId: operation.id,
-      details: { operationTaskId: operation.taskId, taskId: task.id },
-    });
-  }
-  if (metadata) {
-    if (metadata.projectId !== operation.projectId || metadata.baseBranch !== operation.baseBranch) {
-      throw createApiError(409, 'FINALIZATION_OPERATION_WORKSPACE_MISMATCH', 'Finalization workspace/project/base binding changed after the operation was frozen.', {
-        affectedId: operation.id,
-        details: { workspaceId: operation.workspaceId, baseBranch: operation.baseBranch },
-      });
-    }
-    if (operation.phase === 'frozen') {
-      const inspection = inspectWorkspaceRecovery(operation.workspaceId);
-      const observedSourceHead = String(inspection.sourceHead || '').trim();
-      if (observedSourceHead && observedSourceHead !== operation.sourceHead) {
-        const project = getProject(operation.projectId);
-        const reconstructed = project?.localPath
-          ? (() => {
-              try {
-                return reconstructRecordedWorkspaceIntegration({
-                  workspaceId: operation.workspaceId,
-                  projectRoot: project.localPath!,
-                  baseBranch: operation.baseBranch,
-                  sourceBranch: metadata.branch,
-                  baseRevision: operation.baseRevision,
-                  sourceHead: operation.sourceHead,
-                  strategy: metadata.gitWorkflowPolicy?.integrationStrategy || 'rebase-ff',
-                });
-              } catch {
-                return null;
-              }
-            })()
-          : null;
-        if (!reconstructed) {
-          throw createApiError(409, 'FINALIZATION_OPERATION_SOURCE_CHANGED', 'Workspace source HEAD changed after finalization identity was frozen.', {
-            affectedId: operation.id,
-            details: { expectedSourceHead: operation.sourceHead, observedSourceHead },
-          });
-        }
-      }
-    }
-  }
-}
-
-function recoverRecordedIntegration(operation: TaskFinalizationOperationRecord, task: any) {
-  if (operation.integration) return operation.integration as unknown as WorkspaceIntegrationSuccess;
-  const metadata = getSessionWorkspaceMetadataForRecovery(operation.workspaceId);
-  const project = getProject(operation.projectId);
-  if (!project?.localPath) throw createApiError(409, 'FINALIZATION_PROJECT_ROOT_REQUIRED', 'Project root is unavailable for finalization integration recovery.', { affectedId: operation.id });
-  if (metadata) {
-    try {
-      return reconstructRecordedWorkspaceIntegration({
-        workspaceId: operation.workspaceId,
-        projectRoot: project.localPath,
-        baseBranch: operation.baseBranch,
-        sourceBranch: metadata.branch,
-        baseRevision: operation.baseRevision,
-        sourceHead: operation.sourceHead,
-        strategy: metadata.gitWorkflowPolicy?.integrationStrategy || 'rebase-ff',
-      });
-    } catch {}
-    const integration = integrateWorkspaceCommits(operation.workspaceId, { task });
-    if (integration.status === 'conflict') return integration as any;
-    if (integration.sourceHead !== operation.sourceHead) {
-      try {
-        return reconstructRecordedWorkspaceIntegration({
-          workspaceId: operation.workspaceId,
-          projectRoot: project.localPath,
-          baseBranch: operation.baseBranch,
-          sourceBranch: metadata.branch,
-          baseRevision: operation.baseRevision,
-          sourceHead: operation.sourceHead,
-          strategy: integration.strategy,
-        });
-      } catch {
-        throw createApiError(409, 'FINALIZATION_OPERATION_SOURCE_CHANGED', 'Integration retry resolved a different source revision than the frozen finalization operation.', {
-          affectedId: operation.id,
-          details: { expectedSourceHead: operation.sourceHead, observedSourceHead: integration.sourceHead },
-        });
-      }
-    }
-    return integration;
-  }
-  return reconstructRecordedWorkspaceIntegration({
-    workspaceId: operation.workspaceId,
-    projectRoot: project.localPath,
-    baseBranch: operation.baseBranch,
-    sourceBranch: 'removed-workspace',
-    baseRevision: operation.baseRevision,
-    sourceHead: operation.sourceHead,
-    strategy: 'rebase-ff',
-  });
-}
-
 export type TaskWorkspaceFinalizationResult = {
   status: 'completed' | 'cleanup-pending' | 'continuation' | 'needs-recovery' | 'blocked';
   code?: string;
@@ -1304,167 +710,15 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
   });
 }
 
-export type TaskWorkspaceHappyPathTailVerificationRequest = {
-  projectId: string;
-  command: string;
-  targets?: string[];
-  repoRevision: string;
-  requiredScope: 'targeted' | 'broad-or-full';
-};
-
-export type TaskWorkspaceHappyPathTailInput = {
-  taskId: string;
-  workspaceId: string;
-  commitMessage: string;
-  triggerJobId?: string;
-};
-
-type TaskWorkspaceHappyPathTailVerificationRunner = (
-  request: TaskWorkspaceHappyPathTailVerificationRequest,
-) => Promise<any>;
-
-function autonomousTailAttention(stage: string, code: string, message: string, extra: Record<string, unknown> = {}) {
-  return { ok: false as const, status: 'attention' as const, stage, code, message, ...extra };
-}
-
 export async function runTaskWorkspaceHappyPathTail(
   state: AppState,
   input: TaskWorkspaceHappyPathTailInput,
   runPostIntegrationVerification?: TaskWorkspaceHappyPathTailVerificationRunner,
 ) {
-  const taskId = String(input.taskId || '').trim();
-  const workspaceId = String(input.workspaceId || '').trim();
-  const commitMessage = String(input.commitMessage || '').trim();
-  const transitions: Array<{ stage: string; status: string; detail?: string }> = [];
-  if (!taskId || !workspaceId) {
-    return autonomousTailAttention('admission', 'AUTONOMOUS_TAIL_IDENTITY_REQUIRED', 'Autonomous tail requires an exact task and managed workspace identity.');
-  }
-  if (!commitMessage) {
-    return autonomousTailAttention('admission', 'AUTONOMOUS_TAIL_COMMIT_MESSAGE_REQUIRED', 'Autonomous tail will not guess a commit message; the initiating verification handoff must provide one.');
-  }
-
-  const existingTask = getTaskByIdentifier(taskId, 'full');
-  const existingFinalization = existingTask ? getLatestTaskFinalizationOperation(existingTask.id, workspaceId) : null;
-  if (existingTask?.status === 'done' && existingFinalization?.status === 'completed') {
-    transitions.push({ stage: 'finalization', status: 'already-completed', detail: existingFinalization.id });
-    return {
-      ok: true as const,
-      status: 'completed' as const,
-      taskId,
-      workspaceId,
-      triggerJobId: input.triggerJobId || null,
-      operationId: existingFinalization.id,
-      idempotent: true,
-      transitions,
-      result: { status: 'completed', operation: existingFinalization, task: existingTask },
-    };
-  }
-
-  let operationId = existingFinalization && existingFinalization.status !== 'completed'
-    ? existingFinalization.id
-    : undefined;
-
-  if (operationId) {
-    transitions.push({ stage: 'finalization', status: 'resuming', detail: operationId });
-  } else {
-    let plan: ReturnType<typeof buildTaskCommitPlan>;
-    try {
-      plan = buildTaskCommitPlan(state, { taskId, workspaceId });
-    } catch (error: any) {
-      return autonomousTailAttention('commit-plan', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_COMMIT_PLAN_FAILED'), String(error?.message || 'Commit planning failed.'), { transitions });
-    }
-    const planDebt = (plan as any).qualityDebt;
-    if (plan.blockers.length > 0 || plan.verificationFresh !== true || plan.verificationCoverage?.status !== 'covered' || plan.verificationCoverage?.reusable !== true || (planDebt && planDebt.status !== 'clear')) {
-      return autonomousTailAttention('commit-plan', 'AUTONOMOUS_TAIL_SOURCE_NOT_GREEN', 'Autonomous tail stops unless source verification and ownership are unambiguously GREEN and reusable.', {
-        transitions,
-        blockers: plan.blockers,
-        verificationFresh: plan.verificationFresh,
-        verificationCoverage: plan.verificationCoverage,
-        qualityDebt: planDebt || null,
-      });
-    }
-    if (plan.commitDisposition === 'ambiguous-no-changes') {
-      return autonomousTailAttention('commit-plan', 'AUTONOMOUS_TAIL_COMMIT_AMBIGUOUS', 'Autonomous tail cannot prove whether a task-owned commit is required.', { transitions });
-    }
-
-    try {
-      if (plan.commitDisposition === 'commit-required') {
-        const committed = commitTaskOwnedChanges(state, { taskId, workspaceId, message: commitMessage });
-        transitions.push({ stage: 'commit', status: 'completed', detail: String((committed as any).commitHash || (committed as any).hash || '') });
-      } else {
-        transitions.push({ stage: 'commit', status: 'already-completed', detail: String(plan.alreadyCommitted?.commitHash || '') });
-      }
-    } catch (error: any) {
-      return autonomousTailAttention('commit', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_COMMIT_FAILED'), String(error?.message || 'Task-owned commit failed.'), { transitions });
-    }
-  }
-  let postIntegrationChecks: TaskWorkspaceFinalizationCheck[] = [];
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    let result: any;
-    try {
-      result = finalizeTaskWorkspace(state, { taskId, workspaceId, ...(operationId ? { operationId } : {}), checks: postIntegrationChecks, deferPostIntegrationVerification: Boolean(runPostIntegrationVerification) });
-    } catch (error: any) {
-      return autonomousTailAttention('finalization', String(error?.payload?.code || error?.code || 'AUTONOMOUS_TAIL_FINALIZATION_FAILED'), String(error?.message || 'Finalization failed.'), { transitions, operationId: operationId || null });
-    }
-    operationId = String(result?.operation?.id || operationId || '').trim() || undefined;
-
-    if (result?.status === 'completed') {
-      transitions.push({ stage: 'finalization', status: 'completed', detail: operationId });
-      return { ok: true as const, status: 'completed' as const, taskId, workspaceId, triggerJobId: input.triggerJobId || null, operationId: operationId || null, transitions, result };
-    }
-
-    if (result?.status === 'cleanup-pending') {
-      transitions.push({ stage: 'cleanup', status: 'retrying', detail: operationId });
-      if (attempt < 3) continue;
-      return autonomousTailAttention('cleanup', 'FINALIZATION_CLEANUP_PENDING', 'Managed workspace cleanup remains pending after bounded idempotent retry.', { transitions, operationId: operationId || null, result });
-    }
-
-    const postIntegration = result?.postIntegration;
-    if (result?.status === 'continuation' && postIntegration?.required === true) {
-      const normalizeChecks = (value: unknown): VerificationImpactCheck[] => Array.isArray(value) ? value.flatMap((entry: any) => {
-        const command = String(entry?.command || '').trim();
-        if (!command) return [];
-        const targets = normalizeVerificationTargets(entry?.targets);
-        return [{ command, ...(targets.length ? { targets } : {}) }];
-      }) : [];
-      const missingChecks = normalizeChecks(postIntegration.missingChecks);
-      const requiredChecks = normalizeChecks(postIntegration.requiredChecks);
-      const checksToRun = missingChecks.length > 0 ? missingChecks : requiredChecks;
-      if (!runPostIntegrationVerification || checksToRun.length === 0) {
-        return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_VERIFICATION_REQUIRED', String(postIntegration.reason || 'Post-integration verification requires attention.'), { transitions, operationId: operationId || null, postIntegration });
-      }
-      const project = getProject(String(result?.operation?.projectId || '').trim());
-      if (!project?.localPath) {
-        return autonomousTailAttention('post-integration-verification', 'FINALIZATION_PROJECT_ROOT_REQUIRED', 'Project root is unavailable for autonomous post-integration verification.', { transitions, operationId: operationId || null });
-      }
-      const expectedHead = String(postIntegration.repoRevision || '').trim();
-      const before = getRepoRevisionForRoot(project.localPath);
-      if (!expectedHead || before.head !== expectedHead || before.changedFiles.length > 0) {
-        return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_REVISION_DRIFT', 'Integrated project state changed before autonomous post-integration verification could start.', { transitions, expectedHead, observedHead: before.head, changedFiles: before.changedFiles.map((entry) => entry.path) });
-      }
-
-      const checks: TaskWorkspaceFinalizationCheck[] = [];
-      for (const requirement of checksToRun) {
-        const command = requirement.command;
-        const targets = normalizeVerificationTargets(requirement.targets);
-        const verification = await runPostIntegrationVerification({ projectId: project.id, command, ...(targets.length ? { targets } : {}), repoRevision: expectedHead, requiredScope: postIntegration.requiredScope === 'broad-or-full' ? 'broad-or-full' : 'targeted' });
-        const after = getRepoRevisionForRoot(project.localPath);
-        if (after.head !== expectedHead || after.changedFiles.length > 0) {
-          return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_REVISION_DRIFT', 'Integrated project state changed during autonomous post-integration verification.', { transitions, command, expectedHead, observedHead: after.head, changedFiles: after.changedFiles.map((entry) => entry.path) });
-        }
-        if (!verification?.ok || verification?.status !== 'succeeded' || verification?.exitCode !== 0) {
-          return autonomousTailAttention('post-integration-verification', 'POST_INTEGRATION_VERIFICATION_FAILED', `Post-integration verification '${command}' failed; autonomous tail stopped without guessing a repair.`, { transitions, command, operationId: operationId || null, verification: { status: verification?.status || 'failed', exitCode: verification?.exitCode ?? null, timedOut: verification?.timedOut === true } });
-        }
-        checks.push({ name: `autonomous post-integration: ${verificationRequirementLabel(requirement)}`, command, ...(targets.length ? { targets } : {}), status: 'passed', scope: postIntegration.requiredScope === 'broad-or-full' ? 'broad' : 'targeted', repoRevision: expectedHead, summary: 'Autonomous tail ran the finalizer-required post-integration verification against the exact integrated HEAD.' });
-        transitions.push({ stage: 'post-integration-verification', status: 'passed', detail: command });
-      }
-      postIntegrationChecks = checks;
-      continue;
-    }
-
-    const code = String(result?.code || result?.continuation?.error?.code || result?.operation?.failure?.code || 'AUTONOMOUS_TAIL_ATTENTION_REQUIRED');
-    return autonomousTailAttention('finalization', code, String(result?.message || result?.continuation?.message || 'Finalization requires explicit recovery or attention.'), { transitions, operationId: operationId || null, result });
-  }
-
-  return autonomousTailAttention('finalization', 'AUTONOMOUS_TAIL_RETRY_BUDGET_EXHAUSTED', 'Autonomous tail exceeded its bounded continuation retry budget.', { transitions, operationId: operationId || null });
+  return runTaskWorkspaceHappyPathTailWithFinalizer(
+    state,
+    input,
+    finalizeTaskWorkspace,
+    runPostIntegrationVerification,
+  );
 }

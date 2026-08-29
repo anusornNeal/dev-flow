@@ -142,7 +142,24 @@ export function deriveTaskBoardLiveWorkProjection(task: Task, inputs: Projection
   const activeExecutions = inputs.activeExecutions || [];
   const matching = activeExecutions.filter((entry) => entry.status === 'active' && entry.workspaceId === claim.workspaceId);
   const session = matching.length === 1 && activeExecutions.length === 1 ? matching[0] : null;
-  if (!session) return externalAgentProjection(task, now.getTime());
+  if (!session && activeExecutions.length > 0) return externalAgentProjection(task, now.getTime());
+  if (!session) {
+    return {
+      source: 'managed',
+      ownerLabel: claim.ownerLabel,
+      ownerKind: claim.ownerKind,
+      phase: 'inspecting',
+      phaseLabel: 'Claimed',
+      activity: null,
+      phaseIndex: 0,
+      phaseCount: MANAGED_PHASE_COUNT,
+      blocked: false,
+      startedAt: claim.claimedAt,
+      updatedAt: claim.claimedAt,
+    };
+  }
+
+
 
   const checkpoint = inputs.checkpoint || null;
   const latestOperation = checkpoint?.pendingOperations?.at(-1) || null;

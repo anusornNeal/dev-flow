@@ -224,7 +224,18 @@ test('external agent run is the fallback only when managed live work is absent',
   });
   assert.equal(managed?.source, 'managed');
   assert.equal(managed?.ownerLabel, 'Chat A1');
+
+  const claimedWithoutSession = deriveTaskBoardLiveWorkProjection(task({ activeAgent: 'Codex', latestAgentRun: withoutClaim.latestAgentRun }), {
+    now,
+    activeExecutions: [],
+  });
+  assert.equal(claimedWithoutSession?.source, 'managed');
+  assert.equal(claimedWithoutSession?.ownerLabel, 'Chat A1');
+  assert.equal(claimedWithoutSession?.phase, 'inspecting');
+  assert.equal(claimedWithoutSession?.phaseLabel, 'Claimed');
 });
+
+
 
 test('unknown lifecycle stages degrade to neutral Working', () => {
   const result = deriveTaskBoardLiveWorkProjection(task(), { now, activeExecutions: [execution('future-stage')] });

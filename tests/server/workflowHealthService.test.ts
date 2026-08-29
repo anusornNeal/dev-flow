@@ -275,6 +275,30 @@ test('compact health preserves operational warnings while cutting response bytes
   console.log(`[health-bytes] full=${fullBytes} compact=${compactBytes} reduction=${Math.round((1 - compactBytes / fullBytes) * 100)}%`);
 });
 
+test('workflow health marks failed-job evidence stale when runtime source lags the repository', () => {
+  const repo = createRepo('stale-failure-evidence');
+  const loadedRevision = git(runtimeSourceRoot, ['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source v2\n');
+  git(runtimeSourceRoot, ['add', 'runtime-source.txt']);
+  git(runtimeSourceRoot, ['commit', '-m', 'runtime source v2']);
+  createJob('job-health-stale-evidence', 'execute_repo_query_plan', { steps: [] }, `repo:${repo}`);
+  updateJobStatus('job-health-stale-evidence', { status: 'failed', failureSummary: 'synthetic stale-runtime failure' });
+  try {
+    const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+    const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
+    assert.equal(full.diagnostics.failedJobEvidence.freshness, 'stale-runtime');
+    assert.equal(full.diagnostics.failedJobEvidence.reasonCode, 'FAILED_JOB_EVIDENCE_STALE_RUNTIME');
+    assert.equal(typeof full.diagnostics.failedJobEvidence.loadedRevision, 'string');
+    assert.equal(typeof full.diagnostics.failedJobEvidence.currentRevision, 'string');
+    assert.equal(compact.failures.evidence.freshness, 'stale-runtime');
+    assert.match(full.recommendations.join('\n'), /revalidate.*current source/i);
+  } finally {
+    db.prepare('DELETE FROM mcp_tool_jobs WHERE job_id = ?').run('job-health-stale-evidence');
+    clearRecentJobCache();
+    git(runtimeSourceRoot, ['reset', '--hard', loadedRevision]);
+  }
+});
+
 test('compact health keeps grouped failure and recovery warning context without verbose examples', () => {
   const repo = createRepo('compact-warning');
   createJob('job-health-compact-failed', 'run_project_command', { command: 'verify' }, `repo:${repo}`);
@@ -288,6 +312,8 @@ test('compact health keeps grouped failure and recovery warning context without 
   assert.equal(compact.failures.total > 0, true);
   assert.equal(compact.failures.groups.some((group: any) => group.toolName === 'run_project_command'), true);
   assert.equal(compact.failures.groups.some((group: any) => 'examples' in group), false);
+  assert.equal(compact.failures.evidence.freshness, 'current');
+  assert.equal(compact.failures.evidence.reasonCode, 'FAILED_JOB_EVIDENCE_CURRENT_RUNTIME');
   assert.equal(compact.recovery.hasVerifiedGoodBackup, false);
   assert.match(compact.recommendations.join('\n'), /run_project_command/);
   assert.equal(compactBytes <= fullBytes * 0.5, true, `expected warning compact <=50% of full (${compactBytes} vs ${fullBytes})`);

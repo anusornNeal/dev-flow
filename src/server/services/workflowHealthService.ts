@@ -957,6 +957,12 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const failedJobs = Number(diagnostics?.mcp?.metrics?.failedJobs || 0);
   const failedJobSummaries = Array.isArray(diagnostics?.mcp?.metrics?.failures) ? diagnostics.mcp.metrics.failures.slice(0, 10) : [];
   const failedJobGroups = summarizeFailedJobGroups(failedJobSummaries);
+  const failedJobEvidence = {
+    freshness: runtimeSourceFreshness?.code === 'current' ? 'current' : runtimeSourceFreshness?.code === 'stale' ? 'stale-runtime' : 'unknown',
+    reasonCode: runtimeSourceFreshness?.code === 'stale' ? 'FAILED_JOB_EVIDENCE_STALE_RUNTIME' : runtimeSourceFreshness?.code === 'current' ? 'FAILED_JOB_EVIDENCE_CURRENT_RUNTIME' : 'FAILED_JOB_EVIDENCE_FRESHNESS_UNKNOWN',
+    ...(runtimeSourceFreshness?.loadedRevision ? { loadedRevision: String(runtimeSourceFreshness.loadedRevision).slice(0, 40) } : {}),
+    ...(runtimeSourceFreshness?.currentRevision ? { currentRevision: String(runtimeSourceFreshness.currentRevision).slice(0, 40) } : {}),
+  };
   const durableJobs = diagnostics?.mcp?.metrics?.durable || { queued: 0, running: 0, healthyRunning: 0, detached: 0, failed: 0, cancelled: 0, recovered: 0, staleRunning: 0, fencedLateWrites: 0, oldestLeaseAgeMs: 0 };
   const staleAgentRuns = Number(diagnostics?.agents?.staleCount || 0);
   const duplicateBursts = Array.isArray(diagnostics?.tools?.duplicateBursts) ? diagnostics.tools.duplicateBursts.length : 0;
@@ -1000,6 +1006,9 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   }
   if (runtimeSourceFreshness && runtimeSourceFreshness.code !== 'current') {
     recommendations.push(`DevFlow runtime source is ${runtimeSourceFreshness.code}; ${runtimeDiagnosis?.nextAction || runtimeSourceFreshness.nextAction || 'inspect runtime source freshness before treating this process as current.'}`);
+  }
+  if (failedJobs > 0 && failedJobEvidence.freshness === 'stale-runtime') {
+    recommendations.push('Recent failed-job diagnostics were observed while the DevFlow runtime source is stale relative to the current repository; revalidate the failure against current source before creating or implementing a defect card.');
   }
   if (restartSafetySummary && restartSafetySummary.cleanupDebtCount > 0) {
     recommendations.push(`Restart safety found ${restartSafetySummary.cleanupDebtCount} bounded non-blocking execution cleanup debt record(s); inspect cleanup_orphan_executions with dry-run before applying cleanup.`);
@@ -1113,6 +1122,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       queueDepth,
       failedJobs,
       failedJobGroups,
+      failedJobEvidence,
       failedJobSummaries,
       durableJobs,
       staleAgentRuns,
@@ -1180,6 +1190,12 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     failures: {
       total: failedJobs,
       groups: compactFailureGroups(failedJobGroups),
+      ...(failedJobs > 0 ? {
+        evidence: {
+          freshness: failedJobEvidence.freshness,
+          reasonCode: failedJobEvidence.reasonCode,
+        },
+      } : {}),
     },
     regressions: compactRegressions,
     harness,

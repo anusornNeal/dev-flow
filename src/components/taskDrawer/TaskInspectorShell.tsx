@@ -5,7 +5,7 @@ import type { Task } from '../../types';
 export type TaskInspectorTab = 'overview' | 'work' | 'subtasks' | 'bugs' | 'activity';
 
 export const TASK_INSPECTOR_MIN_WIDTH_VW = 45;
-export const TASK_INSPECTOR_DEFAULT_WIDTH_VW = 65;
+export const TASK_INSPECTOR_DEFAULT_WIDTH_VW = 58;
 export const TASK_INSPECTOR_MAX_WIDTH_VW = 85;
 
 export function clampTaskInspectorWidth(widthVw: number) {
@@ -81,6 +81,15 @@ export function resolveTaskInspectorStatusSummary(task: Task): TaskInspectorStat
       summary: unresolvedBugs > 0 ? `The task is complete, but ${unresolvedBugs} unresolved bug thread${unresolvedBugs === 1 ? '' : 's'} remain recorded.` : 'The task is complete.',
       nextAction: unresolvedBugs > 0 ? 'Use Bugs for follow-up context; Activity and Work retain the completion evidence.' : 'Use Activity and Work only when you need history or technical evidence.',
       tone: unresolvedBugs > 0 ? 'warning' : 'success',
+    };
+  }
+
+  if (unresolvedBugs > 0) {
+    return {
+      label: 'Bugs need attention',
+      summary: `${unresolvedBugs} unresolved bug thread${unresolvedBugs === 1 ? '' : 's'} still need follow-up.`,
+      nextAction: 'Open Bugs for the active defect context before treating this task as clear.',
+      tone: 'warning',
     };
   }
 
@@ -182,6 +191,14 @@ export default function TaskInspectorShell({
   const tabRefs = useRef<Partial<Record<TaskInspectorTab, HTMLButtonElement | null>>>({});
   const visibleTabs = showSubtasks ? TABS : TABS.filter((tab) => tab.id !== 'subtasks');
   const statusSummary = resolveTaskInspectorStatusSummary(task);
+  const latestRunStatus = task.latestAgentRun?.status || '';
+  const unresolvedBugs = task.unresolvedBugCount ?? (task.bugs || []).filter((bug) => ['open', 'fixing', 'fixed', 'reopened'].includes(bug.status)).length;
+  const hasActionableAttention = Boolean(
+    task.liveWork?.blocked
+    || (!task.activeAgent && ['failed', 'cancelled', 'timed_out', 'timed-out'].includes(latestRunStatus))
+    || task.status === 'ready-for-review'
+    || unresolvedBugs > 0,
+  );
 
   const requestClose = useCallback(() => {
     if (isEditing && typeof window !== 'undefined' && !window.confirm('Discard unsaved task edits and close the inspector?')) return;
@@ -230,31 +247,31 @@ export default function TaskInspectorShell({
         style={panelStyle}
         className={`df-dialog relative z-10 flex max-h-screen flex-col overflow-hidden outline-none max-lg:!h-screen max-lg:!w-screen max-lg:rounded-none ${fullScreen ? 'rounded-none' : ''}`}
       >
-        <header className="df-dialog-header sticky top-0 z-30 flex shrink-0 items-start justify-between gap-4 px-5 py-4 backdrop-blur">
+        <header className="df-dialog-header sticky top-0 z-30 flex shrink-0 items-start justify-between gap-3 px-4 py-3 backdrop-blur lg:px-5">
           <div className="min-w-0 flex-1">
             {parentTask && onSelectParent && (
               <TaskInspectorParentControl parentTask={parentTask} onSelectParent={onSelectParent} />
             )}
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded-lg border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] px-2.5 py-1 font-mono text-[11px] font-black text-[var(--df-color-text-muted)]">{task.displayId || task.id}</span>
-              <span className="rounded-lg bg-[var(--df-color-warning-surface)] px-2.5 py-1 text-[11px] font-extrabold uppercase text-[var(--df-color-warning)]">{task.status}</span>
-              <span className="rounded-lg border border-[var(--df-color-border)] px-2.5 py-1 text-[11px] font-bold text-[var(--df-color-text-muted)]">{task.priority}</span>
-              {task.category && <span className="rounded-lg border border-[var(--df-color-border)] px-2.5 py-1 text-[11px] font-bold text-[var(--df-color-text-muted)]">{task.category}</span>}
-              {isEditing && <span className="rounded-lg bg-[var(--df-color-info-surface)] px-2.5 py-1 text-[11px] font-extrabold text-[var(--df-color-info)]">Editing</span>}
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] px-1.5 py-0.5 font-mono text-[10px] font-black text-[var(--df-color-text-muted)]">{task.displayId || task.id}</span>
+              <span className="rounded-md bg-[var(--df-color-warning-surface)] px-1.5 py-0.5 text-[10px] font-extrabold uppercase text-[var(--df-color-warning)]">{task.status}</span>
+              <span className="rounded-md border border-[var(--df-color-border)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--df-color-text-muted)]">{task.priority}</span>
+              {task.category && <span className="rounded-md border border-[var(--df-color-border)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--df-color-text-muted)]">{task.category}</span>}
+              {isEditing && <span className="rounded-md bg-[var(--df-color-info-surface)] px-1.5 py-0.5 text-[10px] font-extrabold text-[var(--df-color-info)]">Editing</span>}
             </div>
-            <h2 className="mt-2 max-w-4xl break-words text-lg font-black leading-tight text-[var(--df-color-text-strong)]" title={task.title}>{task.title}</h2>
-            <p className="df-meta mt-1">Updated {new Date(task.updatedAt).toLocaleString()}</p>
+            <h2 className="mt-1.5 line-clamp-3 max-w-4xl break-words text-[17px] font-black leading-[1.25] text-[var(--df-color-text-strong)]" title={task.title}>{task.title}</h2>
+            <p className="df-meta mt-0.5 text-[9px]">Updated {new Date(task.updatedAt).toLocaleString()}</p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {!isEditing && (
-              <button type="button" onClick={onToggleEdit} className="df-button df-button--secondary min-h-9 min-w-0 px-3" aria-label="Edit task">
+              <button type="button" onClick={onToggleEdit} className="df-button df-button--primary min-h-8 min-w-0 px-2.5 text-[10px]" aria-label="Edit task">
                 <Edit3 size={13} /> Edit
               </button>
             )}
             <button type="button" onClick={() => setFullScreen((value) => !value)} aria-label={fullScreen ? 'Exit full screen' : 'Enter full screen'} title={fullScreen ? 'Exit full screen' : 'Enter full screen'} className="df-icon-button border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)]">
               {fullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             </button>
-            <button type="button" onClick={onDelete} aria-label="Delete task" title="Delete task" className="df-icon-button hover:!text-[var(--df-color-danger)]">
+            <button type="button" onClick={onDelete} aria-label="Delete task" title="Delete task" className="df-icon-button opacity-65 hover:!text-[var(--df-color-danger)] hover:opacity-100">
               <Trash2 size={14} />
             </button>
             <button type="button" onClick={requestClose} aria-label="Close task inspector" title="Close task inspector" className="df-icon-button">
@@ -263,22 +280,17 @@ export default function TaskInspectorShell({
           </div>
         </header>
 
-        {!isEditing && (
-          <div className="shrink-0 border-b border-[var(--df-color-border)] bg-[var(--df-color-surface)] px-5 py-3 lg:px-7">
-            <div data-testid="task-inspector-status-summary" className={`df-feedback ${statusToneClass(statusSummary.tone)} grid min-w-0 gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]`}>
-              <div className="min-w-0">
-                <div className="df-feedback__summary break-words">{statusSummary.label}</div>
-                <div className="df-feedback__detail break-words">{statusSummary.summary}</div>
-              </div>
-              <div className="min-w-0 md:border-l md:border-[var(--df-color-border)] md:pl-3">
-                <div className="text-[10px] font-black uppercase tracking-[0.08em] opacity-75">Next action</div>
-                <div className="mt-1 break-words text-[11px] font-semibold leading-5">{statusSummary.nextAction}</div>
-              </div>
+        {!isEditing && hasActionableAttention && (
+          <div className="shrink-0 border-b border-[var(--df-color-border)] bg-[var(--df-color-surface)] px-4 py-2 lg:px-5">
+            <div data-testid="task-inspector-attention" className={`df-feedback ${statusToneClass(statusSummary.tone)} flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 px-2.5 py-2`}>
+              <span className="df-feedback__summary shrink-0">{statusSummary.label}</span>
+              <span className="df-feedback__detail min-w-0 flex-1 break-words">{statusSummary.summary}</span>
+              <span className="min-w-0 break-words text-[10px] font-semibold opacity-85">{statusSummary.nextAction}</span>
             </div>
           </div>
         )}
 
-        <nav role="tablist" aria-label="Task inspector sections" className="sticky top-0 z-20 flex shrink-0 gap-1 overflow-x-auto border-b border-[var(--df-color-border)] bg-[var(--df-color-surface)] px-5 py-2 backdrop-blur">
+        <nav role="tablist" aria-label="Task inspector sections" data-density="compact" className="sticky top-0 z-20 flex shrink-0 gap-0 overflow-x-auto border-b border-[var(--df-color-border)] bg-[var(--df-color-surface)] px-4 backdrop-blur lg:px-5">
           {visibleTabs.map((tab) => (
             <button
               key={tab.id}
@@ -295,12 +307,12 @@ export default function TaskInspectorShell({
                 onTabChange(nextTab);
                 tabRefs.current[nextTab]?.focus();
               }}
-              className={`min-h-9 flex-none rounded-lg px-4 text-[12px] font-extrabold transition-colors ${activeTab === tab.id ? 'bg-[var(--df-color-surface-muted)] text-[var(--df-color-text-strong)]' : 'text-[var(--df-color-text-muted)] hover:bg-[var(--df-color-surface-subtle)]'}`}
+              className={`min-h-8 flex-none border-b-2 px-3 text-[11px] font-extrabold transition-colors ${activeTab === tab.id ? 'border-[var(--df-color-accent)] text-[var(--df-color-text-strong)]' : 'border-transparent text-[var(--df-color-text-muted)] hover:bg-[var(--df-color-surface-subtle)] hover:text-[var(--df-color-text)]'}`}
             >{tab.label}</button>
           ))}
         </nav>
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-5 text-[13px] leading-6 text-[var(--df-color-text)] lg:px-7 lg:py-6">
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 text-[13px] leading-6 text-[var(--df-color-text)] lg:px-5 lg:py-5">
           {children}
         </div>
 

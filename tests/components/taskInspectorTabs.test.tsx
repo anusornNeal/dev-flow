@@ -140,9 +140,10 @@ test('Subtasks has dedicated content while Work stays focused on implementation 
     status: 'done',
   };
   const subtasksHtml = renderDrawer('subtasks', [child]);
-  assert.match(subtasksHtml, /Subtasks Breakdown \(1\/1\)/);
+  assert.match(subtasksHtml, />Subtasks</);
+  assert.match(subtasksHtml, /1\/1 complete/);
   assert.match(subtasksHtml, /Dedicated subtask fixture/);
-  assert.match(subtasksHtml, /100% complete/);
+  assert.match(subtasksHtml, /aria-label="1 of 1 subtasks complete"/);
   assert.match(subtasksHtml, /DVF-CHILD/);
 
   const workHtml = renderDrawer('work', [child]);
@@ -152,13 +153,14 @@ test('Subtasks has dedicated content while Work stays focused on implementation 
 
 test('Subtasks tab owns subtask progress, complete list, and create affordance', () => {
   const html = renderDrawer('subtasks');
-  assert.match(html, /Subtasks Breakdown \(1\/5\)/);
+  assert.match(html, />Subtasks</);
+  assert.match(html, /1\/5 complete/);
   assert.match(html, /Child task 1/);
   assert.match(html, /Child task 4/);
   assert.match(html, /Child task 5/);
   assert.doesNotMatch(html, /show \\d+ more/i);
   assert.doesNotMatch(html, /show less/i);
-  assert.match(html, /Create Subtask Spec/);
+  assert.match(html, /Create Subtask<\/button>/);
   assert.doesNotMatch(html, /1 of 2 complete/);
 });
 
@@ -318,10 +320,10 @@ test('UI Design evidence renders frozen/current semantics without duplicate curr
 
 test('Task overview places UI Design evidence between Acceptance Criteria and Reasoning', () => {
   const source = fs.readFileSync('src/components/taskDrawer/TaskOverviewTab.tsx', 'utf8');
-  const acceptance = source.indexOf('{task.acceptanceCriteria && <ReadSection title="Acceptance criteria"');
+  const acceptance = source.indexOf('<ReadSection title="Acceptance criteria">');
   const uiDesign = source.indexOf('<UiDesignEvidenceSection');
-  const reasoning = source.indexOf('{task.reasoning && <ReadSection title="Reasoning"');
-  assert.ok(acceptance >= 0 && uiDesign > acceptance && reasoning > uiDesign);
+  const engineeringContext = source.indexOf('Engineering context');
+  assert.ok(acceptance >= 0 && uiDesign > acceptance && engineeringContext > uiDesign);
 
   const drawerSource = fs.readFileSync('src/components/TaskDetailsDrawer.tsx', 'utf8');
   assert.match(drawerSource, /getTaskUiEvidence\(initialTask\.id, \{ cursor, limit: 20 \}\)/);

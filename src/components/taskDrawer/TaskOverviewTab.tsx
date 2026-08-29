@@ -7,6 +7,8 @@ import UiDesignEvidenceSection from './UiDesignEvidenceSection';
 
 interface TaskOverviewTabProps {
   task: Task;
+  parentTask?: Task;
+  subTasks?: Task[];
   isEditing: boolean;
   editedTitle: string;
   setEditedTitle: (value: string) => void;
@@ -46,29 +48,57 @@ interface TaskOverviewTabProps {
 }
 
 const fieldClass = 'df-control w-full min-w-0 text-[13px] outline-none';
-const labelClass = 'mb-1.5 block text-[10px] font-black uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]';
+const labelClass = 'mb-1 block text-[10px] font-black uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]';
 
 function ReadSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="df-surface min-w-0 p-5">
-      <h3 className="df-heading-sm mb-3 uppercase tracking-[0.08em]">{title}</h3>
-      <div className="min-w-0 break-words text-[13px] leading-6 text-[var(--df-color-text)]">{children}</div>
+    <section className="min-w-0 border-b border-[var(--df-color-border)] pb-4 last:border-b-0">
+      <h3 className="mb-2 text-[11px] font-extrabold uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]">{title}</h3>
+      <div className="min-w-0 break-words text-[13px] leading-[1.55] text-[var(--df-color-text)]">{children}</div>
     </section>
+  );
+}
+
+function FactRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid min-w-0 grid-cols-[72px_minmax(0,1fr)] gap-2 border-b border-[var(--df-color-border)] py-1.5 last:border-b-0">
+      <span className="text-[9.5px] font-bold uppercase tracking-[0.05em] text-[var(--df-color-text-subtle)]">{label}</span>
+      <span className="min-w-0 break-words text-[11px] font-semibold text-[var(--df-color-text)]">{children}</span>
+    </div>
+  );
+}
+
+function ReferenceLink({ label, href, children }: { label: string; href: string; children: React.ReactNode }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="grid min-w-0 grid-cols-[72px_minmax(0,1fr)] gap-2 border-b border-[var(--df-color-border)] py-1.5 text-[11px] hover:text-[var(--df-color-info)] last:border-b-0"
+    >
+      <span className="text-[9.5px] font-bold uppercase tracking-[0.05em] text-[var(--df-color-text-subtle)]">{label}</span>
+      <span className="df-break-technical inline-flex min-w-0 items-start gap-1 font-mono text-[10.5px] text-[var(--df-color-info)]">
+        <ExternalLink size={11} className="mt-0.5 shrink-0" />
+        <span className="min-w-0 break-all">{children}</span>
+      </span>
+    </a>
   );
 }
 
 export default function TaskOverviewTab(props: TaskOverviewTabProps) {
   const { task, isEditing } = props;
+  const subTasks = props.subTasks || [];
+  const completedSubtasks = subTasks.filter((subTask) => subTask.status === 'done').length;
 
   if (isEditing) {
     return (
-      <div className="mx-auto max-w-5xl space-y-5">
+      <div className="mx-auto max-w-4xl space-y-4">
         <div>
           <label className={labelClass} htmlFor="task-inspector-title">Title</label>
           <input id="task-inspector-title" className={fieldClass} value={props.editedTitle} onChange={(event) => props.setEditedTitle(event.target.value)} />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-3">
           <div>
             <label className={labelClass} htmlFor="task-inspector-status">Status</label>
             <select id="task-inspector-status" className={fieldClass} value={props.editedStatus} onChange={(event) => props.setEditedStatus(event.target.value as TaskStatus)}>
@@ -106,14 +136,14 @@ export default function TaskOverviewTab(props: TaskOverviewTabProps) {
           <textarea id="task-inspector-repo-context" className={`${fieldClass} df-break-technical min-h-28 resize-y font-mono`} value={props.editedRepoContext} onChange={(event) => props.setEditedRepoContext(event.target.value)} />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-2">
           <div><label className={labelClass} htmlFor="task-inspector-repo">Repository</label><input id="task-inspector-repo" className={`${fieldClass} df-break-technical font-mono`} value={props.editedRepo} onChange={(event) => props.setEditedRepo(event.target.value)} /></div>
           <div><label className={labelClass} htmlFor="task-inspector-jira">Jira key</label><input id="task-inspector-jira" className={fieldClass} value={props.editedJiraKey} onChange={(event) => props.setEditedJiraKey(event.target.value)} /></div>
           <div><label className={labelClass} htmlFor="task-inspector-source">Source URL</label><input id="task-inspector-source" className={`${fieldClass} df-break-technical font-mono`} value={props.editedSourceUrl} onChange={(event) => props.setEditedSourceUrl(event.target.value)} /></div>
           <div><label className={labelClass} htmlFor="task-inspector-spec">Specification URL</label><input id="task-inspector-spec" className={`${fieldClass} df-break-technical font-mono`} value={props.editedSpecUrl} onChange={(event) => props.setEditedSpecUrl(event.target.value)} /></div>
         </div>
 
-        <section className="df-surface p-4">
+        <section className="df-surface p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <h3 className="df-heading-sm">Images</h3>
@@ -140,46 +170,93 @@ export default function TaskOverviewTab(props: TaskOverviewTabProps) {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <ReadSection title="Description">
-        {task.description ? <div className="prose max-w-none break-words text-[13px] leading-6 dark:prose-invert"><MarkdownRenderer content={task.description} /></div> : <p className="text-[var(--df-color-text-subtle)]">No description.</p>}
-      </ReadSection>
-      {task.acceptanceCriteria && <ReadSection title="Acceptance criteria"><p className="whitespace-pre-wrap break-words">{task.acceptanceCriteria}</p></ReadSection>}
-      <UiDesignEvidenceSection
-        evidence={props.uiEvidence}
-        loading={props.uiEvidenceLoading}
-        loadingMore={props.uiEvidenceLoadingMore}
-        error={props.uiEvidenceError}
-        nextCursor={props.uiEvidenceNextCursor}
-        onRefresh={props.onRefreshUiEvidence}
-        onLoadMore={props.onLoadMoreUiEvidence}
-      />
-      {task.reasoning && <ReadSection title="Reasoning"><p className="whitespace-pre-wrap break-words">{task.reasoning}</p></ReadSection>}
-      {task.repoContext && <ReadSection title="Repository context"><p className="df-break-technical whitespace-pre-wrap font-mono text-[12px]">{task.repoContext}</p></ReadSection>}
-
-      {(task.repo || task.sourceUrl || task.specUrl || task.jiraKey) && (
-        <ReadSection title="References">
-          <div className="grid min-w-0 gap-3 md:grid-cols-2">
-            {task.repo && <div className="df-break-technical min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3 font-mono text-[12px]">Repository: {task.repo}</div>}
-            {task.jiraKey && <div className="df-break-technical min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3 font-mono text-[12px]">Jira: {task.jiraKey}</div>}
-            {task.sourceUrl && <a href={task.sourceUrl} target="_blank" rel="noreferrer" className="df-break-technical flex min-w-0 items-start gap-2 rounded-xl border border-[var(--df-color-border)] p-3 font-semibold text-[var(--df-color-info)] hover:bg-[var(--df-color-surface-subtle)]"><ExternalLink size={14} className="mt-1 shrink-0" /> <span className="min-w-0 break-all">{task.sourceUrl}</span></a>}
-            {task.specUrl && <a href={task.specUrl.startsWith('http') ? task.specUrl : `https://${task.specUrl}`} target="_blank" rel="noreferrer" className="df-break-technical flex min-w-0 items-start gap-2 rounded-xl border border-[var(--df-color-border)] p-3 font-semibold text-[var(--df-color-info)] hover:bg-[var(--df-color-surface-subtle)]"><ExternalLink size={14} className="mt-1 shrink-0" /> <span className="min-w-0 break-all">{task.specUrl}</span></a>}
-          </div>
+    <div className="mx-auto grid max-w-6xl min-w-0 gap-6 2xl:grid-cols-[minmax(0,1fr)_240px]">
+      <main data-testid="task-inspector-main-content" className="min-w-0 max-w-[80ch] space-y-5">
+        <ReadSection title="Description">
+          {task.description ? (
+            <div className="prose max-w-none break-words text-[13px] leading-[1.55] dark:prose-invert">
+              <MarkdownRenderer content={task.description} />
+            </div>
+          ) : (
+            <p className="text-[12px] text-[var(--df-color-text-subtle)]">No description provided.</p>
+          )}
         </ReadSection>
-      )}
 
-      {(task.images || []).length > 0 && (
-        <ReadSection title="Images">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            {(task.images || []).map((image) => (
-              <button key={image.id} type="button" onClick={() => props.onViewImage(image)} className="group min-w-0 overflow-hidden rounded-xl border border-[var(--df-color-border)] text-left">
-                <img src={image.url} alt={image.filename} className="h-32 w-full object-cover" />
-                <span className="flex min-w-0 items-center gap-1.5 px-2 py-1.5 text-[11px]"><ImageIcon size={12} className="shrink-0" /> <span className="df-truncate">{image.filename}</span></span>
-              </button>
-            ))}
-          </div>
-        </ReadSection>
-      )}
+        {task.acceptanceCriteria && (
+          <ReadSection title="Acceptance criteria">
+            <p className="whitespace-pre-wrap break-words">{task.acceptanceCriteria}</p>
+          </ReadSection>
+        )}
+
+        <UiDesignEvidenceSection
+          evidence={props.uiEvidence}
+          loading={props.uiEvidenceLoading}
+          loadingMore={props.uiEvidenceLoadingMore}
+          error={props.uiEvidenceError}
+          nextCursor={props.uiEvidenceNextCursor}
+          onRefresh={props.onRefreshUiEvidence}
+          onLoadMore={props.onLoadMoreUiEvidence}
+        />
+
+        {(task.reasoning || task.repoContext) && (
+          <details className="group min-w-0 border-b border-[var(--df-color-border)] pb-4">
+            <summary className="cursor-pointer select-none text-[11px] font-extrabold uppercase tracking-[0.08em] text-[var(--df-color-text-muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--df-color-focus-ring)]">
+              Engineering context
+            </summary>
+            <div className="mt-3 space-y-4 rounded-lg bg-[var(--df-color-surface-subtle)] p-3">
+              {task.reasoning && (
+                <div className="min-w-0">
+                  <h4 className="mb-1 text-[10px] font-extrabold uppercase tracking-[0.06em] text-[var(--df-color-text-subtle)]">Reasoning</h4>
+                  <p className="whitespace-pre-wrap break-words text-[12.5px] leading-[1.5] text-[var(--df-color-text)]">{task.reasoning}</p>
+                </div>
+              )}
+              {task.repoContext && (
+                <div className="min-w-0">
+                  <h4 className="mb-1 text-[10px] font-extrabold uppercase tracking-[0.06em] text-[var(--df-color-text-subtle)]">Repository context</h4>
+                  <p className="df-break-technical whitespace-pre-wrap font-mono text-[11px] leading-[1.5] text-[var(--df-color-text-muted)]">{task.repoContext}</p>
+                </div>
+              )}
+            </div>
+          </details>
+        )}
+
+        {(task.images || []).length > 0 && (
+          <ReadSection title="Images">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {(task.images || []).map((image) => (
+                <button key={image.id} type="button" onClick={() => props.onViewImage(image)} className="group min-w-0 overflow-hidden rounded-lg border border-[var(--df-color-border)] text-left">
+                  <img src={image.url} alt={image.filename} className="h-32 w-full object-cover" />
+                  <span className="flex min-w-0 items-center gap-1.5 px-2 py-1.5 text-[11px]"><ImageIcon size={12} className="shrink-0" /> <span className="df-truncate">{image.filename}</span></span>
+                </button>
+              ))}
+            </div>
+          </ReadSection>
+        )}
+      </main>
+
+      <aside className="min-w-0 space-y-4 2xl:sticky 2xl:top-2 2xl:self-start" aria-label="Task facts">
+        <section className="min-w-0 rounded-lg border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] p-3">
+          <h3 className="mb-1 text-[10px] font-extrabold uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]">Task facts</h3>
+          <FactRow label="Status">{task.status}</FactRow>
+          <FactRow label="Priority">{task.priority}</FactRow>
+          {task.category && <FactRow label="Category">{task.category}</FactRow>}
+          {props.parentTask && <FactRow label="Parent">{props.parentTask.displayId || props.parentTask.id}</FactRow>}
+          {subTasks.length > 0 && <FactRow label="Subtasks">{completedSubtasks}/{subTasks.length} subtasks complete</FactRow>}
+          {task.branch && <FactRow label="Branch"><span className="df-break-technical font-mono text-[10px]">{task.branch}</span></FactRow>}
+          {task.createdAt && <FactRow label="Created">{new Date(task.createdAt).toLocaleDateString()}</FactRow>}
+          {task.updatedAt && <FactRow label="Updated">{new Date(task.updatedAt).toLocaleDateString()}</FactRow>}
+        </section>
+
+        {(task.repo || task.sourceUrl || task.specUrl || task.jiraKey) && (
+          <section className="min-w-0 rounded-lg border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] p-3">
+            <h3 className="mb-1 text-[10px] font-extrabold uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]">References</h3>
+            {task.repo && <FactRow label="Repository"><span className="df-break-technical font-mono text-[10px]">{task.repo}</span></FactRow>}
+            {task.jiraKey && <FactRow label="Jira"><span className="font-mono text-[10px]">{task.jiraKey}</span></FactRow>}
+            {task.sourceUrl && <ReferenceLink label="Source" href={task.sourceUrl}>{task.sourceUrl}</ReferenceLink>}
+            {task.specUrl && <ReferenceLink label="Spec" href={task.specUrl.startsWith('http') ? task.specUrl : `https://${task.specUrl}`}>{task.specUrl}</ReferenceLink>}
+          </section>
+        )}
+      </aside>
     </div>
   );
 }

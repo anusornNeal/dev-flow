@@ -38,17 +38,17 @@ function renderShell(overrides: Record<string, unknown> = {}) {
   }));
 }
 
-test('inspector sizing clamps to the approved 45–85vw range with 65vw default', () => {
-  assert.equal(TASK_INSPECTOR_DEFAULT_WIDTH_VW, 65);
+test('inspector sizing clamps to the approved 45–85vw range with 58vw default', () => {
+  assert.equal(TASK_INSPECTOR_DEFAULT_WIDTH_VW, 58);
   assert.equal(clampTaskInspectorWidth(20), TASK_INSPECTOR_MIN_WIDTH_VW);
   assert.equal(clampTaskInspectorWidth(72), 72);
   assert.equal(clampTaskInspectorWidth(120), TASK_INSPECTOR_MAX_WIDTH_VW);
-  assert.equal(resolveTaskInspectorResize(65, 180, 1200), 80);
+  assert.equal(resolveTaskInspectorResize(58, 180, 1200), 73);
 });
 
 test('shell renders a wide desktop inspector and narrow-window full-screen CSS contract', () => {
   const html = renderShell();
-  assert.match(html, /width:65vw/);
+  assert.match(html, /width:58vw/);
   assert.match(html, /height:92vh/);
   assert.match(html, /max-lg:!w-screen/);
   assert.match(html, /max-lg:!h-screen/);
@@ -105,12 +105,19 @@ test('status summary explains blocked, failed, and review-ready states with an a
   assert.match(review.nextAction, /Work evidence and Bugs/);
 });
 
-test('shell surfaces current state and next action above technical tabs', () => {
-  const html = renderShell();
-  assert.match(html, /data-testid="task-inspector-status-summary"/);
-  assert.match(html, /Work in progress/);
-  assert.match(html, />Next action</);
-  assert.match(html, /Track the current execution in Activity/);
+test('shell suppresses routine status explanation and surfaces compact attention only when action is needed', () => {
+  const normalHtml = renderShell();
+  assert.doesNotMatch(normalHtml, /task-inspector-attention/);
+
+  const blockedHtml = renderShell({
+    task: {
+      ...task,
+      liveWork: { blocked: true, ownerLabel: 'Chat A', phaseLabel: 'Verification', activity: 'Waiting for a prerequisite', phaseIndex: 2, phaseCount: 4, updatedAt: '2026-08-08T00:00:00.000Z' },
+    },
+  });
+  assert.match(blockedHtml, /data-testid="task-inspector-attention"/);
+  assert.match(blockedHtml, />Blocked</);
+  assert.match(blockedHtml, /Resolve the blocker/);
 });
 
 test('edit mode has visible cancel, save, saving, and error states without duplicate preview action', () => {
@@ -120,7 +127,7 @@ test('edit mode has visible cancel, save, saving, and error states without dupli
   assert.match(html, /role="alert"/);
   assert.match(html, /Title is required before saving/);
   assert.doesNotMatch(html, /aria-label="Edit task"/);
-  assert.doesNotMatch(html, /task-inspector-status-summary/);
+  assert.doesNotMatch(html, /task-inspector-attention/);
 });
 
 test('header and tab bar remain sticky while panel content scrolls', () => {

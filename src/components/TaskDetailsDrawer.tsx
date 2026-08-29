@@ -203,6 +203,8 @@ export default function TaskDetailsDrawer({
   const overviewTab = (
     <TaskOverviewTab
       task={task}
+      parentTask={parentTask}
+      subTasks={subTasks}
       isEditing={edit.isEditing}
       editedTitle={edit.editedTitle}
       setEditedTitle={edit.setEditedTitle}

@@ -1455,28 +1455,88 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
           type: 'array', minItems: 1, maxItems: 12,
           description: 'Named Repo Query Plan V1 steps. The complete DAG is validated before repository operations execute.',
           items: {
-            type: 'object', additionalProperties: false,
-            properties: {
-              id: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,31}$' },
-              op: { type: 'string', enum: ['search', 'filter_path', 'dedupe', 'limit', 'read_snippets', 'select'] },
-              from: { oneOf: [
-                { type: 'string', minLength: 1, maxLength: 32 },
-                { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 32 } },
-              ] },
-              query: { type: 'string', minLength: 1, maxLength: 500 },
-              path: { type: 'string', maxLength: 256, description: 'Repository-relative search scope.' },
-              limit: { type: 'number', minimum: 1, maximum: 100 },
-              include: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 256 } },
-              exclude: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 256 } },
-              by: { type: 'string', enum: ['match', 'file'] },
-              count: { type: 'number', minimum: 1, maximum: 100 },
-              contextBefore: { type: 'number', minimum: 0, maximum: 50 },
-              contextAfter: { type: 'number', minimum: 0, maximum: 50 },
-              maxBytesPerSnippet: { type: 'number', minimum: 1, maximum: 20000 },
-              maxTotalBytes: { type: 'number', minimum: 1, maximum: 100000 },
-              fields: { type: 'array', maxItems: 10, items: { type: 'string', enum: ['path', 'line', 'preview', 'startLine', 'endLine', 'content', 'returnedBytes', 'truncated'] } },
-            },
-            required: ['id', 'op'],
+            oneOf: [
+              {
+                type: 'object', additionalProperties: false,
+                properties: {
+                  id: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,31}$' },
+                  op: { const: 'search' },
+                  query: { type: 'string', minLength: 1, maxLength: 500 },
+                  path: { type: 'string', maxLength: 256, description: 'Repository-relative search scope.' },
+                  limit: { type: 'number', minimum: 1, maximum: 100 },
+                },
+                required: ['id', 'op', 'query'],
+              },
+              {
+                type: 'object', additionalProperties: false,
+                properties: {
+                  id: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,31}$' },
+                  op: { const: 'filter_path' },
+                  from: { oneOf: [
+                    { type: 'string', minLength: 1, maxLength: 32 },
+                    { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 32 } },
+                  ] },
+                  include: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 256 } },
+                  exclude: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 256 } },
+                },
+                required: ['id', 'op', 'from'],
+              },
+              {
+                type: 'object', additionalProperties: false,
+                properties: {
+                  id: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,31}$' },
+                  op: { const: 'dedupe' },
+                  from: { oneOf: [
+                    { type: 'string', minLength: 1, maxLength: 32 },
+                    { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 32 } },
+                  ] },
+                  by: { type: 'string', enum: ['match', 'file'] },
+                },
+                required: ['id', 'op', 'from'],
+              },
+              {
+                type: 'object', additionalProperties: false,
+                properties: {
+                  id: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,31}$' },
+                  op: { const: 'limit' },
+                  from: { oneOf: [
+                    { type: 'string', minLength: 1, maxLength: 32 },
+                    { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 32 } },
+                  ] },
+                  count: { type: 'number', minimum: 1, maximum: 100 },
+                },
+                required: ['id', 'op', 'from'],
+              },
+              {
+                type: 'object', additionalProperties: false,
+                properties: {
+                  id: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,31}$' },
+                  op: { const: 'read_snippets' },
+                  from: { oneOf: [
+                    { type: 'string', minLength: 1, maxLength: 32 },
+                    { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 32 } },
+                  ] },
+                  contextBefore: { type: 'number', minimum: 0, maximum: 50 },
+                  contextAfter: { type: 'number', minimum: 0, maximum: 50 },
+                  maxBytesPerSnippet: { type: 'number', minimum: 1, maximum: 20000 },
+                  maxTotalBytes: { type: 'number', minimum: 1, maximum: 100000 },
+                },
+                required: ['id', 'op', 'from'],
+              },
+              {
+                type: 'object', additionalProperties: false,
+                properties: {
+                  id: { type: 'string', minLength: 1, maxLength: 32, pattern: '^[A-Za-z][A-Za-z0-9_-]{0,31}$' },
+                  op: { const: 'select' },
+                  from: { oneOf: [
+                    { type: 'string', minLength: 1, maxLength: 32 },
+                    { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 32 } },
+                  ] },
+                  fields: { type: 'array', maxItems: 10, items: { type: 'string', enum: ['path', 'line', 'preview', 'startLine', 'endLine', 'content', 'returnedBytes', 'truncated'] } },
+                },
+                required: ['id', 'op', 'from'],
+              },
+            ],
           },
         },
         output: { type: 'string', minLength: 1, maxLength: 32, description: 'Step id of the final select operation.' },

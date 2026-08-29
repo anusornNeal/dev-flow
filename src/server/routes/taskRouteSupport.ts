@@ -1,16 +1,9 @@
-import { getProject } from '../repositories/projectRepository.js';
-import { getSettings } from '../repositories/settingsRepository.js';
-import { execFile } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import db from '../../db/index';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
-import { ACTIVE_AGENT_RUN_STATUSES, cancelActiveRunsForTask, cancelStaleActiveRuns, createAgentRun, getActiveRunForProjectAndAgent, getActiveRunForTask, getLatestAgentRunForTask, listActiveRunSummariesForProject, listAgentRunsForTask, updateAgentRunStatus, type AgentRun, type AgentNeutralOrchestrationResultState } from '../repositories/agentRunRepository';
+import { getLatestAgentRunForTask, listAgentRunsForTask, type AgentRun } from '../repositories/agentRunRepository';
 import { deleteTasksByIds, generateDisplayId, saveTask, getTasks } from '../repositories/taskRepository.js';
 import { listAttachmentsForTask } from '../repositories/attachmentRepository';
-import { appendAgentRunLog, buildAgentCompletionSummary, buildAgentTriggerInvocation, createAgentRunFiles, createAgentRunResultRecord, getAgentRunHistoryPaths, getDevFlowApiBaseUrl, resolveAgentExecutionMode, resolveFromDevFlowAppRoot, writeAgentRunLaunchMetadata, writeAgentRunOutputSummary, writeAgentRunResult } from '../services/agentRunService';
 import { extractImages, extractDesignImages, findProjectByIdentifier, findTaskByIdentifier, getAgentTaskContext, normalizeAgentCompletionPayload, normalizeTaskCategoryAndTags, applyTaskCategoryAndTagsUpdate, renderTaskPrompt, resolveProjectIdFromRepo, validateAgentCompletionPayload, validateAgentParams, validateTaskPayload } from '../services/taskService';
 import { validateTaskQualityForMutation } from '../services/taskQualityService';
 import { createApiError, sendApiError } from '../services/api';
@@ -18,36 +11,19 @@ import { draftTaskFromJiraBundle } from '../services/compositeAuthoringService';
 import { acquireLock, releaseLock, withIdempotency, withSyncLock, getIdempotencyResult, createPendingIdempotencyWithFingerprint, resolvePendingIdempotency, rejectPendingIdempotency, buildIdempotencyFingerprint } from '../services/lockAndIdempotencyService';
 import { validateEnum, validateString } from '../validation';
 import { isValidTransition, getValidationErrorMessage } from '../../lib/statusTransitions';
-import { buildAgentLaunchConfig, runAgentLaunchPreflight, type AgentLaunchPreflightCode } from '../services/agentLaunchConfig';
 import { applyChecklistToggle as applyChecklistToggleUseCase, getBugSummary, validateTaskPatch as validateTaskPatchUseCase } from '../useCases/taskUseCases';
-import { canRetryRun as canRetryRunUseCase, canCancelRun as canCancelRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
 import type { AgentCompletionPayload, AgentCompletionStatus, TaskStatus } from '../../types';
 import { registerTaskImportFileRoute } from './taskImportFileRoute';
 import { buildTaskGitWarnings, validateRecordedReviewSubmission } from '../services/taskGitWorkflowService';
 import { mutateTaskStatusWithLifecycle, taskHasLifecycleOwnership } from '../services/taskClaimService.js';
 import { projectTaskBoardLiveWork } from '../services/taskBoardLiveWorkProjectionService.js';
 
-const STALE_AGENT_RUN_MS = 30 * 60 * 1000;
-let lastCleanupCheck = 0;
-const CLEANUP_INTERVAL_MS = 30_000;
-
 export function withAgentOrchestrationLock<T>(taskId: string, action: () => T): T {
   return withSyncLock(`agent-orchestration-${taskId}`, action);
 }
 
-type TriggerTaskAgentResult =
-  | { triggered: true; run: AgentRun }
-  | { triggered: false; reason: string; code?: AgentLaunchPreflightCode | 'TASK_ALREADY_RUNNING' | 'AGENT_ALREADY_RUNNING' | 'LAUNCH_PLAN_INVALID'; run?: AgentRun | null };
-export type TriggerTaskAgentFailure = Extract<TriggerTaskAgentResult, { triggered: false }>;
-type ContinueTaskQueueResult = {
-  triggered: boolean;
-  reason: string;
-  run?: AgentRun;
-  runs?: AgentRun[];
-};
 type TaskReadMode = 'minimal' | 'summary' | 'board' | 'standard' | 'full' | 'agent-context' | 'debug';
 type MutationResponseMode = 'standard' | 'summary' | 'ack';
-type AgentCompletionRouteResult = { task: any; run: AgentRun; payload: AgentCompletionPayload; orchestrationResultState: AgentNeutralOrchestrationResultState };
 
 function normalizeFlag(value: unknown) {
   return value === true || String(value).toLowerCase() === 'true';
@@ -374,21 +350,13 @@ export function validateParentReviewMove(task: any, deps: ApiRouteDeps, nextStat
 }
 
 function clearActiveAgentIfSettled(task: any) {
-  if (['backlog', 'done', 'ready-for-review'].includes(task.status)) {
-    const activeRun = getActiveRunForTask(task.id);
-    if (activeRun && ['done', 'ready-for-review'].includes(task.status)) {
-      updateAgentRunStatus(activeRun.id, 'succeeded');
-    }
-    task.activeAgent = undefined;
-  }
+  if (['backlog', 'done', 'ready-for-review'].includes(task.status)) task.activeAgent = undefined;
 }
 
 export function syncTaskAgentStateForStatus(task: any, previousStatus?: string) {
   if (task.status === 'backlog') {
     if (previousStatus !== 'backlog') {
-      const resetReason = 'Manual reset: moved task to backlog and cancelled the active agent run.';
-      cancelActiveRunsForTask(task.id, resetReason);
-      appendTaskLog(task, 'Manual reset: cleared active agent lock after moving task to BACKLOG.', 'update');
+      appendTaskLog(task, 'Manual reset: cleared compatibility active-agent projection after moving task to BACKLOG.', 'update');
     }
     applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
     task.activeAgent = undefined;
@@ -429,10 +397,9 @@ export function canOverrideTaskLock(task: any, body: any, query?: any, agentRequ
 }
 
 export function applyRunSummaryToTask(task: any, run: AgentRun | null) {
-  const activeRun = run && ['queued', 'starting', 'running'].includes(run.status) ? run : getActiveRunForTask(task.id);
   const latestRun = run || getLatestAgentRunForTask(task.id);
   const allRuns = listAgentRunsForTask(task.id);
-  task.activeAgent = activeRun?.agent || undefined;
+  task.activeAgent = undefined;
   task.latestAgentRun = latestRun ? {
     id: latestRun.id,
     status: latestRun.status,
@@ -449,42 +416,4 @@ export function applyRunSummaryToTask(task: any, run: AgentRun | null) {
   }));
 }
 
-export function cleanupStaleActiveRuns(deps: ApiRouteDeps) {
-  const cutoff = new Date(Date.now() - STALE_AGENT_RUN_MS).toISOString();
-  const cancelledCount = cancelStaleActiveRuns(cutoff, `Stale active run cancelled after ${STALE_AGENT_RUN_MS / 60000} minutes.`);
-  if (cancelledCount > 0) {
-    deps.writeAgentLog('INFO', `Cancelled ${cancelledCount} stale active agent run(s).`);
-    // Batch-load all agent runs to avoid N+1 loop
-    const allRuns = db.prepare('SELECT * FROM agent_runs ORDER BY createdAt DESC').all() as AgentRun[];
-    const runsByTaskId = new Map<string, AgentRun[]>();
-    for (const run of allRuns) {
-      const existing = runsByTaskId.get(run.taskId);
-      if (existing) { existing.push(run); }
-      else { runsByTaskId.set(run.taskId, [run]); }
-    }
-    for (const task of getTasks()) {
-      const taskRuns = runsByTaskId.get(task.id) || [];
-      const activeRun = taskRuns.find(r => ACTIVE_AGENT_RUN_STATUSES.includes(r.status as any)) || null;
-      const latestRun = taskRuns[0] || null;
-      task.activeAgent = activeRun?.agent || undefined;
-      task.latestAgentRun = latestRun ? {
-        id: latestRun.id,
-        status: latestRun.status,
-        agent: latestRun.agent,
-        errorMessage: latestRun.errorMessage,
-        createdAt: latestRun.createdAt,
-        startedAt: latestRun.startedAt,
-        endedAt: latestRun.endedAt,
-      } : undefined;
-      task.agentRuns = taskRuns.map((r) => ({ id: r.id, status: r.status, logFile: r.logPath }));
-    }
-    
-  }
-}
-
-export function runThrottledStaleCleanup(deps: ApiRouteDeps, now = Date.now()) {
-  if (now - lastCleanupCheck <= CLEANUP_INTERVAL_MS) return;
-  cleanupStaleActiveRuns(deps);
-  lastCleanupCheck = now;
-}
 

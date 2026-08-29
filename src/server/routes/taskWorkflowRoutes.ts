@@ -2,7 +2,6 @@ import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import type { TaskStatus } from '../../types';
 import { VALID_STATUSES } from '../constants';
-import { getActiveRunForTask } from '../repositories/agentRunRepository';
 import { getTasks } from '../repositories/taskRepository.js';
 import { sendApiError } from '../services/api.js';
 import { mutateTaskStatusWithLifecycle } from '../services/taskClaimService.js';
@@ -12,7 +11,6 @@ import { evaluateMove, ensureCloseWarningBug, normalizeRecoveryDisposition, requ
 import { validateEnum } from '../validation';
 import {
   appendTaskLog,
-  canOverrideTaskLock,
   getTaskIndexByIdentifier,
   getTaskMoveWorkflowBlockers,
   syncTaskAgentStateForStatus,
@@ -49,15 +47,11 @@ export function registerTaskWorkflowRoutes(app: express.Express, deps: ApiRouteD
     if (!isValidTransition(previousStatus, req.body.status)) return res.status(400).json({ error: getValidationErrorMessage(previousStatus, req.body.status) });
 
     const targetStatus = req.body.status as TaskStatus;
-    const activeRun = getActiveRunForTask(task.id);
-    const hardBlockers = activeRun && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])
-      ? [{ code: 'ACTIVE_AGENT_LOCK', message: `Task is actively owned by ${activeRun.agent || 'an agent'} (${activeRun.status}). Cancel/complete the run before moving it manually.`, bypassable: false, details: { runId: activeRun.id, status: activeRun.status, agent: activeRun.agent } }]
-      : [];
     const moveDecision = evaluateMove({
       intent: req.body.intent,
       manualOverride: req.body.manualOverride === true,
       softBlockers: getTaskMoveWorkflowBlockers(task, deps, targetStatus),
-      hardBlockers,
+      hardBlockers: [],
     });
     if (!moveDecision.allowed) return sendMoveBlocked(res, previousStatus, targetStatus, moveDecision);
     const recovery = prepareMoveRecoveryDisposition(targetStatus, moveDecision.bypassedBlockers, req.body.recoveryDisposition);
@@ -116,15 +110,11 @@ export function registerTaskWorkflowRoutes(app: express.Express, deps: ApiRouteD
     if (!path) return res.status(400).json({ error: getValidationErrorMessage(fromStatus, targetStatus) });
     if (path.length === 1) return res.json(toMutationResponse(req, task, { message: 'Task is already in that lane', task, path }));
 
-    const activeRun = getActiveRunForTask(task.id);
-    const hardBlockers = activeRun && !canOverrideTaskLock(task, req.body, undefined, req.headers['x-agent-request'])
-      ? [{ code: 'ACTIVE_AGENT_LOCK', message: `Task is actively owned by ${activeRun.agent || 'an agent'} (${activeRun.status}). Cancel/complete the run before moving it manually.`, bypassable: false, details: { runId: activeRun.id, status: activeRun.status, agent: activeRun.agent } }]
-      : [];
     const moveDecision = evaluateMove({
       intent: req.body.intent,
       manualOverride: req.body.manualOverride === true,
       softBlockers: getTaskMoveWorkflowBlockers(task, deps, targetStatus),
-      hardBlockers,
+      hardBlockers: [],
     });
     if (!moveDecision.allowed) return sendMoveBlocked(res, fromStatus, targetStatus, moveDecision, path);
     const recovery = prepareMoveRecoveryDisposition(targetStatus, moveDecision.bypassedBlockers, req.body.recoveryDisposition);

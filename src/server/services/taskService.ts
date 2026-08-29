@@ -15,9 +15,7 @@ import type { AgentCompletionPayload, AgentCompletionTest, TaskCategory } from '
 import type { AppState } from '../types';
 import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_PRIORITIES, VALID_STATUSES, VALID_TASK_CATEGORIES } from '../constants';
 import { validateEnum, validateString } from '../validation';
-import { buildLaunchMetadataBlock, resolveAgentLaunchPlan } from './agentLaunchConfig';
 import { getModelConfig } from '../../lib/agentsConfig';
-import { resolveAgentExecutionMode } from './agentRunService';
 import { isPromptValuePresent, renderPromptTemplate } from './promptTemplateService';
 import { createApiError } from './api';
 import { listTaskUiEvidenceForAgent } from './taskUiEvidenceService';
@@ -257,15 +255,6 @@ export function validateAgentParams(item: any, tasks: any[]): string | null {
     if (config && item.effort && !config.availableEfforts.includes(item.effort)) {
       return `Invalid effort '${item.effort}' for model '${item.model}'. Must be one of: ${config.availableEfforts.join(', ')}`;
     }
-  }
-  if (item.agent && item.model) {
-    const plan = resolveAgentLaunchPlan({
-      agent: item.agent,
-      model: item.model,
-      effort: item.effort,
-      executionMode: 'safe',
-    });
-    if (!plan.ok) return plan.error || `Invalid model ${item.model} for ${item.agent}.`;
   }
 
   if (item.parentId) {

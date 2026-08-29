@@ -35,7 +35,14 @@ const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask, getTask } = await import('../../src/server/repositories/taskRepository.js');
-const { createAgentRun } = await import('../../src/server/repositories/agentRunRepository.js');
+const db = (await import('../../src/db/index.js')).default;
+function insertLegacyAgentRun(input: { taskId: string; projectId: string; agent: string; model?: string; effort?: string }) {
+  const id = `legacy-run-${input.taskId}-${Date.now()}`;
+  const createdAt = new Date().toISOString();
+  db.prepare(`INSERT INTO agent_runs (id, taskId, projectId, agent, model, effort, status, createdAt, startedAt, endedAt, promptPath, contextRef, logPath, errorMessage, retryOfRunId, triggerSource) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, input.taskId, input.projectId, input.agent, input.model ?? null, input.effort ?? null, 'succeeded', createdAt, createdAt, createdAt, null, null, null, null, null, 'legacy-fixture');
+  return { id, ...input, status: 'succeeded', createdAt };
+}
 const { listExecutionSessionsForTask } = await import('../../src/server/repositories/executionSessionRepository.js');
 const { buildTaskGitWarnings } = await import('../../src/server/services/taskGitWorkflowService.js');
 const claims = await import('../../src/server/services/taskClaimService.js');
@@ -72,7 +79,7 @@ function task(id: string) {
 }
 
 for (const id of ['manual-debt-done', 'manual-debt-ready', 'manual-hard', 'strict-default', 'manual-path', 'manual-log-evidence']) saveTask(task(id));
-createAgentRun({ taskId: 'manual-hard', projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
+insertLegacyAgentRun({ taskId: 'manual-hard', projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
 
 const app = express();
 app.use(express.json());
@@ -195,12 +202,12 @@ test('manual ready-for-review move can coexist with quality debt without an esca
   assert.deepEqual(result.body.bypassedBlockers, []);
 });
 
-test('active agent ownership stays a hard blocker even with manualOverride', async () => {
+test('cold legacy agent-run history no longer impersonates live ownership', async () => {
   const result = await post('manual-hard', { status: 'ready-for-review', intent: 'manual', manualOverride: true });
-  assert.equal(result.response.status, 403);
-  assert.equal(result.body.code, 'MOVE_HARD_BLOCKED');
-  assert.equal(result.body.blockers[0].code, 'ACTIVE_AGENT_LOCK');
-  assert.equal(getTask('manual-hard')?.status, 'in-progress');
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.task.status, 'ready-for-review');
+  assert.deepEqual(result.body.bypassedBlockers, []);
+  assert.equal(getTask('manual-hard')?.status, 'ready-for-review');
 });
 
 test('default API move does not turn quality debt into lifecycle authority', async () => {
@@ -320,7 +327,7 @@ test('retired legacy agent cancellation route is unavailable and preserves Chat 
   const claimed = claimLifecycleTask(id);
   const execution = activeExecution(id);
   assert.ok(execution);
-  createAgentRun({ taskId: id, projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
+  insertLegacyAgentRun({ taskId: id, projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
 
   const result = await jsonRequest(`/api/tasks/${id}/agent-runs/cancel`, {
     method: 'POST',
@@ -334,7 +341,7 @@ test('retired legacy agent cancellation route is unavailable and preserves Chat 
 
 test('all retired legacy agent mutation routes are unavailable', async () => {
   const id = lifecycleTask('legacy-mutations-retired', undefined, { agent: 'Codex' });
-  createAgentRun({ taskId: id, projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
+  insertLegacyAgentRun({ taskId: id, projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
   const requests = [
     { path: `/api/tasks/${id}/agent-runs/retry`, body: {} },
     { path: `/api/tasks/${id}/agent-runs/cancel`, body: { reason: 'should be unavailable' } },

@@ -13,7 +13,6 @@ function migrateLegacySecretSettings(map: Map<string, string>) {
   const legacy = Object.fromEntries(SECRET_SETTING_KEYS.map((key) => [key, map.get(key) || ''])) as Partial<Record<CredentialKey, string>>;
   const result = migrateLegacyCredentials(legacy);
   if (result.migrated.length === 0) return result;
-
   const clear = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
   db.transaction(() => {
     for (const key of result.migrated) {
@@ -31,7 +30,6 @@ function resolveCredentialWithLegacyFallback(key: CredentialKey, map: Map<string
 export function getSettings() {
   const map = readSettingsMap();
   migrateLegacySecretSettings(map);
-
   const githubToken = resolveCredentialWithLegacyFallback('githubToken', map);
   const jiraToken = resolveCredentialWithLegacyFallback('jiraToken', map);
   const figmaToken = resolveCredentialWithLegacyFallback('figmaToken', map);
@@ -39,31 +37,26 @@ export function getSettings() {
   const openAiTunnelId = map.get('openAiTunnelId') || '';
   const jiraBaseUrl = map.get('jiraBaseUrl') || process.env.JIRA_BASE_URL || '';
   const jiraEmail = map.get('jiraEmail') || process.env.JIRA_EMAIL || '';
-  // Auto Work is retired from active scheduling; preserve the legacy column as cold compatibility data only.
+  // Legacy autoWork/agentExecutionMode rows remain in SQLite as ignored cold compatibility data.
   const autoWork = false;
-  const agentExecutionMode = map.get('agentExecutionMode') || '';
-
-  return { githubToken, jiraToken, figmaToken, openAiRuntimeApiKey, openAiTunnelId, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode };
+  return { githubToken, jiraToken, figmaToken, openAiRuntimeApiKey, openAiTunnelId, jiraBaseUrl, jiraEmail, autoWork };
 }
 
 export function saveSettings(settings: Partial<ReturnType<typeof getSettings>>) {
   const current = getSettings();
   const updated = { ...current, ...settings };
   const changedSecretKeys = SECRET_SETTING_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(settings, key));
-
   for (const key of changedSecretKeys) {
     const value = String(settings[key] || '').trim();
     if (value) setCredential(key, value);
     else deleteCredential(key);
   }
-
   const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
   db.transaction(() => {
     stmt.run('openAiTunnelId', updated.openAiTunnelId ?? '');
     stmt.run('jiraBaseUrl', updated.jiraBaseUrl ?? '');
     stmt.run('jiraEmail', updated.jiraEmail ?? '');
     stmt.run('autoWork', 'false');
-    stmt.run('agentExecutionMode', updated.agentExecutionMode ?? '');
     for (const key of changedSecretKeys) stmt.run(key, '');
   })();
   publishServerEvent('settings.changed', { reason: 'saved' });

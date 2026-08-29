@@ -62,7 +62,7 @@ test('getSettings ignores a legacy ngrokUrl row while preserving unrelated setti
   assert.equal(settings.jiraBaseUrl, 'https://jira.example.invalid');
   assert.equal(settings.jiraEmail, 'dev@example.invalid');
   assert.equal(settings.autoWork, false);
-  assert.equal(settings.agentExecutionMode, 'safe');
+  assert.equal('agentExecutionMode' in settings, false);
 });
 
 test('saveSettings persists OpenAI tunnel id as normal settings data', () => {
@@ -80,7 +80,6 @@ test('saveSettings never writes or rewrites legacy ngrokUrl data', () => {
     jiraBaseUrl: 'https://jira-updated.example.invalid',
     jiraEmail: 'updated@example.invalid',
     autoWork: false,
-    agentExecutionMode: 'full',
   });
 
   assert.equal('ngrokUrl' in result, false);
@@ -88,7 +87,7 @@ test('saveSettings never writes or rewrites legacy ngrokUrl data', () => {
   assert.equal(readStoredValue('jiraBaseUrl'), 'https://jira-updated.example.invalid');
   assert.equal(readStoredValue('jiraEmail'), 'updated@example.invalid');
   assert.equal(readStoredValue('autoWork'), 'false');
-  assert.equal(readStoredValue('agentExecutionMode'), 'full');
+  assert.equal(readStoredValue('agentExecutionMode'), undefined);
 });
 
 test('GET /api/settings omits ngrokUrl even when a legacy row exists', async () => {
@@ -129,11 +128,12 @@ test('POST /api/settings ignores ngrokUrl input and preserves unrelated settings
     assert.equal(readStoredValue('ngrokUrl'), legacy);
     assert.equal(readStoredValue('jiraBaseUrl'), 'https://jira-post.example.invalid');
     assert.equal(readStoredValue('jiraEmail'), 'post@example.invalid');
-    assert.equal(readStoredValue('agentExecutionMode'), 'safe');
+    assert.equal(readStoredValue('agentExecutionMode'), undefined);
 
     const getResponse = await fetch(`${baseUrl}/api/settings`);
     const getBody = await getResponse.json() as Record<string, unknown>;
     assert.equal(Object.prototype.hasOwnProperty.call(getBody, 'ngrokUrl'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(getBody, 'agentExecutionMode'), false);
   });
 });
 

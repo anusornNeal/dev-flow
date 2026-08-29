@@ -23,7 +23,14 @@ const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');
-const { createAgentRun } = await import('../../src/server/repositories/agentRunRepository.js');
+const db = (await import('../../src/db/index.js')).default;
+function insertLegacyAgentRun(input: { taskId: string; projectId: string; agent: string; model?: string; effort?: string; promptPath?: string; contextRef?: string }) {
+  const id = `legacy-run-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  const createdAt = new Date().toISOString();
+  db.prepare(`INSERT INTO agent_runs (id, taskId, projectId, agent, model, effort, status, createdAt, startedAt, endedAt, promptPath, contextRef, logPath, errorMessage, retryOfRunId, triggerSource) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, input.taskId, input.projectId, input.agent, input.model ?? null, input.effort ?? null, 'succeeded', createdAt, createdAt, createdAt, input.promptPath ?? null, input.contextRef ?? null, null, null, null, 'legacy-fixture');
+  return { id, ...input, status: 'succeeded', createdAt };
+}
 const { createExecutionSessionRecord, listExecutionSessionsForTask } = await import('../../src/server/repositories/executionSessionRepository.js');
 
 const project = {
@@ -136,7 +143,7 @@ test('real Copy Prompt route renders rich card data for autonomous Codex without
     model: 'TASK-MODEL-INJECTION-SENTINEL',
     effort: 'TASK-EFFORT-INJECTION-SENTINEL',
   });
-  const run = createAgentRun({
+  const run = insertLegacyAgentRun({
     taskId: rich.id,
     projectId: project.id,
     agent: 'Codex',

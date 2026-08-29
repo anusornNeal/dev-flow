@@ -25,11 +25,11 @@ DevFlow core/runtime is cross-platform by default.
 - Tunnel runtime state defaults to ignored `.devflow/tunnel-client`; the runtime API key remains an environment secret and is passed to tunnel-client by `env:<name>` reference rather than written into repository state.
 - Intentional supervisor shutdown stops the DevFlow-managed tunnel. Guarded API-only restart leaves the tunnel running while the API child is replaced.
 
-### Agent launch
+### Agent execution
 
-- Windows retains `trigger-agent.bat`, `invoke-agent-trigger.ps1`, and the existing PowerShell launcher handoff.
-- macOS invokes `src/runner.ts` through the repository-local `tsx` CLI. The runner writes a POSIX-compatible `launch.mjs` worker and uses `/usr/bin/script` to give CLI agents a pseudo-terminal without `shell: true`.
-- Completion callbacks and run logs use the same DevFlow HTTP/run-artifact contract on both platforms.
+- Fresh-process launcher handoff is retired on every platform; `src/runner.ts` and `scripts/trigger-agent.bat` fail closed instead of spawning an agent CLI.
+- Managed DevFlow execution sessions and external worker synchronization are the supported cross-platform execution boundaries.
+- Existing `agent_runs` rows and `.devflow/runs` artifacts remain cold read-only history and are not deleted by launcher retirement.
 
 ### Credential vault
 

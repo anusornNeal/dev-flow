@@ -14,7 +14,13 @@ const db = (await import('../../src/db/index.js')).default;
 
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const taskRepository = await import('../../src/server/repositories/taskRepository.js') as any;
-const { createAgentRun } = await import('../../src/server/repositories/agentRunRepository.js');
+function insertLegacyAgentRun(input: { taskId: string; projectId: string; agent: string; model?: string; effort?: string }) {
+  const id = `legacy-run-${input.taskId}`;
+  const createdAt = '2026-08-09T00:00:01.000Z';
+  db.prepare(`INSERT INTO agent_runs (id, taskId, projectId, agent, model, effort, status, createdAt, startedAt, endedAt, promptPath, contextRef, logPath, errorMessage, retryOfRunId, triggerSource) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, input.taskId, input.projectId, input.agent, input.model ?? null, input.effort ?? null, 'succeeded', createdAt, createdAt, createdAt, null, null, null, null, null, 'legacy-fixture');
+  return { id, ...input, status: 'succeeded', createdAt };
+}
 const express = (await import('express')).default;
 const { registerApiRoutes } = await import('../../src/server/routes/registerApiRoutes.js');
 
@@ -64,7 +70,7 @@ taskRepository.saveTask({
   updatedAt: '2026-08-09T00:00:00.000Z',
 });
 
-const latestRun = createAgentRun({
+const latestRun = insertLegacyAgentRun({
   taskId: 'task-read-v2-1',
   projectId: 'proj-task-read-v2',
   agent: 'Codex',

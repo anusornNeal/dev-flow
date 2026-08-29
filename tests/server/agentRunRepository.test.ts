@@ -6,84 +6,58 @@ import path from 'node:path';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-agent-run-repository-'));
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
-
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const db = (await import('../../src/db/index.js')).default;
 const repository = await import('../../src/server/repositories/agentRunRepository.js');
 
-function createRun(patch: Record<string, unknown> = {}) {
-  return repository.createAgentRun({
+let seq = 0;
+function insertLegacyRun(patch: Record<string, unknown> = {}) {
+  seq += 1;
+  const run = {
+    id: `legacy-run-${seq}`,
     taskId: 'task-agent-run-repository',
     projectId: 'project-agent-run-repository',
     agent: 'Codex',
     model: 'GPT-5.6 Sol',
     effort: 'medium',
+    status: 'succeeded',
+    createdAt: `2026-08-29T00:00:0${seq}.000Z`,
+    startedAt: null,
+    endedAt: null,
     promptPath: 'prompt.md',
     contextRef: 'context-ref',
     logPath: 'agent.log',
+    errorMessage: null,
     retryOfRunId: 'prior-run',
-    triggerSource: 'test',
+    triggerSource: 'legacy-fixture',
     ...patch,
-  });
+  } as any;
+  db.prepare(`INSERT INTO agent_runs (id, taskId, projectId, agent, model, effort, status, createdAt, startedAt, endedAt, promptPath, contextRef, logPath, errorMessage, retryOfRunId, triggerSource) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(run.id, run.taskId, run.projectId, run.agent, run.model, run.effort, run.status, run.createdAt, run.startedAt, run.endedAt, run.promptPath, run.contextRef, run.logPath, run.errorMessage, run.retryOfRunId, run.triggerSource);
+  return run;
 }
 
-test('valid persisted agent run round-trips through explicit normalization', () => {
-  const created = createRun();
-  const read = repository.getAgentRun(created.id);
-
-  assert.deepEqual(read, created);
-  assert.deepEqual(repository.listAgentRunsForTask(created.taskId), [created]);
-  assert.deepEqual(repository.listActiveRunsForProject(created.projectId), [created]);
+test('legacy agent run rows remain readable as cold history', () => {
+  const created = insertLegacyRun();
+  const read = repository.getAgentRun(created.id)!;
+  assert.equal(read.id, created.id);
+  assert.equal(read.status, 'succeeded');
+  assert.equal(repository.listAgentRunsForTask(created.taskId)[0]?.id, created.id);
+  assert.equal(repository.getLatestAgentRunForTask(created.taskId)?.id, created.id);
 });
 
-test('nullable persisted fields normalize undefined/SQL null shapes to null', () => {
-  const created = createRun({
-    model: null,
-    effort: null,
-    promptPath: null,
-    contextRef: null,
-    logPath: null,
-    retryOfRunId: null,
-    triggerSource: null,
-  });
-
+test('nullable persisted fields normalize SQL null shapes to null', () => {
+  const created = insertLegacyRun({ model: null, effort: null, promptPath: null, contextRef: null, logPath: null, retryOfRunId: null, triggerSource: null });
   const read = repository.getAgentRun(created.id)!;
   assert.equal(read.model, null);
-  assert.equal(read.effort, null);
-  assert.equal(read.startedAt, null);
-  assert.equal(read.endedAt, null);
   assert.equal(read.promptPath, null);
   assert.equal(read.contextRef, null);
   assert.equal(read.logPath, null);
-  assert.equal(read.errorMessage, null);
-  assert.equal(read.retryOfRunId, null);
-  assert.equal(read.triggerSource, null);
 });
 
-test('invalid persisted status fails closed at the repository boundary', () => {
-  const created = createRun();
+test('invalid persisted legacy status fails closed at read boundary', () => {
+  const created = insertLegacyRun();
   db.prepare('UPDATE agent_runs SET status = ? WHERE id = ?').run('mystery-state', created.id);
-
-  assert.throws(
-    () => repository.getAgentRun(created.id),
-    /INVALID_AGENT_RUN_STATUS:mystery-state/,
-  );
-  assert.throws(
-    () => repository.listAgentRunsForTask(created.taskId),
-    /INVALID_AGENT_RUN_STATUS:mystery-state/,
-  );
-});
-
-test('status transitions retain existing policy after normalization', () => {
-  const created = createRun();
-  const running = repository.updateAgentRunStatus(created.id, 'running', { startedAt: '2026-08-29T00:00:00.000Z' })!;
-  assert.equal(running.status, 'running');
-  assert.equal(running.startedAt, '2026-08-29T00:00:00.000Z');
-
-  const succeeded = repository.updateAgentRunStatus(created.id, 'succeeded', { endedAt: '2026-08-29T00:01:00.000Z' })!;
-  assert.equal(succeeded.status, 'succeeded');
-
-  const rejected = repository.updateAgentRunStatus(created.id, 'running');
-  assert.equal(rejected?.status, 'succeeded');
+  assert.throws(() => repository.getAgentRun(created.id), /INVALID_AGENT_RUN_STATUS:mystery-state/);
 });

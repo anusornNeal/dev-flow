@@ -7,13 +7,11 @@ import {
   filterTasksForList,
   parseTaskReadMode,
   resolveTaskBoardListQuery,
-  runThrottledStaleCleanup,
   toTaskResponse,
 } from './taskRouteSupport';
 
 export function registerTaskReadRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/tasks', (_req, res) => {
-    runThrottledStaleCleanup(deps);
     const req = _req as express.Request;
     const mode = parseTaskReadMode(req.query.mode, 'full');
     const hasModernQuery = ['mode', 'projectId', 'projectName', 'repo', 'repoUrl', 'localPath', 'parentId', 'status', 'q', 'limit', 'offset', 'archived', 'all'].some((key) => req.query[key] !== undefined);

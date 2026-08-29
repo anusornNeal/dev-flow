@@ -1,4 +1,3 @@
 @echo off
-REM Proxies agent execution to the generic modular runner
-
-npx tsx "%~dp0..\src\runner.ts" "%~1" "%~2" "%~3" "%~4" "%~5" "%~6" "%~7" "%~8" "%~9"
+echo [trigger-agent] Legacy fresh-process agent execution is retired. Use DevFlow managed execution or external worker synchronization. 1>&2
+exit /b 1

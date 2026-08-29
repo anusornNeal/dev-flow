@@ -1,7 +1,7 @@
 import { getProject } from './projectRepository.js';
 import db, { withDbTransaction } from '../../db/index';
 import type { AppState } from '../types';
-import { ACTIVE_AGENT_RUN_STATUSES, type AgentRun } from './agentRunRepository';
+import type { AgentRun } from './agentRunRepository';
 import { normalizeTaskCategoryAndTags } from '../services/taskService';
 import { publishServerEvent } from '../services/serverEventService.js';
 
@@ -352,11 +352,10 @@ function parseTaskRow(item: any, runsByTaskId: Map<string, AgentRun[]>) {
   };
 
   const taskRuns = runsByTaskId.get(task.id) || [];
-  const activeRun = taskRuns.find(r => ACTIVE_AGENT_RUN_STATUSES.includes(r.status as any)) || null;
   const latestRun = taskRuns[0] || null;
   return {
     ...task,
-    activeAgent: activeRun?.agent || undefined,
+    activeAgent: undefined,
     latestAgentRun: latestRun ? {
       id: latestRun.id,
       status: latestRun.status,

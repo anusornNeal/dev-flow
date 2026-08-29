@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { AlertCircle, CheckCircle2, Cable, Database, Loader2, Network, Save, Settings2, X, Zap } from 'lucide-react';
-import AgentExecutionModeSection from './settings/AgentExecutionModeSection';
+import { AlertCircle, CheckCircle2, Cable, Database, Loader2, Network, Save, Settings2, X } from 'lucide-react';
 import BackupSettingsSection from './settings/BackupSettingsSection';
 import IntegrationsSettingsSection from './settings/IntegrationsSettingsSection';
 
@@ -12,7 +11,6 @@ interface SettingsData {
   openAiTunnelId: string;
   jiraBaseUrl: string;
   jiraEmail: string;
-  agentExecutionMode: string;
 }
 
 interface SettingsModalProps {
@@ -21,7 +19,7 @@ interface SettingsModalProps {
 
 type SaveStatus = 'idle' | 'success' | 'error';
 type ImportStatus = 'idle' | 'importing' | 'success' | 'error';
-type SettingsSectionId = 'runtime' | 'integrations' | 'agents' | 'backup';
+type SettingsSectionId = 'runtime' | 'integrations' | 'backup';
 
 const SETTINGS_SECTIONS: Array<{
   id: SettingsSectionId;
@@ -31,7 +29,6 @@ const SETTINGS_SECTIONS: Array<{
 }> = [
   { id: 'runtime', label: 'Runtime', description: 'Tunnel & API key', icon: Network },
   { id: 'integrations', label: 'Integrations', description: 'GitHub, Jira, Figma', icon: Cable },
-  { id: 'agents', label: 'Agent execution', description: 'Permission mode', icon: Zap },
   { id: 'backup', label: 'Backup & recovery', description: 'Export, restore, drills', icon: Database },
 ];
 
@@ -57,7 +54,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [openAiTunnelId, setOpenAiTunnelId] = useState('');
   const [jiraBaseUrl, setJiraBaseUrl] = useState('');
   const [jiraEmail, setJiraEmail] = useState('');
-  const [agentExecutionMode, setAgentExecutionMode] = useState('safe');
 
   const [clearGithubToken, setClearGithubToken] = useState(false);
   const [clearJiraToken, setClearJiraToken] = useState(false);
@@ -88,7 +84,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       setOpenAiTunnelId(data.openAiTunnelId ?? '');
       setJiraBaseUrl(data.jiraBaseUrl ?? '');
       setJiraEmail(data.jiraEmail ?? '');
-      setAgentExecutionMode(data.agentExecutionMode || 'safe');
     } catch (error: any) {
       setLoadError(error?.message || 'Settings could not be loaded.');
     } finally {
@@ -135,7 +130,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setErrorMsg('');
 
     try {
-      const payload: Record<string, unknown> = { openAiTunnelId, jiraBaseUrl, jiraEmail, agentExecutionMode };
+      const payload: Record<string, unknown> = { openAiTunnelId, jiraBaseUrl, jiraEmail };
       if (showGithubToken && githubToken.trim() !== '') {
         payload.githubToken = githubToken;
       } else if (clearGithubToken) {
@@ -374,12 +369,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               <main className="min-w-0 flex-1 overflow-y-auto p-3 sm:p-4">
                 {activeSection === 'runtime' && <IntegrationsSettingsSection section="runtime" {...sharedIntegrationProps} />}
                 {activeSection === 'integrations' && <IntegrationsSettingsSection section="integrations" {...sharedIntegrationProps} />}
-                {activeSection === 'agents' && (
-                  <AgentExecutionModeSection
-                    agentExecutionMode={agentExecutionMode}
-                    onAgentExecutionModeChange={setAgentExecutionMode}
-                  />
-                )}
                 {activeSection === 'backup' && (
                   <BackupSettingsSection
                     fileInputRef={fileInputRef}
@@ -406,7 +395,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   </div>
                 )}
                 {saveStatus === 'idle' && (
-                  <p className="text-[9.5px] leading-relaxed text-[var(--df-color-text-subtle)]">Changes in Runtime, Integrations, and Agent execution are applied together with Save Settings.</p>
+                  <p className="text-[9.5px] leading-relaxed text-[var(--df-color-text-subtle)]">Changes in Runtime and Integrations are applied together with Save Settings.</p>
                 )}
               </div>
               <button

@@ -16,8 +16,10 @@ test('TaskCard renders Live Work directly from the server projection', () => {
   assert.match(source, /liveWorkFreshness/);
 });
 
-test('TaskCard avoids duplicate managed and legacy run status blocks', () => {
-  assert.match(source, /!liveWork && \(task\.activeAgent \|\| autoWorkState\)/);
+test('TaskCard uses canonical Live Work without legacy run-state fallbacks', () => {
+  assert.doesNotMatch(source, /task\.activeAgent/);
+  assert.doesNotMatch(source, /autoWorkState/);
+  assert.doesNotMatch(source, /latestAgentRun/);
   assert.doesNotMatch(source, /กำลังทำ ·/);
   assert.doesNotMatch(source, /const activeClaim =/);
 });

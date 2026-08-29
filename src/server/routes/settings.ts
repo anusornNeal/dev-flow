@@ -34,7 +34,6 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       jiraBaseUrl: settings.jiraBaseUrl ?? '',
       jiraEmail: settings.jiraEmail ?? '',
       autoWork: false,
-      agentExecutionMode: settings.agentExecutionMode ?? '',
       credentialVault: getCredentialVaultDiagnostics(),
       recovery: getRecoveryStatus(),
     });
@@ -42,7 +41,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
   app.post('/api/settings', (req, res) => {
     const settings: Partial<Parameters<typeof saveSettings>[0]> = {};
-    const { githubToken, jiraToken, figmaToken, openAiRuntimeApiKey, openAiTunnelId, jiraBaseUrl, jiraEmail, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken, clearOpenAiRuntimeApiKey } = req.body;
+    const { githubToken, jiraToken, figmaToken, openAiRuntimeApiKey, openAiTunnelId, jiraBaseUrl, jiraEmail, clearGithubToken, clearJiraToken, clearFigmaToken, clearOpenAiRuntimeApiKey } = req.body;
 
     // Validate types
     if (githubToken !== undefined && typeof githubToken !== 'string') {
@@ -68,12 +67,6 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
     if (jiraEmail !== undefined && typeof jiraEmail !== 'string') {
       return res.status(400).json({ error: 'jiraEmail must be a string' });
-    }
-    if (agentExecutionMode !== undefined && typeof agentExecutionMode !== 'string') {
-      return res.status(400).json({ error: 'agentExecutionMode must be a string' });
-    }
-    if (agentExecutionMode !== undefined && agentExecutionMode !== '' && agentExecutionMode !== 'safe' && agentExecutionMode !== 'full') {
-      return res.status(400).json({ error: 'agentExecutionMode must be safe or full' });
     }
     if (clearGithubToken !== undefined && typeof clearGithubToken !== 'boolean') {
       return res.status(400).json({ error: 'clearGithubToken must be a boolean' });
@@ -119,10 +112,6 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
     if (typeof jiraEmail === 'string') {
       settings.jiraEmail = jiraEmail.trim();
-    }
-
-    if (typeof agentExecutionMode === 'string') {
-      settings.agentExecutionMode = agentExecutionMode;
     }
 
     if (!persistSettingsOrRespond(res, settings)) return;

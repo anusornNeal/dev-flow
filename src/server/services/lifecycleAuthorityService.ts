@@ -820,6 +820,8 @@ export function computeLifecycleAuthoritySnapshot(
       reasonCodes: [...new Set(commitReasonCodes)],
     },
     finalization: {
+      authoritySource: 'execution-finalization',
+      taskEvidenceRole: 'projection-only',
       taskDone: task.status === 'done',
       latestTerminalExecutionId: latestTerminal?.id || null,
       latestTerminalLifecycleStage: latestTerminal?.lifecycle.stage || null,

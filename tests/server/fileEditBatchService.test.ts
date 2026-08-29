@@ -68,6 +68,22 @@ test('editFilesBatch applies multiple files after preflight succeeds', () => {
   assert.equal(readFixture('apply-b.txt'), 'beta dos');
 });
 
+test('editFilesBatch preserves explicit empty-string replacement semantics', () => {
+  writeFixture('empty-replacement.txt', 'alpha one beta');
+
+  const result = editFilesBatch(state, {
+    projectId: 'project-file-edit-batch-1',
+    mode: 'apply',
+    files: [
+      { filePath: 'empty-replacement.txt', edits: [{ type: 'replace', find: ' one', replaceWith: '' }] },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+  assert.equal(readFixture('empty-replacement.txt'), 'alpha beta');
+});
+
 test('editFilesBatch rejects duplicate file paths before writing', () => {
   writeFixture('duplicate.txt', 'same file');
 
@@ -101,6 +117,28 @@ test('editFilesBatch stops before writing when any preflight edit fails', () => 
   assert.equal(result.ok, false);
   assert.equal(readFixture('preflight-a.txt'), 'alpha one');
   assert.equal(readFixture('preflight-b.txt'), 'beta two');
+});
+
+test('editFilesBatch rejects malformed replacement before writing any file', () => {
+  writeFixture('malformed-a.txt', 'alpha one');
+  writeFixture('malformed-b.txt', 'beta two');
+
+  const result = editFilesBatch(state, {
+    projectId: 'project-file-edit-batch-1',
+    mode: 'apply',
+    files: [
+      { filePath: 'malformed-a.txt', edits: [{ type: 'replace', find: 'one', replaceWith: 'uno' }] },
+      { filePath: 'malformed-b.txt', edits: [{ type: 'replace', find: 'two' }] },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.changed, false);
+  assert.equal(result.errors?.[0]?.filePath, 'malformed-b.txt');
+  assert.equal(result.errors?.[0]?.code, 'INVALID_OPERATION');
+  assert.match(result.errors?.[0]?.message || '', /replaceWith/);
+  assert.equal(readFixture('malformed-a.txt'), 'alpha one');
+  assert.equal(readFixture('malformed-b.txt'), 'beta two');
 });
 
 test('editFilesBatch rolls back writes when ownership persistence fails', () => {

@@ -102,6 +102,34 @@ function restoreNewlines(value: string, style: NewlineStyle): string {
   return newline === '\n' ? normalized : normalized.replace(/\n/g, newline);
 }
 
+function validateOperationShape(op: unknown, index: number): { ok: true } | { ok: false; code: 'INVALID_OPERATION'; message: string } {
+  if (!op || typeof op !== 'object' || Array.isArray(op)) {
+    return { ok: false, code: 'INVALID_OPERATION', message: `Operation ${index} must be an object.` };
+  }
+
+  const candidate = op as Record<string, unknown>;
+  const requireString = (field: string) => typeof candidate[field] === 'string'
+    ? null
+    : { ok: false as const, code: 'INVALID_OPERATION' as const, message: `Operation ${index} requires string field ${field}.` };
+
+  let invalid: ReturnType<typeof requireString> = null;
+  if (candidate.type === 'replace') {
+    invalid = requireString('find') || requireString('replaceWith');
+  } else if (candidate.type === 'insert_before' || candidate.type === 'insert_after') {
+    invalid = requireString('find') || requireString('content');
+  } else if (candidate.type === 'delete_between') {
+    invalid = requireString('start') || requireString('end');
+  } else {
+    return { ok: false, code: 'INVALID_OPERATION', message: `Unsupported operation type for operation ${index}.` };
+  }
+  if (invalid) return invalid;
+
+  if (candidate.occurrence !== undefined && (!Number.isInteger(candidate.occurrence) || Number(candidate.occurrence) < 1)) {
+    return { ok: false, code: 'INVALID_OPERATION', message: `Operation ${index} occurrence must be a positive integer when provided.` };
+  }
+  return { ok: true };
+}
+
 function normalizeOperation(op: SafeEditOperation): SafeEditOperation {
   return {
     ...op,
@@ -306,6 +334,19 @@ export function prepareSafeEditFile(state: AppState, args: Record<string, any>):
   let after = normalizedBefore;
   for (let i = 0; i < operations.length; i += 1) {
     const rawOperation = operations[i] as SafeEditOperation;
+    const shape = validateOperationShape(rawOperation, i);
+    if (shape.ok === false) {
+      return {
+        ok: false,
+        result: {
+          ...fail({ dryRun: true, filePath, code: shape.code, message: shape.message, operationIndex: i, diagnostics }),
+          operations: i,
+          bytesBefore: byteLength(before),
+          bytesAfter: byteLength(restoreNewlines(after, newlineStyle)),
+          revisionBefore,
+        },
+      };
+    }
     const normalizedOperation = normalizeOperation(rawOperation);
     if (operationUsedNewlineNormalization(rawOperation) || before !== normalizedBefore) {
       diagnostics.matchedWithNormalizedNewlines = true;

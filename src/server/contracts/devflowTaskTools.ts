@@ -316,11 +316,6 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move-to`, { responseMode: responseMode || 'summary' }), body: body.manualOverride ? { ...body, intent: 'manual' } : body, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
   },
   {
-    name: 'complete_task_review', description: 'Complete a reviewed task by moving it to done through the existing transition helper. DONE records lifecycle completion only; review approval and GREEN verification remain separate evidence and are never implied by status alone.',
-    inputSchema: { type: 'object', properties: { ...taskIdentifierProperty, ...booleanFlagSchema.properties, ...mutationResponseModeProperty }, required: ['taskId'] }, outputSchema: { type: 'object' },
-    buildHttpRequest: ({ taskId, isAgentRequest, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/move-to`, { responseMode: responseMode || 'summary' }), body: { ...body, status: 'done' }, headers: isAgentRequest ? { 'x-agent-request': 'true' } : undefined }),
-  },
-  {
     name: 'batch_move_task_status', description: 'Move multiple tasks in one round trip.',
     inputSchema: { type: 'object', properties: { moves: { type: 'array', items: { type: 'object', properties: { ...taskIdentifierProperty, status: { type: 'string', enum: VALID_STATUSES }, ...booleanFlagSchema.properties }, required: ['taskId', 'status'] } } }, required: ['moves'] }, outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({ method: 'POST', path: '/api/tasks/batch/move', body: args }),

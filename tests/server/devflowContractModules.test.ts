@@ -12,7 +12,7 @@ const TASK_TOOL_NAMES = [
   'get_execution_continuation',
   'list_tasks', 'search_tasks', 'get_task', 'get_task_images',
   'open_task_bug', 'update_task_bug_status', 'create_task', 'update_task', 'get_next_action', 'claim_next_task', 'claim_task', 'renew_task_claim', 'expand_task_scope', 'release_task_claim', 'batch_upsert_tasks', 'import_tasks_from_file',
-  'sync_task_with_git', 'submit_task_for_review', 'update_external_task_status', 'move_task_status', 'move_task_to_status', 'complete_task_review',
+  'sync_task_with_git', 'submit_task_for_review', 'update_external_task_status', 'move_task_status', 'move_task_to_status',
   'batch_move_task_status', 'toggle_task_checklist', 'batch_toggle_task_checklist', 'delete_task',
 ];
 

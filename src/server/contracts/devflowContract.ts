@@ -1805,7 +1805,6 @@ const MCP_CONSOLIDATION_REPLACEMENTS: Record<string, string> = {
   move_task_status: 'move_task_to_status',
   batch_move_task_status: 'move_task_to_status',
   batch_toggle_task_checklist: 'toggle_task_checklist',
-  complete_task_review: 'move_task_to_status',
   get_authoring_skills: 'get_authoring_skill',
   list_skills: 'get_authoring_skill',
   get_skill: 'get_authoring_skill',

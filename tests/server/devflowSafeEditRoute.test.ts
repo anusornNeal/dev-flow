@@ -190,14 +190,9 @@ test('capability catalog async guidance uses result long-poll as the normal comp
   assert.doesNotMatch(catalogTool.description, /must use.*get_tool_job_status.*get_tool_job_log.*get_tool_job_result/i);
 });
 
-test('devflowContract exposes complete_task_review', () => {
-  const tool = getToolDefinitionByName('complete_task_review');
-  assert.ok(tool);
-  const req = tool.buildHttpRequest({ taskId: 'DVF-1', isAgentRequest: true, responseMode: 'summary' });
-  assert.equal(req.method, 'POST');
-  assert.ok(req.path.startsWith('/api/tasks/DVF-1/move-to'));
-  assert.deepEqual(req.body, { status: 'done' });
-  assert.equal(req.headers?.['x-agent-request'], 'true');
+test('devflowContract retires redundant complete_task_review in favor of move_task_to_status', () => {
+  assert.equal(getToolDefinitionByName('complete_task_review'), undefined);
+  assert.ok(getToolDefinitionByName('move_task_to_status'));
 });
 
 test('apply_patch contract narrows patch input to native Git unified diff', () => {

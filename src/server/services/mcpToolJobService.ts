@@ -1,23 +1,20 @@
 import { createHash, randomUUID } from 'crypto';
 import type { AppState } from '../types';
-import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listRecentJobs, startBackgroundJobCleanup, claimJob, heartbeatJob, requestJobCancellation, transitionJobStatus, listRecoverableJobs, setJobRecoveryClassification, requeueJobForRecovery, getDurableJobMetrics, markJobConsumerAttached, markJobConsumerDetached, markJobSuperseded, getLatestAcceptedGreenGeneration, type McpToolJob, type JobLeaseGuard } from '../repositories/mcpToolJobRepository';
+import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listRecentJobs, startBackgroundJobCleanup, claimJob, heartbeatJob, requestJobCancellation, transitionJobStatus, getDurableJobMetrics, markJobConsumerAttached, markJobConsumerDetached, markJobSuperseded, getLatestAcceptedGreenGeneration, type McpToolJob, type JobLeaseGuard } from '../repositories/mcpToolJobRepository';
 import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { getProjectCommandAdmissionPreflight, getProjectCommandDurableExecutionBudgetMs, getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidateAsync, type ProjectCommandExecutionIdentity } from './projectCommandService';
-import { isVerificationCandidateCurrent, releaseReusableVerificationCandidateLeaseAsync, releaseVerificationCandidate, releaseVerificationCandidateAsync } from './verificationCandidateService';
+import { isVerificationCandidateCurrent } from './verificationCandidateService';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
 import {
   buildQueueEntryDiagnostics,
-  decrementScheduledResource,
   getActiveResourceSnapshot,
   getBlockerForQueueEntry,
   getSchedulerProfile,
   getSchedulerPriority,
   getSchedulerCapacitySnapshot,
-  selectNextRunnableQueueIndex,
-  incrementScheduledResource,
   transitionScheduledResource,
   tryAcquireVerificationProcessPermit,
   releaseVerificationProcessPermit,
@@ -29,18 +26,28 @@ import {
   type ResourceAccessMode,
   type SchedulerQueueEntry,
 } from './mcpToolJobScheduler';
-import { getBuiltinToolJobRecoveryPolicy, resolveBuiltinToolJobBindingArgs, runBuiltinToolJob } from './mcpToolJobRunnerRegistry';
+import { resolveBuiltinToolJobBindingArgs, runBuiltinToolJob } from './mcpToolJobRunnerRegistry';
 import { recoveryPolicyForJobStatus, type ToolRecoveryPolicy } from './toolRecoveryPolicy.js';
 import {
   getExecutionOwnershipState,
   getTaskExecutionMutationBinding,
   invalidateTaskExecutionVerificationBinding,
 } from './executionSessionService.js';
-import { isHarnessLifecycleAffectingTool } from './harnessExecutionGuardService.js';
 import {
-  recordExecutionPendingOperationReference,
-  reconcileExecutionPendingOperationReference,
-} from './executionCheckpointService.js';
+  AUTONOMOUS_TAIL_TOOL_NAME,
+  createAcceptedDurableToolJob,
+  durableExecutionJobBinding,
+  isTerminalJobStatus as isTerminalStatus,
+  recordDurableExecutionPending,
+  safelyReconcileTerminalDurableExecution,
+} from './mcpToolJobTerminalLifecycleService';
+import { createMcpToolJobQueueLifecycle, type QueueLifecycleEntry } from './mcpToolJobQueueLifecycleService';
+import { runDurableJobRecoveryPass as runLeaseRecoveryPass } from './mcpToolJobLeaseRecoveryService';
+import {
+  releaseTerminalVerificationCandidate,
+  releaseVerificationCandidateForArgsAsync,
+  verificationCandidateIdForArgs,
+} from './mcpToolJobVerificationLifecycleService';
 
 type Logger = { stdout: (data: string) => void; stderr: (data: string) => void };
 type VerificationPermitDemand = Omit<VerificationProcessPermitRequest, 'jobId'>;
@@ -56,66 +63,6 @@ type AsyncRunner = (
   setCancelFn: (fn: () => void) => void,
   transitionAccess: (accessMode: ResourceAccessMode, request?: VerificationPermitDemand) => TransitionAccessResult,
 ) => Promise<any>;
-
-type DurableExecutionJobBinding = {
-  operationId: string;
-  executionSessionId: string;
-  taskId: string;
-  workspaceId: string;
-  projectId: string;
-  toolName: string;
-};
-
-const AUTONOMOUS_TAIL_TOOL_NAME = 'continue_task_execution_tail';
-
-function prepareDurableExecutionJobArgs(toolName: string, args: any, jobId: string) {
-  if (!isHarnessLifecycleAffectingTool(toolName) && toolName !== AUTONOMOUS_TAIL_TOOL_NAME) return args;
-  const sourceArgs = resolveBuiltinToolJobBindingArgs(toolName, args);
-  const workspaceId = normalizedOptionalString(sourceArgs?.workspaceId);
-  if (!workspaceId) return args;
-  const binding = getTaskExecutionMutationBinding(sourceArgs);
-  if (!binding) return args;
-  const baseArgs = { ...args };
-  delete baseArgs.__executionJobBinding;
-  delete baseArgs.__preparedEditSourceArgs;
-  if ((toolName === 'apply_prepared_edit' || toolName === 'apply_prepared_edit_plan') && sourceArgs !== args) {
-    baseArgs.__preparedEditSourceArgs = sourceArgs;
-  }
-  baseArgs.__executionJobBinding = {
-    operationId: jobId,
-    executionSessionId: binding.session.id,
-    taskId: binding.task.id,
-    workspaceId: binding.workspaceId,
-    projectId: binding.workspace.projectId,
-    toolName,
-  } satisfies DurableExecutionJobBinding;
-  return baseArgs;
-}
-
-function durableExecutionJobBinding(job: Pick<McpToolJob, 'jobId' | 'toolName' | 'args'> | null | undefined): DurableExecutionJobBinding | null {
-  const raw = job?.args?.__executionJobBinding;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const binding: DurableExecutionJobBinding = {
-    operationId: String(raw.operationId || '').trim(),
-    executionSessionId: String(raw.executionSessionId || '').trim(),
-    taskId: String(raw.taskId || '').trim(),
-    workspaceId: String(raw.workspaceId || '').trim(),
-    projectId: String(raw.projectId || '').trim(),
-    toolName: String(raw.toolName || '').trim(),
-  };
-  if (
-    !binding.operationId
-    || !binding.executionSessionId
-    || !binding.taskId
-    || !binding.workspaceId
-    || !binding.projectId
-    || binding.operationId !== job?.jobId
-    || binding.toolName !== job?.toolName
-  ) {
-    throw createApiError(409, 'MCP_JOB_EXECUTION_BINDING_INVALID', `Durable MCP job '${job?.jobId || 'unknown'}' has an invalid immutable execution binding.`);
-  }
-  return binding;
-}
 
 function autonomousTailConfig(job: Pick<McpToolJob, 'args'> | null | undefined) {
   const raw = job?.args?.autonomousTail;
@@ -166,60 +113,6 @@ function reconcileAutonomousTailsAfterRestart(state?: AppState) {
     if (maybeEnqueueAutonomousTail(state, job, stored)) accepted += 1;
   }
   return accepted;
-}
-
-function recordDurableExecutionPending(job: Pick<McpToolJob, 'jobId' | 'toolName' | 'args'>, status: 'accepted' | 'running') {
-  const binding = durableExecutionJobBinding(job);
-  if (!binding) return null;
-  const authorityArgs = resolveBuiltinToolJobBindingArgs(job.toolName, job.args);
-  const current = getTaskExecutionMutationBinding(authorityArgs);
-  if (!current || current.session.id !== binding.executionSessionId) {
-    throw createApiError(409, 'MCP_JOB_EXECUTION_FENCED', `Durable MCP job '${job.jobId}' is no longer bound to the active admitted execution.`);
-  }
-  return recordExecutionPendingOperationReference(binding.executionSessionId, {
-    operationId: binding.operationId,
-    evidenceId: `mcp-job:${job.jobId}`,
-    kind: `mcp-tool-job:${job.toolName}`,
-    status,
-  });
-}
-
-function reconcileTerminalDurableExecution(job: McpToolJob | null | undefined) {
-  if (!job || !isTerminalStatus(job.status)) return false;
-  const binding = durableExecutionJobBinding(job);
-  if (!binding) return false;
-  reconcileExecutionPendingOperationReference(binding.executionSessionId, binding.operationId);
-  return true;
-}
-
-function safelyReconcileTerminalDurableExecution(job: McpToolJob | null | undefined) {
-  try {
-    return reconcileTerminalDurableExecution(job);
-  } catch (error) {
-    if (job?.jobId) appendJobLog(job.jobId, 'stderr', `\n[Execution Pending Reconciliation] ${summarizeError(error)}\n`);
-    return false;
-  }
-}
-
-function createAcceptedDurableToolJob(
-  jobId: string,
-  toolName: string,
-  args: any,
-  resourceKey: string,
-  options: { eagerArtifacts?: boolean } = {},
-) {
-  const durableArgs = prepareDurableExecutionJobArgs(toolName, args, jobId);
-  const job = createJob(jobId, toolName, durableArgs, resourceKey, options);
-  try {
-    recordDurableExecutionPending(job, 'accepted');
-    return job;
-  } catch (error) {
-    const cancelled = requestJobCancellation(jobId, 'Durable execution binding could not be recorded at admission.');
-    if (cancelled) safelyReconcileTerminalDurableExecution(cancelled);
-    throw createApiError(409, 'MCP_JOB_EXECUTION_BINDING_REJECTED', `Durable MCP job '${jobId}' could not bind to its admitted execution.`, {
-      details: { cause: summarizeError(error) },
-    });
-  }
 }
 
 type QueueWaitType = 'workspace_lock' | 'capacity';
@@ -302,20 +195,14 @@ type JobSupersession = {
   recordedAt: number;
 };
 
-interface QueueEntry extends SchedulerQueueEntry {
-  state: AppState;
-  singleFlightKey?: string;
-  verification?: VerificationQueuePolicy;
-  waitTelemetry: QueueWaitTelemetry;
-  phaseTelemetry: JobPhaseTelemetryState;
-}
+type QueueEntry = QueueLifecycleEntry<AppState, VerificationQueuePolicy, JobPhaseTelemetryState>;
 
 const queue: QueueEntry[] = [];
 const activeJobs = new Map<string, { entry: QueueEntry; cancelFn?: () => unknown; closeLogs?: () => void; leaseGeneration: number }>();
-const releasedSchedulerLeases = new Set<string>();
+const queueLifecycle = createMcpToolJobQueueLifecycle();
+
 const testRunners = new Map<string, AsyncRunner>();
 const jobWaiters = new Map<string, Set<(status: ReturnType<typeof getToolJobStatus>) => void>>();
-const schedulerCapacityWaiters = new Set<() => void>();
 const singleFlightLeaders = new Map<string, string>();
 const singleFlightFollowers = new Map<string, Set<string>>();
 const followerToLeader = new Map<string, string>();
@@ -1021,10 +908,6 @@ function enforceVerificationBackpressure(policy: VerificationQueuePolicy, resour
   });
 }
 
-function isTerminalStatus(status?: string) {
-  return status === 'succeeded' || status === 'failed' || status === 'timed_out' || status === 'cancelled';
-}
-
 function notifyJobWaiters(jobId: string) {
   const status = getToolJobStatus(jobId);
   if (!status || !isTerminalStatus(status.status)) return;
@@ -1032,27 +915,6 @@ function notifyJobWaiters(jobId: string) {
   if (!waiters) return;
   jobWaiters.delete(jobId);
   for (const resolve of waiters) resolve(status);
-}
-
-function verificationCandidateIdForArgs(args: any) {
-  const candidateId = args?.__verificationCandidate?.candidateId;
-  return typeof candidateId === 'string' && candidateId.trim() ? candidateId.trim() : '';
-}
-
-function releaseVerificationCandidateForArgs(args: any) {
-  const candidateId = verificationCandidateIdForArgs(args);
-  return candidateId ? releaseVerificationCandidate(candidateId) : false;
-}
-
-async function releaseVerificationCandidateForArgsAsync(args: any) {
-  const candidateId = verificationCandidateIdForArgs(args);
-  if (!candidateId) return false;
-  const leaseId = typeof args?.__verificationCandidate?.reuseLease?.leaseId === 'string'
-    ? args.__verificationCandidate.reuseLease.leaseId.trim()
-    : '';
-  if (!leaseId) return await releaseVerificationCandidateAsync(candidateId);
-  const releasedLease = await releaseReusableVerificationCandidateLeaseAsync(leaseId);
-  return releasedLease || await releaseVerificationCandidateAsync(candidateId);
 }
 
 function verificationCandidateReuseKeyForEntry(entry: QueueEntry) {
@@ -1143,6 +1005,8 @@ function singleFlightKeyFor(state: AppState, toolName: string, args: any, kind: 
   return createHash('sha256').update(raw).digest('hex');
 }
 
+// Single-flight completion and cancellation remain façade-local because they mutate the same
+// leader/follower/waiter topology atomically; extracting them would split one in-memory authority.
 function finalizeSingleFlight(entry: QueueEntry) {
   notifyJobWaiters(entry.jobId);
   const key = entry.singleFlightKey;
@@ -1424,30 +1288,16 @@ export function getQueueMetrics() {
   };
 }
 
-function schedulerLeaseKey(jobId: string, leaseGeneration: number) {
-  return `${jobId}:${leaseGeneration}`;
-}
-
 function notifySchedulerCapacityWaiters() {
-  if (schedulerCapacityWaiters.size === 0) return;
-  const waiters = Array.from(schedulerCapacityWaiters);
-  schedulerCapacityWaiters.clear();
-  for (const wake of waiters) wake();
+  queueLifecycle.notifyCapacityWaiters();
 }
 
 function waitForSchedulerCapacityChange() {
-  return new Promise<void>((resolve) => {
-    schedulerCapacityWaiters.add(resolve);
-  });
+  return queueLifecycle.waitForCapacityChange();
 }
 
 function releaseSchedulerLease(entry: QueueEntry, leaseGeneration: number, observation?: { actualDurationMs?: number }) {
-  const key = schedulerLeaseKey(entry.jobId, leaseGeneration);
-  if (releasedSchedulerLeases.has(key)) return false;
-  releasedSchedulerLeases.add(key);
-  decrementScheduledResource(entry, observation);
-  notifySchedulerCapacityWaiters();
-  return true;
+  return queueLifecycle.releaseSchedulerLease(entry, leaseGeneration, observation);
 }
 
 function releaseStaleActiveLease(job: McpToolJob) {
@@ -1465,126 +1315,22 @@ function releaseStaleActiveLease(job: McpToolJob) {
 }
 
 function runDurableJobRecoveryPass(state?: AppState, nowMs = Date.now()) {
-  const summary = { resumable: 0, retryable: 0, interrupted: 0 };
-  let queuedRecoveredWork = false;
-
-  if (state) {
-    for (const job of listRecentJobs(200)) {
-      if (job.status !== 'running' || job.toolName !== 'run_project_command' || !job.startedAt || !job.leaseOwner || !job.leaseGeneration) continue;
-      const deadline = durableExecutionDeadlineDelayMs({ toolName: job.toolName, state, args: job.args });
-      if (!deadline || nowMs < Date.parse(job.startedAt) + deadline.delayMs) continue;
-      const executionDeadline = buildExecutionDeadlineEvidence(job.jobId, deadline, job.args);
-      const failureSummary = `Execution deadline exceeded after ${deadline.executionBudgetMs}ms plus ${deadline.reconciliationGraceMs}ms reconciliation grace. Last active phase: ${executionDeadline.lastActivePhase}.`;
-      const guard: JobLeaseGuard = { workerId: job.leaseOwner, leaseGeneration: job.leaseGeneration };
-      const wrote = writeJobResult(job.jobId, {
-        ok: false,
-        status: 'timed_out',
-        code: 'JOB_EXECUTION_DEADLINE_EXCEEDED',
-        message: failureSummary,
-        timedOut: true,
-        durationMs: Math.max(0, nowMs - Date.parse(job.startedAt)),
-        executionDeadline,
-      }, guard);
-      const transitioned = wrote
-        ? transitionJobStatus(job.jobId, ['running'], {
-            status: 'timed_out',
-            failureSummary,
-            recoveryClassification: 'interrupted',
-          }, { workerId: job.leaseOwner, leaseGeneration: job.leaseGeneration, nowMs })
-        : null;
-      if (!transitioned) continue;
-
-      appendJobLog(job.jobId, 'stderr', `\n[Job Timed Out] ${failureSummary}\n`);
-      const staleActive = releaseStaleActiveLease(job);
-      if (staleActive) {
-        invalidateFencedTaskVerification(staleActive.entry, 'durable-execution-deadline-recovery');
-        finalizeSingleFlight(staleActive.entry);
-      }
-      safelyReconcileTerminalDurableExecution(transitioned);
-      void releaseVerificationCandidateForArgsAsync(job.args).catch(() => {});
-      summary.interrupted += 1;
-      queuedRecoveredWork = true;
-    }
-  }
-
-  for (const job of listRecoverableJobs(nowMs)) {
-    if (followerToLeader.has(job.jobId)) continue;
-    if (job.status === 'queued') {
-      if (queue.some((entry) => entry.jobId === job.jobId) || activeJobs.has(job.jobId)) continue;
-      try {
-        recordDurableExecutionPending(job, 'accepted');
-      } catch (error) {
-        const failed = transitionJobStatus(job.jobId, ['queued'], {
-          status: 'failed',
-          failureSummary: `Recovered durable job binding is no longer authoritative: ${summarizeError(error)}`,
-          recoveryClassification: 'interrupted',
-        }, { nowMs });
-        if (failed) {
-          appendJobLog(job.jobId, 'stderr', `\n[Job Recovery Fenced] ${summarizeError(error)}\n`);
-          safelyReconcileTerminalDurableExecution(failed);
-          summary.interrupted += 1;
-        }
-        continue;
-      }
-      const classified = setJobRecoveryClassification(job.jobId, 'resumable', nowMs);
-      if (!classified) continue;
-      summary.resumable += 1;
-      if (state) queuedRecoveredWork = enqueueRecoveredJob(state, classified) || queuedRecoveredWork;
-      continue;
-    }
-
-    try {
-      recordDurableExecutionPending(job, 'running');
-    } catch (error) {
-      const staleActive = releaseStaleActiveLease(job);
-      const failed = transitionJobStatus(job.jobId, ['running'], {
-        status: 'failed',
-        failureSummary: `Recovered running job binding is no longer authoritative: ${summarizeError(error)}`,
-        recoveryClassification: 'interrupted',
-      }, {
-        workerId: job.leaseOwner,
-        leaseGeneration: job.leaseGeneration,
-        nowMs,
-      });
-      if (failed) {
-        appendJobLog(job.jobId, 'stderr', `\n[Job Recovery Fenced] ${summarizeError(error)}\n`);
-        safelyReconcileTerminalDurableExecution(failed);
-        if (staleActive) finalizeSingleFlight(staleActive.entry);
-        summary.interrupted += 1;
-      }
-      continue;
-    }
-
-    const staleActive = releaseStaleActiveLease(job);
-    if (getBuiltinToolJobRecoveryPolicy(job.toolName) === 'retryable') {
-      const requeued = requeueJobForRecovery(job.jobId, nowMs);
-      if (!requeued) continue;
-      appendJobLog(job.jobId, 'stderr', '\n[Job Recovery] Previous worker lease expired; retrying retry-safe durable job.\n');
-      summary.retryable += 1;
-      if (state) queuedRecoveredWork = enqueueRecoveredJob(state, requeued) || queuedRecoveredWork;
-      continue;
-    }
-
-    const interrupted = transitionJobStatus(job.jobId, ['running'], {
-      status: 'failed',
-      failureSummary: 'Worker lease expired before this job completed; automatic retry is unsafe.',
-      recoveryClassification: 'interrupted',
-    }, {
-      workerId: job.leaseOwner,
-      leaseGeneration: job.leaseGeneration,
-      nowMs,
-    });
-    if (interrupted) {
-      appendJobLog(job.jobId, 'stderr', '\n[Job Interrupted] Worker lease expired; this job is not safe to retry automatically.\n');
-      releaseTerminalVerificationCandidate(interrupted);
-      safelyReconcileTerminalDurableExecution(interrupted);
-      if (staleActive) finalizeSingleFlight(staleActive.entry);
-      summary.interrupted += 1;
-    }
-  }
-
-  if (queuedRecoveredWork) setImmediate(processQueue);
-  return summary;
+  return runLeaseRecoveryPass(state, nowMs, {
+    isSingleFlightFollower: (jobId) => followerToLeader.has(jobId),
+    hasQueuedOrActive: (jobId) => queue.some((entry) => entry.jobId === jobId) || activeJobs.has(jobId),
+    recordDurableExecutionPending,
+    enqueueRecoveredJob,
+    releaseStaleActiveLease,
+    finalizeSingleFlight,
+    safelyReconcileTerminalDurableExecution,
+    releaseTerminalVerificationCandidate,
+    releaseVerificationCandidateForArgsAsync,
+    invalidateFencedTaskVerification,
+    scheduleProcessQueue: () => setImmediate(processQueue),
+    durableExecutionDeadlineDelayMs,
+    buildExecutionDeadlineEvidence,
+    summarizeError,
+  });
 }
 
 function startDurableJobRecoveryLoop(state?: AppState) {
@@ -1682,6 +1428,7 @@ export function getToolJobStatus(jobId: string) {
   };
 }
 
+// Cancellation remains façade-local for the same atomicity boundary as single-flight completion.
 export function cancelToolJob(jobId: string) {
   const leaderJobId = followerToLeader.get(jobId);
   const activeBeforeCancel = activeJobs.get(jobId);
@@ -1731,12 +1478,6 @@ export function cancelToolJob(jobId: string) {
 
   safelyReconcileTerminalDurableExecution(persisted);
   notifyJobWaiters(jobId);
-  return true;
-}
-
-function releaseTerminalVerificationCandidate(job: Pick<McpToolJob, 'args'> | null | undefined) {
-  if (!verificationCandidateIdForArgs(job?.args)) return false;
-  void releaseVerificationCandidateForArgsAsync(job?.args).catch(() => {});
   return true;
 }
 
@@ -1974,16 +1715,12 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
 }
 
 async function processQueue() {
-  while (queue.length > 0) {
-    const activeEntries = activeSchedulerEntries();
-    const observedAt = Date.now();
-    queue.forEach((entry, index) => advanceQueueWaitTelemetry(entry, getBlockerForQueueEntry(entry, index, queue, activeEntries), observedAt));
-    const index = selectNextRunnableQueueIndex(queue, activeEntries);
-    if (index < 0) break;
-    const [entry] = queue.splice(index, 1);
-    finalizeQueueWaitTelemetry(entry, observedAt);
-    startJob(entry);
-  }
+  queueLifecycle.processQueue(queue, {
+    activeEntries: activeSchedulerEntries,
+    advanceWaitTelemetry: advanceQueueWaitTelemetry,
+    finalizeWaitTelemetry: finalizeQueueWaitTelemetry,
+    startJob,
+  });
 }
 
 function setJobActiveContext(jobId: string, cancelFn: () => unknown, leaseGeneration: number) {
@@ -2171,7 +1908,7 @@ async function startJob(entry: QueueEntry) {
     return;
   }
   const bufferedLogger = createBufferedJobLogger(entry.jobId, leaseGuard);
-  incrementScheduledResource(entry);
+  queueLifecycle.markScheduled(entry);
   activeJobs.set(entry.jobId, { entry, leaseGeneration, closeLogs: bufferedLogger.close });
   const heartbeat = setInterval(() => {
     const active = activeJobs.get(entry.jobId);
@@ -2328,8 +2065,7 @@ async function startJob(entry: QueueEntry) {
     clearInterval(heartbeat);
     if (executionDeadlineTimer) clearTimeout(executionDeadlineTimer);
     bufferedLogger.close();
-    const leaseKey = schedulerLeaseKey(entry.jobId, leaseGeneration);
-    const leaseWasAlreadyReleased = releasedSchedulerLeases.has(leaseKey);
+    const leaseWasAlreadyReleased = queueLifecycle.hasReleasedSchedulerLease(entry.jobId, leaseGeneration);
     if (!leaseWasAlreadyReleased) {
       if (!entry.phaseTelemetry.executionCompletedAt) entry.phaseTelemetry.executionCompletedAt = Date.now();
       const waitSnapshot = finalizedQueueWaitRecord(entry, entry.phaseTelemetry.queueCompletedAt ?? entry.phaseTelemetry.candidatePreparationStartedAt ?? entry.phaseTelemetry.executionStartedAt ?? Date.now());
@@ -2354,7 +2090,7 @@ async function startJob(entry: QueueEntry) {
       activeJobs.delete(entry.jobId);
       finalizeSingleFlight(entry);
     }
-    releasedSchedulerLeases.delete(leaseKey);
+    queueLifecycle.forgetReleasedSchedulerLease(entry.jobId, leaseGeneration);
     setImmediate(processQueue);
     await releaseVerificationCandidateForArgsAsync(entry.args).catch(() => {});
   }
@@ -2406,8 +2142,7 @@ export function __resetMcpToolJobRuntimeForTests() {
   singleFlightFollowers.clear();
   followerToLeader.clear();
   jobWaiters.clear();
-  releasedSchedulerLeases.clear();
-  schedulerCapacityWaiters.clear();
+  queueLifecycle.resetForTests();
 }
 
 export function __setToolJobTestRunner(toolName: string, runner: AsyncRunner | null) {

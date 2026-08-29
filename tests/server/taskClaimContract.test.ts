@@ -3,6 +3,23 @@ import assert from 'node:assert/strict';
 import { taskToolDefinitions } from '../../src/server/contracts/devflowTaskTools.js';
 import { devFlowToolDefinitions } from '../../src/server/contracts/devflowContract.js';
 import { buildMcpToolSurfaceInventory } from '../../src/server/contracts/mcpToolSurfaceClassification.js';
+import { toMutationResponse } from '../../src/server/routes/taskRouteSupport.js';
+
+test('compact mutation responses preserve authoritative lifecycle routing identity', () => {
+  const task = { id: 'task-1', displayId: 'DVF-0001', status: 'in-progress', projectId: 'project-1' };
+  const payload = {
+    task,
+    claim: { ownershipEpochId: 'claim-epoch-test' },
+    workspace: { workspaceId: 'ws_test', branch: '0001', state: 'ready' },
+    executionSessionId: 'exec-test',
+  };
+  for (const responseMode of ['ack', 'summary']) {
+    const response = toMutationResponse({ query: { responseMode } } as any, task, payload) as any;
+    assert.equal(response.workspaceId, 'ws_test');
+    assert.equal(response.executionSessionId, 'exec-test');
+    assert.equal(response.ownershipEpochId, 'claim-epoch-test');
+  }
+});
 
 test('claim_task and release_task_claim are canonical task tools with required caller session identity', () => {
   for (const toolName of ['claim_task', 'release_task_claim']) {

@@ -599,7 +599,39 @@ export function createOrReuseSessionWorkspace(
   if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to create an isolated workspace.');
   if (!project?.id) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'project.id is required to create an isolated workspace.');
   const projectRoot = ensureRepository(path.resolve(String(project.localPath || '')));
-  const taskDisplayId = normalizedTaskDisplayId(options.taskDisplayId);  const targetBranch = String(options.targetBranch || '').trim() || null;
+  const taskDisplayId = normalizedTaskDisplayId(options.taskDisplayId);
+  const targetBranch = String(options.targetBranch || '').trim() || null;
+
+  if (!taskDisplayId) {
+    const activeClaims = queryProjectActiveTaskClaims(project.id, 100);
+    if (!activeClaims.complete) {
+      throw createApiError(409, 'SESSION_WORKSPACE_ACTIVE_CLAIM_SCAN_INCOMPLETE', 'Active task claims could not be inspected completely before preparing a generic session workspace.', {
+        affectedId: project.id,
+        retryable: true,
+      });
+    }
+    const ownerHash = sessionHash(cleanSessionId);
+    const ownedClaims = activeClaims.claims.filter((entry: any) => String(entry.claim?.sessionIdHash || '') === ownerHash);
+    if (ownedClaims.length > 1) {
+      throw createApiError(409, 'SESSION_WORKSPACE_MULTIPLE_ACTIVE_CLAIMS', 'Caller session owns multiple active task claims; prepare_session_workspace cannot guess an authoritative workspace.', {
+        affectedId: project.id,
+        details: { workspaceIds: ownedClaims.map((entry: any) => String(entry.claim?.workspaceId || '')).filter(Boolean) },
+      });
+    }
+    if (ownedClaims.length === 1) {
+      const authoritativeWorkspaceId = String(ownedClaims[0].claim?.workspaceId || '').trim();
+      const authoritative = authoritativeWorkspaceId ? readMetadata(authoritativeWorkspaceId) : null;
+      if (!authoritative || !validateReusableWorkspace(authoritative, projectRoot)) {
+        throw createApiError(409, 'SESSION_WORKSPACE_ACTIVE_CLAIM_RECOVERY_REQUIRED', 'The caller has an active task claim but its authoritative workspace is unavailable; refusing to manufacture a second workspace.', {
+          affectedId: authoritativeWorkspaceId || project.id,
+          retryable: true,
+          details: { workspaceId: authoritativeWorkspaceId || null },
+        });
+      }
+      workspaceLifecycleCounters.reused += 1;
+      return touch(authoritative);
+    }
+  }
 
   const workspaceIdentity = workspaceIdentityForSession(cleanSessionId, taskDisplayId);
   const workspaceId = workspaceIdFor(project.id, workspaceIdentity);

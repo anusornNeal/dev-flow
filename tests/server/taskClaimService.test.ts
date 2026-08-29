@@ -161,6 +161,9 @@ test('claim moves task to in-progress, binds opaque workspace, and is idempotent
   assert.match(first.claim.sessionIdHash, /^[a-f0-9]{16}$/);
   assert.match(String(first.claim.ownershipEpochId || ''), /^claim-epoch-[0-9a-f-]{36}$/);
   assert.match(first.claim.workspaceId, /^ws_[a-f0-9]{16}$/);
+  assert.match(String(first.executionSessionId || ''), /^exec-/);
+  const preparedForOwner = workspaces.createOrReuseSessionWorkspace(claimProject as any, 'chat-alpha-secret');
+  assert.equal(preparedForOwner.workspaceId, first.claim.workspaceId);
   assert.equal(JSON.stringify(first.claim).includes('chat-alpha-secret'), false);
   assert.equal(JSON.stringify(first.claim).includes(repoRoot), false);
 
@@ -168,6 +171,7 @@ test('claim moves task to in-progress, binds opaque workspace, and is idempotent
   assert.equal(same.reused, true);
   assert.equal(same.claim.workspaceId, first.claim.workspaceId);
   assert.equal(same.claim.ownershipEpochId, first.claim.ownershipEpochId);
+  assert.equal(same.executionSessionId, first.executionSessionId);
   const sessions = listExecutionSessionsForTask('task-a').filter((entry: any) => entry.workspaceId === first.claim.workspaceId);
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].status, 'active');

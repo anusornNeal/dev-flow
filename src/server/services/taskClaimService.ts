@@ -1458,6 +1458,7 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
     const workspace = resolveRecoverableTaskWorkspace(task)
       || createOrReuseSessionWorkspace(project, cleanSessionId, { taskDisplayId: task.displayId, targetBranch: task.branch });
     let liveTask = task;
+    let executionSession: any = null;
     withDbTransaction(() => {
       if (!String(task.claim?.ownershipEpochId || '').trim()) {
         const repairedAt = new Date(nowMs).toISOString();
@@ -1473,15 +1474,21 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
           }],
         };
         saveTask(liveTask);
-        ensureClaimExecutionSession(liveTask, workspace, { allowLegacyAdoption: true });
+        executionSession = ensureClaimExecutionSession(liveTask, workspace, { allowLegacyAdoption: true });
       } else {
-        ensureClaimExecutionSession(task, workspace);
+        executionSession = ensureClaimExecutionSession(task, workspace);
       }
     });
     liveTask = reconcileClaimPresentationFromAuthority(getTaskByIdentifier(task.id, 'full') || liveTask, nowMs);
     promoteImmediateParentToInProgress(liveTask, nowMs);
     const refreshed = getTaskByIdentifier(task.id, 'full') || liveTask;
-    return { task: refreshed, claim: refreshed.claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: true };
+    return {
+      task: refreshed,
+      claim: refreshed.claim,
+      workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state },
+      executionSessionId: executionSession ? executionSession.id : null,
+      reused: true,
+    };
   }
 
   if (!CLAIMABLE_STATUSES.has(task.status)) {
@@ -1526,13 +1533,20 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
       type: 'update',
     }],
   };
+  let executionSession: any = null;
   withDbTransaction(() => {
     terminalizeActiveTaskExecutions(updated, workspace.workspaceId);
     saveTask(updated);
-    ensureClaimExecutionSession(updated, workspace);
+    executionSession = ensureClaimExecutionSession(updated, workspace);
   });
   promoteImmediateParentToInProgress(updated, nowMs);
-  return { task: getTaskByIdentifier(task.id, 'full') || updated, claim, workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state }, reused: false };
+  return {
+    task: getTaskByIdentifier(task.id, 'full') || updated,
+    claim,
+    workspace: { workspaceId: workspace.workspaceId, branch: workspace.branch, state: workspace.state },
+    executionSessionId: executionSession ? executionSession.id : null,
+    reused: false,
+  };
 }
 
 export function claimTaskForSession(taskId: string, input: ClaimTaskInput) {

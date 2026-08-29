@@ -165,6 +165,11 @@ export function toTaskResponse(task: any, mode: TaskReadMode) {
 
 export function toMutationResponse(req: express.Request, task: any, standardPayload: any, extra?: Record<string, any>) {
   const responseMode = parseMutationResponseMode(req.query.responseMode);
+  const routing = {
+    ...(standardPayload?.workspace?.workspaceId ? { workspaceId: standardPayload.workspace.workspaceId } : {}),
+    ...(standardPayload?.executionSessionId ? { executionSessionId: standardPayload.executionSessionId } : {}),
+    ...(standardPayload?.claim?.ownershipEpochId ? { ownershipEpochId: standardPayload.claim.ownershipEpochId } : {}),
+  };
   if (responseMode === 'ack') {
     return {
       success: true,
@@ -172,6 +177,7 @@ export function toMutationResponse(req: express.Request, task: any, standardPayl
       taskId: task.id,
       displayId: task.displayId,
       status: task.status,
+      ...routing,
       ...(extra || {}),
     };
   }
@@ -180,6 +186,7 @@ export function toMutationResponse(req: express.Request, task: any, standardPayl
       success: true,
       responseMode,
       task: toTaskResponse(task, 'summary'),
+      ...routing,
       ...(extra || {}),
     };
   }

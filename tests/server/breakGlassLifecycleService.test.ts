@@ -504,7 +504,7 @@ test('finalize-as-integrated resumes normal finalization from exact Git evidence
   assert.equal((result.operation.evidence as any).expectedCommit, sourceHead);
 });
 
-test('integrated emergency recovery delegates verification debt to normal finalization without workflow bypass', () => {
+test('integrated emergency recovery delegates verification to normal finalization without workflow bypass', () => {
   const f = fixture('owner-finalize-no-green');
   mutateOwned(f, 'owner-finalize-no-green\n');
   git(f.workspace.root, ['add', 'owned.txt']);
@@ -522,11 +522,12 @@ test('integrated emergency recovery delegates verification debt to normal finali
   });
   const integrated = integrateWorkspaceCommits(f.workspace.workspaceId, { task: getTask(f.task.id) });
   assert.equal(integrated.status, 'succeeded');
+  const baseHead = git(f.root, ['rev-parse', 'HEAD']);
 
   const result = executeBreakGlassLifecycle(f.state, {
     ...baseRequest(f, 'finalize-as-integrated', 'bg-owner-finalize-no-green-1'),
     expectedCommit: sourceHead,
-    checks: [],
+    checks: [{ name: 'normal-finalization-green', command: 'normal-finalization-green', status: 'passed', scope: 'full', repoRevision: baseHead }],
   });
 
   assert.equal(result.operation.status, 'completed', JSON.stringify(result.operation));

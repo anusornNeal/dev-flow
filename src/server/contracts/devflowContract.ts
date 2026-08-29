@@ -1750,6 +1750,7 @@ export const CLOSURE_CRITICAL_RECOVERY_CAPABILITIES = Object.freeze([
   { id: 'recovery-handoff', toolName: 'get_recovery_handoff', route: '/api/recovery/handoff' },
   { id: 'orphan-cleanup', toolName: 'cleanup_orphan_executions', route: '/api/lifecycle/orphan-executions/cleanup' },
   { id: 'task-commit-plan', toolName: 'plan_task_commit', route: '/api/git/task-commit/plan' },
+  { id: 'preserved-wip-adoption', toolName: 'adopt_task_execution_owned_changes', route: '/api/git/task-commit/adopt-owned-changes' },
   { id: 'owned-revision-reconciliation', toolName: 'reconcile_task_owned_revision_drift', route: '/api/git/task-commit/reconcile-owned-revisions' },
   { id: 'task-owned-commit', toolName: 'commit_task_owned_changes', route: '/api/git/task-commit/commit' },
   { id: 'verification-batch-supersession', toolName: 'run_project_command', route: '/api/project-commands/run', requiredInputPaths: ['verificationBatch.supersedesBatchId', 'verificationBatch.supersessionReason'] },
@@ -1784,7 +1785,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'inspect_project_verification', 'run_project_command',
   'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',
-  'plan_task_commit', 'reconcile_task_owned_revision_drift', 'commit_task_owned_changes',
+  'plan_task_commit', 'adopt_task_execution_owned_changes', 'reconcile_task_owned_revision_drift', 'commit_task_owned_changes',
   'prepare_session_workspace', 'integrate_workspace', 'finalize_task_workspace', 'get_tool_job_result', 'cancel_tool_job', 'get_recovery_handoff',
   'break_glass_lifecycle', 'get_break_glass_operations', 'cleanup_orphan_executions',
 ]);

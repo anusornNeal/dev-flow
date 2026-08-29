@@ -164,6 +164,7 @@ test('closure-critical recovery capabilities are callable end-to-end in the codi
     'recovery-handoff',
     'orphan-cleanup',
     'task-commit-plan',
+    'preserved-wip-adoption',
     'owned-revision-reconciliation',
     'task-owned-commit',
     'verification-batch-supersession',

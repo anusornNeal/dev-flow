@@ -10,7 +10,16 @@ export interface DevFlowTitleMetadata {
   preferredTitle: string | null;
 }
 
+export interface DevFlowPairingCandidate {
+  executionSessionId: string;
+  project: string;
+  taskId: string;
+  taskTitle: string;
+  available?: boolean;
+}
+
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+export type DevFlowAssociationSource = 'chatgpt-structured-tool-metadata' | 'chatgpt-explicit-pairing';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost']);
 const CONVERSATION_ID_PATTERN = /^[A-Za-z0-9_-]{3,200}$/;
@@ -37,6 +46,7 @@ export async function associateDevFlowConversation(
   executionSessionId: string,
   request: FetchLike = (input, init) => fetch(input, init),
   previousExecutionSessionId?: string,
+  source: DevFlowAssociationSource = 'chatgpt-structured-tool-metadata',
 ): Promise<boolean> {
   const baseUrl = normalizeDevFlowBaseUrl(baseUrlValue);
   if (!baseUrl || !CONVERSATION_ID_PATTERN.test(conversationId) || !EXECUTION_SESSION_ID_PATTERN.test(executionSessionId)) return false;
@@ -54,7 +64,7 @@ export async function associateDevFlowConversation(
         executionSessionId,
         conversationId,
         ...(previousExecutionSessionId ? { previousExecutionSessionId } : {}),
-        source: 'chatgpt-structured-tool-metadata',
+        source,
       }),
     });
     if (!response.ok) return false;
@@ -62,6 +72,45 @@ export async function associateDevFlowConversation(
     return data.bound === true && data.executionSessionId === executionSessionId && data.conversationId === conversationId;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function listDevFlowPairingCandidates(
+  baseUrlValue: string,
+  request: FetchLike = (input, init) => fetch(input, init),
+  conversationId?: string,
+): Promise<DevFlowPairingCandidate[]> {
+  const baseUrl = normalizeDevFlowBaseUrl(baseUrlValue);
+  if (!baseUrl || (conversationId && !CONVERSATION_ID_PATTERN.test(conversationId))) return [];
+  const suffix = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : '';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await request(`${baseUrl}/api/chat-sessions/title-candidates${suffix}`, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!response.ok) return [];
+    const data = await response.json() as { candidates?: unknown };
+    if (!Array.isArray(data.candidates)) return [];
+    return data.candidates.flatMap((value: any) => {
+      const executionSessionId = String(value?.executionSessionId || '').trim();
+      const taskId = String(value?.taskId || '').trim();
+      const taskTitle = String(value?.taskTitle || '').trim();
+      if (!EXECUTION_SESSION_ID_PATTERN.test(executionSessionId) || !taskId || !taskTitle) return [];
+      return [{
+        executionSessionId,
+        project: String(value?.project || '').slice(0, 120),
+        taskId: taskId.slice(0, 80),
+        taskTitle: taskTitle.slice(0, 200),
+        ...(typeof value?.available === 'boolean' ? { available: value.available } : {}),
+      }];
+    });
+  } catch {
+    return [];
   } finally {
     clearTimeout(timeout);
   }

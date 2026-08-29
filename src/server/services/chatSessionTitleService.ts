@@ -1,5 +1,6 @@
 import {
   getExecutionSessionById,
+  queryExecutionSessions,
   queryLatestExecutionSessionEvidence,
   saveExecutionSessionEvidence,
   setExecutionSessionEvidenceStale,
@@ -10,6 +11,8 @@ import type { ChatSessionTitleResolution } from '../../types.js';
 
 export const CHAT_SESSION_TITLE_EVIDENCE_KIND = 'chat-title-preference';
 export const CHAT_SESSION_ASSOCIATION_SOURCE = 'chatgpt-structured-tool-metadata';
+export const CHAT_SESSION_EXPLICIT_PAIRING_SOURCE = 'chatgpt-explicit-pairing';
+const CHAT_SESSION_ASSOCIATION_SOURCES = new Set([CHAT_SESSION_ASSOCIATION_SOURCE, CHAT_SESSION_EXPLICIT_PAIRING_SOURCE]);
 const MAX_CONVERSATION_ID_LENGTH = 200;
 const MAX_ALIAS_LENGTH = 120;
 const MAX_PREFERRED_TITLE_LENGTH = 160;
@@ -115,8 +118,9 @@ export function associateChatSessionTitlePreference(input: {
   source?: unknown;
   now?: Date;
 }) {
-  if (String(input.source || '') !== CHAT_SESSION_ASSOCIATION_SOURCE) {
-    throw new ChatSessionTitleServiceError('INVALID_CHAT_ASSOCIATION_SOURCE', 'Automatic chat association requires structured DevFlow tool metadata.', 400);
+  const source = String(input.source || '');
+  if (!CHAT_SESSION_ASSOCIATION_SOURCES.has(source)) {
+    throw new ChatSessionTitleServiceError('INVALID_CHAT_ASSOCIATION_SOURCE', 'Chat association requires deterministic structured metadata or an explicit user pairing action.', 400);
   }
   const { conversationId, session, task } = resolveBindingContext(input.executionSessionId, input.conversationId);
   const previousExecutionSessionId = String(input.previousExecutionSessionId || '').trim() || null;
@@ -127,7 +131,7 @@ export function associateChatSessionTitlePreference(input: {
   if (forSession) {
     const existingConversationId = String(forSession.metadata?.conversationId || '');
     if (existingConversationId === conversationId) {
-      return saveTitleEvidence({ session, conversationId, source: CHAT_SESSION_ASSOCIATION_SOURCE, nowIso });
+      return saveTitleEvidence({ session, conversationId, source, nowIso });
     }
     throw new ChatSessionTitleServiceError('CHAT_ASSOCIATION_CONFLICT', `Execution session '${session.id}' is already associated with another conversation.`, 409);
   }
@@ -144,7 +148,29 @@ export function associateChatSessionTitlePreference(input: {
     setExecutionSessionEvidenceStale(forConversation.id, true, nowIso);
   }
 
-  return saveTitleEvidence({ session, conversationId, source: CHAT_SESSION_ASSOCIATION_SOURCE, nowIso });
+  return saveTitleEvidence({ session, conversationId, source, nowIso });
+}
+
+export function listChatSessionPairingCandidates(conversationIdValue?: unknown) {
+  const conversationId = normalizeChatConversationId(conversationIdValue);
+  const activeEvidence = queryLatestExecutionSessionEvidence(CHAT_SESSION_TITLE_EVIDENCE_KIND, 100).evidence.filter(evidence => !evidence.stale);
+  const bindingBySessionId = new Map(activeEvidence.map(evidence => [evidence.sessionId, String(evidence.metadata?.conversationId || '')]));
+  const sessions = queryExecutionSessions({ status: 'active', limit: 20 }).sessions;
+  const candidates = sessions.flatMap(session => {
+    if (!session.taskId) return [];
+    const task = getTask(session.taskId);
+    const project = getProject(session.projectId);
+    if (!task || !project) return [];
+    const boundConversationId = bindingBySessionId.get(session.id) || null;
+    return [{
+      executionSessionId: session.id,
+      project: String(project.name || project.id),
+      taskId: String(task.displayId || task.id),
+      taskTitle: String(task.title || ''),
+      available: !boundConversationId || Boolean(conversationId && boundConversationId === conversationId),
+    }];
+  });
+  return { candidates };
 }
 
 export function resolveChatSessionTitle(conversationIdValue: unknown): ChatSessionTitleResolution {

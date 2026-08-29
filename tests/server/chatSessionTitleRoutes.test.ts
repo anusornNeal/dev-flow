@@ -186,6 +186,20 @@ test('deterministic title association is idempotent, isolates conversations, and
   assert.equal(stillResolvedB.executionSessionId, 'exec-chat-title-newer');
 });
 
+test('pairing candidates expose only bounded presentation metadata for explicit recovery', async () => {
+  const response = await fetch(`${baseUrl}/api/chat-sessions/title-candidates`);
+  assert.equal(response.status, 200);
+  const payload = await response.json() as any;
+  assert.ok(Array.isArray(payload.candidates));
+  const candidate = payload.candidates.find((entry: any) => entry.executionSessionId === 'exec-chat-title-rebind');
+  assert.ok(candidate);
+  assert.equal(candidate.taskId, 'DVF-0747');
+  assert.equal(candidate.taskTitle, 'Sync ChatGPT conversation title');
+  assert.equal(candidate.project, 'DevFlow');
+  assert.equal('ownerLabel' in candidate, false);
+  assert.equal('message' in candidate, false);
+});
+
 test('automatic association rejects unsupported evidence sources', async () => {
   const response = await fetch(`${baseUrl}/api/chat-sessions/title-associations`, {
     method: 'POST',

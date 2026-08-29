@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderTitlePattern } from '../extensions/chatgpt-title-sync/src/titlePattern.js';
-import { createTitleResolutionRequest, createTitleSyncCoordinator, hasTitleSyncSettingsChange } from '../extensions/chatgpt-title-sync/src/contentScript.js';
+import { createExplicitPairingRequest, createTitleResolutionRequest, createTitleSyncCoordinator, formatPairingCandidateLabel, hasTitleSyncSettingsChange } from '../extensions/chatgpt-title-sync/src/contentScript.js';
 import { getConversationIdFromUrl, resolveDevFlowAssociationEvidence, resolveSidebarTitleTarget } from '../extensions/chatgpt-title-sync/src/chatgptAdapter.js';
-import { associateDevFlowConversation, normalizeDevFlowBaseUrl, resolveDevFlowTitleMetadata } from '../extensions/chatgpt-title-sync/src/devflowClient.js';
+import { associateDevFlowConversation, listDevFlowPairingCandidates, normalizeDevFlowBaseUrl, resolveDevFlowTitleMetadata } from '../extensions/chatgpt-title-sync/src/devflowClient.js';
 
 test('title pattern renders supported tokens and falls back for malformed or empty patterns', () => {
   const tokens = {
@@ -103,6 +103,16 @@ test('content title resolution request carries only structured association evide
   });
 });
 
+test('explicit recovery labels the selected task/session before pairing', () => {
+  const candidate = { executionSessionId: 'exec-chat-title', project: 'DevFlow', taskId: 'DVF-0761', taskTitle: 'Automatic title association' };
+  assert.equal(formatPairingCandidateLabel(candidate), 'DVF-0761 · Automatic title association — DevFlow');
+  assert.deepEqual(createExplicitPairingRequest('conv-a', 'exec-chat-title'), {
+    type: 'devflow-title-sync:pair',
+    conversationId: 'conv-a',
+    executionSessionId: 'exec-chat-title',
+  });
+});
+
 test('DevFlow association client posts deterministic evidence and fails closed offline', async () => {
   let requestBody: any = null;
   const associated = await associateDevFlowConversation('http://127.0.0.1:3000', 'conv-a', 'exec-chat-title', async (input, init) => {
@@ -127,6 +137,20 @@ test('DevFlow association client posts deterministic evidence and fails closed o
   assert.equal(await associateDevFlowConversation('http://127.0.0.1:3000', 'conv-a', 'latest-active', async () => {
     throw new Error('must not request');
   }), false);
+});
+
+test('pairing candidate client returns only bounded presentation metadata', async () => {
+  const candidates = await listDevFlowPairingCandidates('http://127.0.0.1:3000', async (input, init) => {
+    assert.equal(input, 'http://127.0.0.1:3000/api/chat-sessions/title-candidates');
+    assert.equal(init?.method, 'GET');
+    return new Response(JSON.stringify({
+      candidates: [{ executionSessionId: 'exec-aaa', project: 'DevFlow', taskId: 'DVF-0761', taskTitle: 'Automatic title association' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  assert.deepEqual(candidates, [{ executionSessionId: 'exec-aaa', project: 'DevFlow', taskId: 'DVF-0761', taskTitle: 'Automatic title association' }]);
+  assert.deepEqual(await listDevFlowPairingCandidates('http://127.0.0.1:3000', async () => {
+    throw new Error('offline');
+  }), []);
 });
 
 test('DevFlow client fails closed when server is unavailable or session is unresolved', async () => {

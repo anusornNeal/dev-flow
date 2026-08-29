@@ -4,6 +4,7 @@ import {
   associateChatSessionTitlePreference,
   bindChatSessionTitlePreference,
   ChatSessionTitleServiceError,
+  listChatSessionPairingCandidates,
   resolveChatSessionTitle,
 } from '../services/chatSessionTitleService.js';
 
@@ -18,6 +19,11 @@ export function registerChatSessionRoutes(app: express.Express, _deps: ApiRouteD
   app.get('/api/chat-sessions/title', (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     return res.json(resolveChatSessionTitle(req.query?.conversationId));
+  });
+
+  app.get('/api/chat-sessions/title-candidates', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(listChatSessionPairingCandidates(req.query?.conversationId));
   });
 
   app.post('/api/chat-sessions/title-bindings', (req, res) => {

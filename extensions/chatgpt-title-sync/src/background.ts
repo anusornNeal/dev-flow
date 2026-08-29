@@ -1,4 +1,9 @@
-import { associateDevFlowConversation, DEFAULT_DEVFLOW_BASE_URL, resolveDevFlowTitleMetadata } from './devflowClient.js';
+import {
+  associateDevFlowConversation,
+  DEFAULT_DEVFLOW_BASE_URL,
+  listDevFlowPairingCandidates,
+  resolveDevFlowTitleMetadata,
+} from './devflowClient.js';
 import { DEFAULT_TITLE_PATTERN, renderTitlePattern } from './titlePattern.js';
 
 export interface ExtensionSettings {
@@ -45,6 +50,17 @@ function readSettings() {
   });
 }
 
+function renderMetadataTitle(settings: ExtensionSettings, metadata: Awaited<ReturnType<typeof resolveDevFlowTitleMetadata>>) {
+  if (!metadata) return null;
+  const preferred = String(metadata.preferredTitle || '').trim();
+  return preferred || renderTitlePattern(settings.pattern, {
+    project: metadata.project,
+    taskId: metadata.taskId,
+    taskTitle: metadata.taskTitle,
+    chatAlias: metadata.chatAlias,
+  });
+}
+
 export async function resolveRequestedTitle(conversationId: string, executionSessionId?: string | null) {
   const settings = await readSettings();
   if (!settings.enabled) return null;
@@ -62,25 +78,55 @@ export async function resolveRequestedTitle(conversationId: string, executionSes
     if (!associated) return null;
     metadata = await resolveDevFlowTitleMetadata(settings.devflowBaseUrl, conversationId);
   }
+  return renderMetadataTitle(settings, metadata);
+}
 
-  if (!metadata) return null;
-  const preferred = String(metadata.preferredTitle || '').trim();
-  return preferred || renderTitlePattern(settings.pattern, {
-    project: metadata.project,
-    taskId: metadata.taskId,
-    taskTitle: metadata.taskTitle,
-    chatAlias: metadata.chatAlias,
-  });
+async function listRequestedPairingCandidates(conversationId: string) {
+  const settings = await readSettings();
+  if (!settings.enabled) return [];
+  return listDevFlowPairingCandidates(settings.devflowBaseUrl, undefined, conversationId);
+}
+
+async function pairRequestedConversation(conversationId: string, executionSessionId: string) {
+  const settings = await readSettings();
+  if (!settings.enabled) return null;
+  const current = await resolveDevFlowTitleMetadata(settings.devflowBaseUrl, conversationId);
+  const associated = await associateDevFlowConversation(
+    settings.devflowBaseUrl,
+    conversationId,
+    executionSessionId,
+    undefined,
+    current?.executionSessionId,
+    'chatgpt-explicit-pairing',
+  );
+  if (!associated) return null;
+  const metadata = await resolveDevFlowTitleMetadata(settings.devflowBaseUrl, conversationId);
+  return renderMetadataTitle(settings, metadata);
 }
 
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== 'devflow-title-sync:resolve') return undefined;
     const conversationId = String(message?.conversationId || '').trim();
-    const executionSessionId = String(message?.executionSessionId || '').trim() || null;
-    void resolveRequestedTitle(conversationId, executionSessionId)
-      .then(title => sendResponse({ ok: Boolean(title), title }))
-      .catch(() => sendResponse({ ok: false, title: null }));
-    return true;
+    if (message?.type === 'devflow-title-sync:resolve') {
+      const executionSessionId = String(message?.executionSessionId || '').trim() || null;
+      void resolveRequestedTitle(conversationId, executionSessionId)
+        .then(title => sendResponse({ ok: Boolean(title), title }))
+        .catch(() => sendResponse({ ok: false, title: null }));
+      return true;
+    }
+    if (message?.type === 'devflow-title-sync:candidates') {
+      void listRequestedPairingCandidates(conversationId)
+        .then(candidates => sendResponse({ ok: true, candidates }))
+        .catch(() => sendResponse({ ok: false, candidates: [] }));
+      return true;
+    }
+    if (message?.type === 'devflow-title-sync:pair') {
+      const executionSessionId = String(message?.executionSessionId || '').trim();
+      void pairRequestedConversation(conversationId, executionSessionId)
+        .then(title => sendResponse({ ok: Boolean(title), title }))
+        .catch(() => sendResponse({ ok: false, title: null }));
+      return true;
+    }
+    return undefined;
   });
 }

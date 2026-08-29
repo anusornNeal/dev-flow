@@ -62,7 +62,19 @@ export function createTitleSyncCoordinator(options: { stabilityMs?: number; maxA
   };
 }
 
-type RuntimeReply = { ok?: boolean; title?: string | null } | undefined;
+type PairingCandidate = {
+  executionSessionId: string;
+  project: string;
+  taskId: string;
+  taskTitle: string;
+  available?: boolean;
+};
+
+type RuntimeReply = {
+  ok?: boolean;
+  title?: string | null;
+  candidates?: PairingCandidate[];
+} | undefined;
 
 declare const chrome: {
   runtime?: {
@@ -96,6 +108,25 @@ export function createTitleResolutionRequest(documentLike: DocumentLike, convers
   };
 }
 
+export function formatPairingCandidateLabel(candidate: PairingCandidate) {
+  return `${String(candidate.taskId || '').trim()} · ${String(candidate.taskTitle || '').trim()} — ${String(candidate.project || '').trim()}`;
+}
+
+export function createPairingCandidatesRequest(conversationId: string) {
+  return {
+    type: 'devflow-title-sync:candidates' as const,
+    conversationId,
+  };
+}
+
+export function createExplicitPairingRequest(conversationId: string, executionSessionId: string) {
+  return {
+    type: 'devflow-title-sync:pair' as const,
+    conversationId,
+    executionSessionId,
+  };
+}
+
 function sendRuntimeMessage(message: unknown) {
   return new Promise<RuntimeReply>(resolve => {
     const runtime = typeof chrome !== 'undefined' ? chrome.runtime : undefined;
@@ -119,6 +150,7 @@ function startContentScript() {
   const coordinator = createTitleSyncCoordinator({ stabilityMs: STABILITY_MS, maxApplyCount: 2 });
   const desiredTitles = new Map<string, string>();
   const resolutionAttempts = new Map<string, number>();
+  const pairingAttempts = new Set<string>();
   let debounceTimer: number | null = null;
   let retryTimer: number | null = null;
   let activeConversationId: string | null = null;
@@ -145,6 +177,33 @@ function startContentScript() {
     }, delayMs);
   };
 
+  const tryExplicitPairing = async (conversationId: string) => {
+    if (pairingAttempts.has(conversationId)) return null;
+    pairingAttempts.add(conversationId);
+
+    const reply = await sendRuntimeMessage(createPairingCandidatesRequest(conversationId));
+    const candidates = Array.isArray(reply?.candidates)
+      ? reply.candidates.filter(candidate => candidate?.available !== false && candidate.executionSessionId)
+      : [];
+    if (!candidates.length || typeof window.prompt !== 'function' || typeof window.confirm !== 'function') return null;
+
+    const options = candidates
+      .map((candidate, index) => `${index + 1}. ${formatPairingCandidateLabel(candidate)}`)
+      .join('\n');
+    const selectedValue = window.prompt(
+      `DevFlow could not deterministically associate this ChatGPT conversation. Choose the exact DevFlow task to pair:\n${options}`,
+      candidates.length === 1 ? '1' : '',
+    );
+    const selectedIndex = Number.parseInt(String(selectedValue || ''), 10) - 1;
+    const selected = candidates[selectedIndex];
+    if (!selected) return null;
+    if (!window.confirm(`Pair this ChatGPT conversation with ${formatPairingCandidateLabel(selected)}?`)) return null;
+
+    const paired = await sendRuntimeMessage(createExplicitPairingRequest(conversationId, selected.executionSessionId));
+    const title = String(paired?.title || '').trim();
+    return paired?.ok && title ? title : null;
+  };
+
   const resolveDesiredTitle = async (conversationId: string) => {
     const cached = desiredTitles.get(conversationId);
     if (cached) return cached;
@@ -153,9 +212,13 @@ function startContentScript() {
     if (attempts >= MAX_RESOLUTION_ATTEMPTS) return null;
     resolutionAttempts.set(conversationId, attempts + 1);
 
-    const reply = await sendRuntimeMessage(createTitleResolutionRequest(document, conversationId));
-    const title = String(reply?.title || '').trim();
-    if (!reply?.ok || !title) return null;
+    const request = createTitleResolutionRequest(document, conversationId);
+    const reply = await sendRuntimeMessage(request);
+    let title = String(reply?.title || '').trim();
+    if ((!reply?.ok || !title) && !('executionSessionId' in request) && attempts + 1 >= MAX_RESOLUTION_ATTEMPTS) {
+      title = await tryExplicitPairing(conversationId) || '';
+    }
+    if (!title) return null;
     desiredTitles.set(conversationId, title);
     return title;
   };
@@ -222,6 +285,7 @@ function startContentScript() {
     if (!hasTitleSyncSettingsChange(changes, areaName)) return;
     desiredTitles.clear();
     resolutionAttempts.clear();
+    pairingAttempts.clear();
     stoppedConversationId = null;
     coordinator.reset();
     schedule(0);

@@ -70,6 +70,31 @@ test('devflowContract exposes execute_repo_query_plan as a bounded read-only cod
   assert.equal(inventory[0]?.intent, 'repo-work');
 });
 
+test('read_local_file exposes filePath and path as equivalent required aliases', () => {
+  const canonical = getToolDefinitionByName('read_local_file');
+  assert.ok(canonical);
+  assert.equal(canonical.inputSchema.required, undefined);
+  assert.deepEqual(canonical.inputSchema.anyOf, [
+    { required: ['filePath'] },
+    { required: ['path'] },
+  ]);
+
+  const exposed = getMcpToolList('full').find((tool: any) => tool.name === 'read_local_file');
+  assert.ok(exposed);
+  assert.equal(exposed.inputSchema.properties, undefined);
+  const branches = exposed.inputSchema.anyOf;
+  assert.ok(Array.isArray(branches) && branches.length === 2);
+  branches.forEach((branch: any, index: number) => {
+    assert.deepEqual(branch.required, [index === 0 ? 'filePath' : 'path']);
+    assert.ok(branch.properties.filePath);
+    assert.ok(branch.properties.path);
+  });
+
+  const aliasRequest = canonical.buildHttpRequest({ path: 'src/example.ts' });
+  assert.equal(aliasRequest.path.includes('filePath=src%2Fexample.ts'), true);
+  assert.equal(aliasRequest.path.includes('responseMode=compact'), true);
+});
+
 test('high-volume read tools default MCP requests to compact response mode', () => {
   const read = getToolDefinitionByName('read_local_file');
   const show = getToolDefinitionByName('get_git_show');

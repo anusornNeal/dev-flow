@@ -846,7 +846,10 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         responseMode: { type: 'string', enum: ['compact', 'standard', 'debug'], description: 'Agent default is compact (4 KB content cap); standard/debug preserve larger explicit reads.' },
         includeFileRef: { type: 'boolean', description: 'Opt in to an opaque short-lived fileRef bound to this exact project, canonical file path, and content revision for prepare_compact_edit.' },
       },
-      required: ['filePath'],
+      anyOf: [
+        { required: ['filePath'] },
+        { required: ['path'] },
+      ],
     },
     outputSchema: { type: 'object' },
     buildHttpRequest: (args) => ({

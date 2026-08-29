@@ -5,7 +5,7 @@ import type { Task } from '../../types';
 export type TaskInspectorTab = 'overview' | 'work' | 'subtasks' | 'bugs' | 'activity';
 
 export const TASK_INSPECTOR_MIN_WIDTH_VW = 45;
-export const TASK_INSPECTOR_DEFAULT_WIDTH_VW = 58;
+export const TASK_INSPECTOR_DEFAULT_WIDTH_VW = 68;
 export const TASK_INSPECTOR_MAX_WIDTH_VW = 85;
 
 export function clampTaskInspectorWidth(widthVw: number) {
@@ -312,7 +312,7 @@ export default function TaskInspectorShell({
           ))}
         </nav>
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 text-[13px] leading-6 text-[var(--df-color-text)] lg:px-5 lg:py-5">
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 text-[13px] leading-6 text-[var(--df-color-text)] lg:px-5 lg:py-4">
           {children}
         </div>
 

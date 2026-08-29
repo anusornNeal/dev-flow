@@ -170,11 +170,11 @@ export default function TaskOverviewTab(props: TaskOverviewTabProps) {
   }
 
   return (
-    <div className="mx-auto grid max-w-6xl min-w-0 gap-6 2xl:grid-cols-[minmax(0,1fr)_240px]">
-      <main data-testid="task-inspector-main-content" className="min-w-0 max-w-[80ch] space-y-5">
+    <div className="mx-auto grid max-w-[1400px] min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px]">
+      <main data-testid="task-inspector-main-content" className="min-w-0 space-y-4">
         <ReadSection title="Description">
           {task.description ? (
-            <div className="prose max-w-none break-words text-[13px] leading-[1.55] dark:prose-invert">
+            <div className="prose max-w-[82ch] break-words text-[13px] leading-[1.55] dark:prose-invert">
               <MarkdownRenderer content={task.description} />
             </div>
           ) : (
@@ -184,7 +184,7 @@ export default function TaskOverviewTab(props: TaskOverviewTabProps) {
 
         {task.acceptanceCriteria && (
           <ReadSection title="Acceptance criteria">
-            <p className="whitespace-pre-wrap break-words">{task.acceptanceCriteria}</p>
+            <p className="max-w-[82ch] whitespace-pre-wrap break-words">{task.acceptanceCriteria}</p>
           </ReadSection>
         )}
 
@@ -234,7 +234,7 @@ export default function TaskOverviewTab(props: TaskOverviewTabProps) {
         )}
       </main>
 
-      <aside className="min-w-0 space-y-4 2xl:sticky 2xl:top-2 2xl:self-start" aria-label="Task facts">
+      <aside className="min-w-0 space-y-3 xl:sticky xl:top-2 xl:self-start" aria-label="Task facts">
         <section className="min-w-0 rounded-lg border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] p-3">
           <h3 className="mb-1 text-[10px] font-extrabold uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]">Task facts</h3>
           <FactRow label="Status">{task.status}</FactRow>

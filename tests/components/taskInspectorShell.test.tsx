@@ -38,17 +38,17 @@ function renderShell(overrides: Record<string, unknown> = {}) {
   }));
 }
 
-test('inspector sizing clamps to the approved 45–85vw range with 58vw default', () => {
-  assert.equal(TASK_INSPECTOR_DEFAULT_WIDTH_VW, 58);
+test('inspector sizing clamps to the approved 45–85vw range with a roomier 68vw default', () => {
+  assert.equal(TASK_INSPECTOR_DEFAULT_WIDTH_VW, 68);
   assert.equal(clampTaskInspectorWidth(20), TASK_INSPECTOR_MIN_WIDTH_VW);
   assert.equal(clampTaskInspectorWidth(72), 72);
   assert.equal(clampTaskInspectorWidth(120), TASK_INSPECTOR_MAX_WIDTH_VW);
-  assert.equal(resolveTaskInspectorResize(58, 180, 1200), 73);
+  assert.equal(resolveTaskInspectorResize(68, 180, 1200), 83);
 });
 
 test('shell renders a wide desktop inspector and narrow-window full-screen CSS contract', () => {
   const html = renderShell();
-  assert.match(html, /width:58vw/);
+  assert.match(html, /width:68vw/);
   assert.match(html, /height:92vh/);
   assert.match(html, /max-lg:!w-screen/);
   assert.match(html, /max-lg:!h-screen/);

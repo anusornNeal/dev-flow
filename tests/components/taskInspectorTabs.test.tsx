@@ -130,6 +130,16 @@ test('Work groups checklist, target files, execution assignment, and verificatio
   assert.match(html, /TypeScript passed/);
 });
 
+test('Work uses balanced technical columns and compact section rhythm', () => {
+  const workSource = fs.readFileSync('src/components/taskDrawer/TaskWorkTab.tsx', 'utf8');
+  assert.match(workSource, /max-w-\[1400px\] space-y-4/);
+  assert.match(workSource, /xl:grid-cols-\[minmax\(360px,0\.9fr\)_minmax\(420px,1\.1fr\)\]/);
+  assert.match(workSource, /df-surface min-w-0 p-4/);
+  assert.match(workSource, /sm:grid-cols-2/);
+  assert.match(workSource, /rounded-lg border border-df-border p-2\.5/);
+  assert.doesNotMatch(workSource, /minmax\(0,1\.2fr\)_minmax\(300px,0\.8fr\)/);
+});
+
 test('Subtasks has dedicated content while Work stays focused on implementation details', () => {
   const child: Task = {
     ...makeTask(),

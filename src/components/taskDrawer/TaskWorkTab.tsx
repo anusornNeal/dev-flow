@@ -28,8 +28,8 @@ const labelClass = 'mb-1.5 block text-[10px] font-black uppercase tracking-[0.08
 
 function WorkSection({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="df-surface min-w-0 p-5">
-      <h3 className="df-heading-sm mb-3 flex items-center gap-2 uppercase tracking-[0.08em]">{icon}{title}</h3>
+    <section className="df-surface min-w-0 p-4">
+      <h3 className="df-heading-sm mb-2.5 flex items-center gap-2 uppercase tracking-[0.08em]">{icon}{title}</h3>
       {children}
     </section>
   );
@@ -53,12 +53,12 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
     : [];
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5">
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
-        <div className="space-y-5">
+    <div className="mx-auto max-w-[1400px] space-y-4">
+      <div className="grid gap-4 xl:grid-cols-[minmax(360px,0.9fr)_minmax(420px,1.1fr)]">
+        <div className="space-y-4">
           <WorkSection title="Checklist" icon={<CheckSquare size={15} />}>
             {!isEditing ? (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3 text-[12px] font-bold text-df-text-muted">
                   <span>{completed} of {checklist.length} complete</span>
                   <span>{checklist.length > 0 ? Math.round((completed / checklist.length) * 100) : 0}%</span>
@@ -66,7 +66,7 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
                 <div className="h-2 overflow-hidden rounded-full bg-df-surface-muted"><div className="h-full rounded-full bg-df-success" style={{ width: `${checklist.length > 0 ? (completed / checklist.length) * 100 : 0}%` }} /></div>
                 <div className="space-y-2">
                   {checklist.map((item) => (
-                    <button key={item.id || item.text} type="button" onClick={() => props.onToggleChecklistItem(item.id || item.text)} className="flex w-full items-start gap-3 rounded-xl border border-df-border p-3 text-left hover:bg-df-surface-muted">
+                    <button key={item.id || item.text} type="button" onClick={() => props.onToggleChecklistItem(item.id || item.text)} className="flex w-full items-start gap-2.5 rounded-lg border border-df-border p-2.5 text-left hover:bg-df-surface-muted">
                       <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${item.completed ? 'border-[var(--df-color-success)] bg-df-success text-white' : 'border-df-border'}`}>{item.completed && <Check size={12} />}</span>
                       <span className={`min-w-0 break-words text-[13px] leading-5 ${item.completed ? 'text-[var(--df-color-text-subtle)] line-through' : 'text-[var(--df-color-text)]'}`}>{item.text}</span>
                     </button>
@@ -93,7 +93,7 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
                 {(task.targetFiles || []).map((file) => {
                   const { fileName, directory } = splitTargetFilePath(file);
                   return (
-                    <div key={file} className="flex min-w-0 items-center gap-3 rounded-xl border border-df-border bg-[var(--df-color-surface-subtle)] px-3.5 py-3">
+                    <div key={file} className="flex min-w-0 items-center gap-2.5 rounded-lg border border-df-border bg-[var(--df-color-surface-subtle)] px-3 py-2.5">
                       <div className="min-w-0 flex-1">
                         <span className="block break-words text-[13px] font-extrabold text-[var(--df-color-text-strong)]">{fileName || file}</span>
                         {directory && <span className="df-break-technical mt-1 block font-mono text-[11px] leading-4 text-[var(--df-color-text-muted)]">{directory}</span>}
@@ -127,10 +127,10 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
 
         </div>
 
-        <div className="space-y-5">
+        <div className="space-y-4">
           <WorkSection title="Execution" icon={<PlayCircle size={15} />}>
             {isEditing ? (
-              <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <div><label className={labelClass}>Branch</label><input className={`${inputClass} font-mono`} value={props.editedBranch} onChange={(event) => props.setEditedBranch(event.target.value)} /></div>
                 <div>
                   <label className={labelClass}>Agent</label>
@@ -170,7 +170,7 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
                 </div>
               </div>
             ) : (
-              <dl className="grid gap-3 text-[13px]">
+              <dl className="grid gap-3 text-[13px] sm:grid-cols-2">
                 <div><dt className={labelClass}><GitBranch size={12} className="inline" /> Branch</dt><dd className="df-break-technical font-mono">{task.branch || 'Not assigned'}</dd></div>
                 <div><dt className={labelClass}>Agent</dt><dd>{task.agent || 'Not assigned'}</dd></div>
                 <div><dt className={labelClass}>Model</dt><dd>{task.model || 'Not assigned'}</dd></div>
@@ -183,13 +183,13 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
             {isEditing ? (
               <textarea className={`${inputClass} min-h-32 resize-y`} value={props.editedVerification} onChange={(event) => props.setEditedVerification(event.target.value)} />
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <p className="whitespace-pre-wrap break-words text-[13px]">{task.verification || 'No verification plan.'}</p>
                 {(task.verificationEvidence || []).length > 0 && (
                   <div className="space-y-2">
                     {(task.verificationEvidence || []).map((check, index) => (
-                      <div key={`${check.name}-${index}`} className="rounded-xl border border-df-border p-3">
-                        <div className="flex items-center justify-between gap-3"><strong className="text-[12px]">{check.name}</strong><span className={`rounded-md px-2 py-0.5 text-[10px] font-black uppercase ${check.status === 'passed' ? 'bg-emerald-100 text-emerald-700' : check.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{check.status}</span></div>
+                      <div key={`${check.name}-${index}`} className="rounded-lg border border-df-border p-2.5">
+                        <div className="flex items-start justify-between gap-3"><strong className="min-w-0 break-words text-[12px]">{check.name}</strong><span className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-black uppercase ${check.status === 'passed' ? 'bg-emerald-100 text-emerald-700' : check.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{check.status}</span></div>
                         <code className="df-break-technical mt-1 block text-[11px] text-[var(--df-color-text-muted)]">{check.command}</code>
                         {check.summary && <p className="mt-1 break-words text-[12px]">{check.summary}</p>}
                       </div>
@@ -197,7 +197,7 @@ export default function TaskWorkTab(props: TaskWorkTabProps) {
                   </div>
                 )}
                 {task.gitEvidence && (
-                  <div className="df-break-technical rounded-xl bg-[var(--df-color-surface-subtle)] p-3 text-[12px]">
+                  <div className="df-break-technical rounded-lg bg-[var(--df-color-surface-subtle)] p-2.5 text-[12px]">
                     <strong>Git evidence:</strong> {task.gitEvidence.branch} @ {task.gitEvidence.commit.slice(0, 10)} · {task.gitEvidence.workingTreeClean ? 'clean' : 'dirty'} · {task.gitEvidence.pushed ? 'pushed' : 'local'}
                   </div>
                 )}

@@ -48,9 +48,9 @@ function renderShell(task = makeTask()) {
 }
 
 test('Task Inspector defaults to compact desktop width and only renders attention UI for actionable states', () => {
-  assert.equal(TASK_INSPECTOR_DEFAULT_WIDTH_VW, 58);
+  assert.equal(TASK_INSPECTOR_DEFAULT_WIDTH_VW, 68);
   const normal = renderShell();
-  assert.match(normal, /width:58vw/);
+  assert.match(normal, /width:68vw/);
   assert.doesNotMatch(normal, /data-testid="task-inspector-attention"/);
 
   const blocked = renderShell(makeTask({
@@ -93,7 +93,9 @@ test('Overview prioritizes readable task definition, facts, and progressive engi
   }));
 
   assert.match(html, /data-testid="task-inspector-main-content"/);
-  assert.match(html, /max-w-\[80ch\]/);
+  assert.match(html, /max-w-\[1400px\]/);
+  assert.match(html, /max-w-\[82ch\]/);
+  assert.match(html, /xl:grid-cols-\[minmax\(0,1fr\)_260px\]/);
   assert.match(html, />Description</);
   assert.match(html, />Acceptance criteria</);
   assert.match(html, />Task facts</);

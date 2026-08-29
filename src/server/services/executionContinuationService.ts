@@ -300,8 +300,15 @@ export function evaluateExecutionContinuation(
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const latestTailJob = tailJobs[0] || null;
   const latestTailResult = latestTailJob ? readJobResult(latestTailJob.jobId)?.result : null;
+  const latestVerificationJob = listRecentJobs(200)
+    .filter((job) => job.toolName === 'run_project_command' && String(job.args?.__executionJobBinding?.executionSessionId || '').trim() === session.id)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] || null;
+  const latestVerificationResult = latestVerificationJob ? readJobResult(latestVerificationJob.jobId)?.result : null;
+  const terminalHandoffAttention = !latestTailJob && latestVerificationResult?.terminalHandoff?.required === true
+    ? latestVerificationResult.terminalHandoff
+    : null;
   const autonomousTailState: ExecutionContinuationResult['autonomousTail']['state'] = !latestTailJob
-    ? 'not-started'
+    ? (terminalHandoffAttention ? 'attention' : 'not-started')
     : latestTailJob.status === 'queued'
       ? 'queued'
       : latestTailJob.status === 'running'
@@ -311,10 +318,14 @@ export function evaluateExecutionContinuation(
           : 'attention';
   const autonomousTail = {
     state: autonomousTailState,
-    jobId: latestTailJob?.jobId || null,
+    jobId: latestTailJob?.jobId || (terminalHandoffAttention ? latestVerificationJob?.jobId || null : null),
     triggerJobId: latestTailJob ? String(latestTailJob.args?.triggerJobId || '').trim() || null : null,
-    reasonCode: autonomousTailState === 'attention' ? String(latestTailResult?.code || latestTailJob?.failureSummary || 'AUTONOMOUS_TAIL_ATTENTION_REQUIRED').slice(0, 160) : null,
-    message: autonomousTailState === 'attention' ? String(latestTailResult?.message || latestTailJob?.failureSummary || 'Autonomous execution tail requires attention.').slice(0, 500) : null,
+    reasonCode: autonomousTailState === 'attention'
+      ? String(terminalHandoffAttention?.code || latestTailResult?.code || latestTailJob?.failureSummary || 'AUTONOMOUS_TAIL_ATTENTION_REQUIRED').slice(0, 160)
+      : null,
+    message: autonomousTailState === 'attention'
+      ? String(terminalHandoffAttention?.message || latestTailResult?.message || latestTailJob?.failureSummary || 'Autonomous execution tail requires attention.').slice(0, 500)
+      : null,
   };
   if (autonomousTail.state === 'attention') {
     blockers.push({

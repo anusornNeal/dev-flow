@@ -15,7 +15,8 @@ const { saveTask, getTask } = await import('../../src/server/repositories/taskRe
 const { createExecutionSession, recordExecutionLifecycleTransition } = await import('../../src/server/services/executionSessionService.js');
 const { updateExecutionSessionRecord, saveExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 const { recordExecutionPendingOperationReference } = await import('../../src/server/services/executionCheckpointService.js');
-const { createJob } = await import('../../src/server/repositories/mcpToolJobRepository.js');
+const { createJob, transitionJobStatus, writeJobResult } = await import('../../src/server/repositories/mcpToolJobRepository.js');
+
 const continuationService: any = await import('../../src/server/services/executionContinuationService.js');
 const { evaluateExecutionContinuation } = continuationService;
 
@@ -196,6 +197,50 @@ test('persisted board-loop intent is projected by continuation without caller re
   const historical = evaluateExecutionContinuation(state, session.id);
   assert.equal(historical.boardLoop.status, 'active');
   assert.equal(historical.boardLoop.loopId, 'loop-persisted-fixture');
+});
+
+test('missing terminal handoff is surfaced as autonomous-tail attention for an active board loop', () => {
+  const { task, session } = fixture({ checklistComplete: true });
+  const persist = continuationService.persistBoardLoopIntent as any;
+  persist(session.id, {
+    loopId: `loop-terminal-handoff-${session.id}`,
+    projectId: project.id,
+    requestedTaskId: task.id,
+    status: 'active',
+    startedAt: new Date().toISOString(),
+  });
+
+  const jobId = `job-terminal-handoff-${session.id}`;
+  createJob(jobId, 'run_project_command', {
+    projectId: project.id,
+    taskId: task.id,
+    __executionJobBinding: {
+      operationId: jobId,
+      executionSessionId: session.id,
+      taskId: task.id,
+      workspaceId: '',
+      projectId: project.id,
+      toolName: 'run_project_command',
+    },
+  }, `continuation:${jobId}`, { eagerArtifacts: false });
+  writeJobResult(jobId, {
+    ok: true,
+    status: 'succeeded',
+    verificationBinding: { authoritative: true },
+    terminalHandoff: {
+      required: true,
+      code: 'TERMINAL_HANDOFF_REQUIRED',
+      message: 'Active board-loop terminal verification requires autonomous tail handoff.',
+    },
+  });
+  transitionJobStatus(jobId, ['queued'], { status: 'succeeded' });
+
+  const result = evaluateExecutionContinuation(state, session.id);
+  assert.equal(result.autonomousTail.state, 'attention');
+  assert.equal(result.autonomousTail.jobId, jobId);
+  assert.equal(result.autonomousTail.reasonCode, 'TERMINAL_HANDOFF_REQUIRED');
+  assert.ok(result.reasonCodes.includes('TERMINAL_HANDOFF_REQUIRED'));
+  assert.equal(result.blocked, true);
 });
 
 test.after(() => {

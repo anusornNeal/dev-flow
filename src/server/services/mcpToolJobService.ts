@@ -42,6 +42,7 @@ import {
   safelyReconcileTerminalDurableExecution,
 } from './mcpToolJobTerminalLifecycleService';
 import { createMcpToolJobQueueLifecycle, type QueueLifecycleEntry } from './mcpToolJobQueueLifecycleService';
+import { getBoardLoopIntentForExecution } from './executionContinuationService.js';
 import { runDurableJobRecoveryPass as runLeaseRecoveryPass } from './mcpToolJobLeaseRecoveryService';
 import {
   releaseTerminalVerificationCandidate,
@@ -67,7 +68,24 @@ type AsyncRunner = (
 function autonomousTailConfig(job: Pick<McpToolJob, 'args'> | null | undefined) {
   const raw = job?.args?.autonomousTail;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.enabled !== true) return null;
-  return { commitMessage: String(raw.commitMessage || '').trim() };
+  const commitMessage = String(raw.commitMessage || '').trim();
+  return commitMessage ? { commitMessage } : null;
+}
+
+function missingTerminalHandoff(verificationJob: McpToolJob, result: any) {
+  if (!result?.ok || result?.status !== 'succeeded' || result?.verificationBinding?.authoritative !== true) return null;
+  const binding = durableExecutionJobBinding(verificationJob);
+  const executionSessionId = String(binding?.executionSessionId || '').trim();
+  if (!binding || !executionSessionId) return null;
+  const boardLoop = getBoardLoopIntentForExecution(executionSessionId);
+  if (!boardLoop || boardLoop.status !== 'active') return null;
+  if (autonomousTailConfig(verificationJob)) return null;
+  return {
+    required: true,
+    code: 'TERMINAL_HANDOFF_REQUIRED',
+    message: 'Active board-loop terminal verification requires autonomousTail.enabled=true and a non-empty reasoning-agent commitMessage.',
+    retry: { tool: 'run_project_command', autonomousTail: { enabled: true, commitMessageRequired: true } },
+  };
 }
 
 function existingAutonomousTailJob(triggerJobId: string) {
@@ -79,11 +97,17 @@ function existingAutonomousTailJob(triggerJobId: string) {
 
 function maybeEnqueueAutonomousTail(state: AppState, verificationJob: McpToolJob | null | undefined, result: any) {
   if (!verificationJob || verificationJob.toolName !== 'run_project_command' || verificationJob.status !== 'succeeded') return null;
-  const config = autonomousTailConfig(verificationJob);
-  if (!config) return null;
   if (!result?.ok || result?.status !== 'succeeded' || result?.verificationBinding?.authoritative !== true) return null;
   const binding = durableExecutionJobBinding(verificationJob);
   if (!binding) return null;
+  const missingHandoff = missingTerminalHandoff(verificationJob, result);
+  if (missingHandoff) {
+    writeJobResult(verificationJob.jobId, { ...result, terminalHandoff: missingHandoff });
+    appendJobLog(verificationJob.jobId, 'stderr', `\n[Autonomous Tail] ${missingHandoff.code}: ${missingHandoff.message}\n`);
+    return null;
+  }
+  const config = autonomousTailConfig(verificationJob);
+  if (!config) return null;
   const existing = existingAutonomousTailJob(verificationJob.jobId);
   if (existing) return existing;
   try {

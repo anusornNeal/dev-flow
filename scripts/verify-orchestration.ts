@@ -1018,6 +1018,6 @@ const branchCardMarkup = renderToStaticMarkup(
     onUpdate: () => {},
   }),
 );
-assert.match(branchCardMarkup, /🌿 test\/reply-exactly-hi/);
+assert.match(branchCardMarkup, /Branch · test\/reply-exactly-hi/);
 
 console.log('[verify-orchestration] all assertions passed');

@@ -312,7 +312,7 @@ export default function AgentOfficePage({
     const items = snapshot.queue.items[state];
     const attentionState = state === 'attention' || state === 'blocked';
     return (
-      <div className={`min-w-0 rounded-[var(--df-radius-md)] border p-3 ${
+      <div className={`min-w-0 rounded-[var(--df-radius-md)] border p-2.5 ${
         state === 'blocked'
           ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
           : state === 'attention'
@@ -327,14 +327,14 @@ export default function AgentOfficePage({
           <span className="shrink-0 rounded-md bg-[var(--df-color-surface-muted)] px-2 py-1 text-[10px] font-extrabold text-[var(--df-color-text)]">{snapshot.queue.counts[state]}</span>
         </div>
 
-        <div className="mt-3 space-y-1.5">
-          {items.length === 0 && <p className="py-2 text-[10px] text-[var(--df-color-text-subtle)]">Nothing here right now.</p>}
+        <div className="mt-2.5 space-y-1">
+          {items.length === 0 && <p className="py-1 text-[10px] text-[var(--df-color-text-subtle)]">Nothing here right now.</p>}
           {items.map((item) => (
             <button
               key={`${item.projectId}:${item.taskId}`}
               type="button"
               onClick={() => void onOpenTask(item.taskId)}
-              className="block w-full min-w-0 rounded-[var(--df-radius-sm)] border border-transparent px-2 py-2 text-left transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)]"
+              className="block w-full min-w-0 cursor-pointer rounded-[var(--df-radius-sm)] border border-transparent px-2 py-1.5 text-left transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)]"
             >
               <div className="truncate text-[9px] font-bold text-[var(--df-color-text-subtle)]" title={item.projectName}>{item.projectName}</div>
               <div className="mt-0.5 line-clamp-2 break-words text-[10px] font-extrabold text-[var(--df-color-text)]" title={`${item.displayId || item.taskId} · ${item.title}`}>
@@ -376,35 +376,30 @@ export default function AgentOfficePage({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[var(--df-color-canvas)] p-4 md:p-6">
-      <div className="mx-auto flex max-w-[1500px] flex-col gap-4">
-        <section className="df-surface px-5 py-4 shadow-[var(--df-shadow-sm)]">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <Activity size={18} className="shrink-0 text-[var(--df-color-accent)]" />
-                <h1 className="min-w-0 truncate text-lg font-extrabold tracking-tight text-[var(--df-color-text-strong)]">Agent Office</h1>
-              </div>
-              <p className="mt-1 text-[11px] text-[var(--df-color-text-muted)]">Global operational view across all projects</p>
-            </div>
-
-            <div className="flex min-w-0 flex-wrap items-center gap-2 text-[10px] text-[var(--df-color-text-muted)]">
-              {snapshot && <span className="shrink-0">Updated {new Date(snapshot.generatedAt).toLocaleTimeString()}</span>}
-              {!disableAutoLoad && (
-                <span className="min-w-0 truncate" title={connectionState === 'connected' ? 'Live updates connected' : connectionState === 'fallback' ? 'Live stream unavailable; fallback refresh active' : 'Connecting live updates'}>
-                  {connectionState === 'connected' ? 'Live updates connected' : connectionState === 'fallback' ? 'Fallback refresh active' : 'Connecting live updates'}
-                </span>
-              )}
-              <button type="button" onClick={requestRefresh} disabled={refreshing} className="df-button df-button--secondary !min-h-8 !min-w-0 !px-2.5 !py-1.5">
-                <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
-              </button>
-            </div>
+    <div className="flex-1 overflow-y-auto bg-[var(--df-color-canvas)] p-3.5 md:px-5 md:py-4 xl:px-6">
+      <div className="mx-auto flex max-w-[1740px] flex-col gap-3">
+        <div aria-label="Agent Office controls" className="flex min-w-0 flex-col gap-2 px-1 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-2 text-[10px] text-[var(--df-color-text-muted)]">
+            <Activity size={14} className="shrink-0 text-[var(--df-color-accent)]" />
+            <span className="font-extrabold text-[var(--df-color-text)]">All projects</span>
+            <span className="min-w-0 truncate">Global operational view</span>
           </div>
-        </section>
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-[10px] text-[var(--df-color-text-muted)]">
+            {snapshot && <span className="shrink-0">Updated {new Date(snapshot.generatedAt).toLocaleTimeString()}</span>}
+            {!disableAutoLoad && (
+              <span className="min-w-0 truncate" title={connectionState === 'connected' ? 'Live updates connected' : connectionState === 'fallback' ? 'Live stream unavailable; fallback refresh active' : 'Connecting live updates'}>
+                {connectionState === 'connected' ? 'Live updates connected' : connectionState === 'fallback' ? 'Fallback refresh active' : 'Connecting live updates'}
+              </span>
+            )}
+            <button type="button" onClick={requestRefresh} disabled={refreshing} className="df-button df-button--secondary !min-h-8 !min-w-0 !px-2.5 !py-1.5">
+              <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
+            </button>
+          </div>
+        </div>
 
         {health && (
           <div
-            className={`flex min-w-0 items-start gap-2 rounded-[var(--df-radius-md)] border px-4 py-3 text-xs ${
+            className={`flex min-w-0 items-start gap-2 rounded-[var(--df-radius-md)] border px-3.5 py-2.5 text-xs ${
               health.tone === 'danger'
                 ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
                 : 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)]'
@@ -440,7 +435,7 @@ export default function AgentOfficePage({
                 { label: 'Blocked', value: snapshot.queue.counts.blocked, detail: 'Cannot progress yet', tone: 'text-[var(--df-color-danger)]' },
                 { label: 'Ready to start', value: snapshot.queue.counts.ready, detail: 'Runnable work available', tone: 'text-[var(--df-color-info)]' },
               ].map((item) => (
-                <div key={item.label} className="df-surface min-w-0 p-3">
+                <div key={item.label} className="df-surface min-w-0 p-2.5">
                   <div className={`text-xl font-extrabold ${item.tone}`}>{item.value}</div>
                   <div className="mt-1 text-[11px] font-extrabold text-[var(--df-color-text-strong)]">{item.label}</div>
                   <div className="mt-0.5 text-[9px] leading-relaxed text-[var(--df-color-text-muted)]">{item.detail}</div>
@@ -448,7 +443,7 @@ export default function AgentOfficePage({
               ))}
             </section>
 
-            <section className="df-surface p-4">
+            <section className="df-surface p-3.5">
               <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2">
                   <UserRoundCog size={16} className="shrink-0 text-[var(--df-color-accent)]" />
@@ -478,7 +473,7 @@ export default function AgentOfficePage({
                       key={`${worker.projectId}:${worker.taskId}`}
                       type="button"
                       onClick={() => void onOpenTask(worker.taskId)}
-                      className={`group flex w-full min-w-0 items-start gap-3 rounded-[var(--df-radius-md)] border px-3.5 py-3 text-left transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)] ${
+                      className={`group flex w-full min-w-0 cursor-pointer items-start gap-3 rounded-[var(--df-radius-md)] border px-3 py-2.5 text-left transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)] ${
                         workerState === 'Blocked' || workerState === 'Failed' || workerState === 'Disconnected'
                           ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]'
                           : workerState === 'Needs attention'
@@ -521,18 +516,18 @@ export default function AgentOfficePage({
               {snapshot.workers.truncated && <p className="mt-2 px-1 text-[9px] text-[var(--df-color-text-subtle)]">More workers exist beyond this bounded view.</p>}
             </section>
 
-            <section className="grid gap-3 lg:grid-cols-2">
+            <section className="grid items-start gap-3 lg:grid-cols-2">
               {renderQueuePanel('attention')}
               {renderQueuePanel('blocked')}
             </section>
 
-            <section className="grid gap-4 xl:grid-cols-[0.9fr_1.4fr]">
+            <section className="grid items-start gap-3 xl:grid-cols-[0.9fr_1.4fr]">
               <div className="grid gap-3">
                 {renderQueuePanel('ready')}
                 {renderQueuePanel('execution')}
               </div>
 
-              <div className="df-surface min-w-0 p-4">
+              <div className="df-surface min-w-0 p-3.5">
                 <div className="mb-3 flex min-w-0 items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-2">
                     <GitMerge size={16} className="mt-0.5 shrink-0 text-[var(--df-color-accent)]" />
@@ -559,7 +554,7 @@ export default function AgentOfficePage({
                       key={`${row.projectId}:${row.executionSessionId}:${row.stage}`}
                       type="button"
                       onClick={() => void onOpenTask(row.taskId)}
-                      className={`flex w-full min-w-0 items-start justify-between gap-3 rounded-[var(--df-radius-md)] border px-3 py-2.5 text-left transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)] ${
+                      className={`flex w-full min-w-0 cursor-pointer items-start justify-between gap-3 rounded-[var(--df-radius-md)] border px-3 py-2.5 text-left transition-colors hover:border-[var(--df-color-border-strong)] hover:bg-[var(--df-color-surface-subtle)] ${
                         row.blocked ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)]' : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)]'
                       }`}
                     >

@@ -178,7 +178,8 @@ test('Agent Office renders operational hierarchy across active work, attention, 
   const html = renderOffice({ initialSnapshot: makeSnapshot() });
 
   assert.match(html, /Agent Office/);
-  assert.match(html, /Global operational view across all projects/);
+  assert.match(html, /All projects/);
+  assert.match(html, /Global operational view/);
   assert.match(html, /aria-label="Agent Office summary"/);
   assert.match(html, /Active work/);
   assert.match(html, /Needs attention/);
@@ -201,6 +202,16 @@ test('Agent Office renders operational hierarchy across active work, attention, 
   assert.match(html, /Snapshot technical details/);
   assert.doesNotMatch(html, /Snapshot is stale/);
   assert.doesNotMatch(html, /Snapshot is partial/);
+});
+
+test('Agent Office uses the shell title and a compact non-stretching operational layout', () => {
+  const pageSource = fs.readFileSync('src/components/AgentOfficePage.tsx', 'utf8');
+  assert.doesNotMatch(pageSource, /<h1[^>]*>Agent Office<\/h1>/);
+  assert.match(pageSource, /aria-label="Agent Office controls"/);
+  assert.match(pageSource, /max-w-\[1740px\]/);
+  assert.match(pageSource, /grid items-start gap-3 lg:grid-cols-2/);
+  assert.match(pageSource, /grid items-start gap-3 xl:grid-cols-\[0\.9fr_1\.4fr\]/);
+  assert.match(pageSource, /cursor-pointer/);
 });
 
 test('Agent Office exposes honest loading, empty, error, stale, partial and last-success failure states', () => {

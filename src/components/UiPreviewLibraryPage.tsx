@@ -334,21 +334,22 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
   };
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--df-color-canvas)] p-4 sm:p-6" aria-label="UI Previews Library">
-      <div className="mb-5 flex min-w-0 flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 max-w-3xl">
-          <div className="df-meta mb-1 flex flex-wrap items-center gap-2 font-black uppercase tracking-[0.16em]">
-            <span>Global</span><span aria-hidden="true">•</span><span>All local previews</span>
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--df-color-canvas)] p-3.5 sm:px-5 sm:py-4" aria-label="UI Previews Library">
+      <div className="mb-3 flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 max-w-4xl">
+          <div className="df-meta flex flex-wrap items-center gap-2">
+            <span className="font-black uppercase tracking-[0.14em] text-[var(--df-color-accent)]">Global library</span>
+            <span aria-hidden="true">•</span>
+            <span>All local previews</span>
           </div>
-          <h2 className="df-heading-lg break-words">UI Previews</h2>
-          <p className="df-meta mt-1 max-w-2xl break-words leading-5">Library links always open the latest revision. Linked task evidence stays frozen at the attached revision.</p>
+          <p className="df-meta mt-1 max-w-3xl break-words leading-5">Library links always open the latest revision. Linked task evidence stays frozen at the attached revision.</p>
         </div>
-        <button type="button" onClick={refresh} className="df-button df-button--secondary shrink-0" disabled={loading}>
+        <button type="button" onClick={refresh} className="df-button df-button--secondary !min-h-8 shrink-0" disabled={loading}>
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
 
-      <div className="mb-5 flex min-w-0 gap-1 overflow-x-auto border-b border-[var(--df-color-border)] pb-2" role="tablist" aria-label="Preview filters">
+      <div className="mb-4 flex min-w-0 gap-1 overflow-x-auto border-b border-[var(--df-color-border)] pb-2" role="tablist" aria-label="Preview filters">
         {FILTERS.map((entry) => (
           <button
             key={entry.value}
@@ -393,7 +394,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
         </div>
       )}
 
-      <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
+      <div className="grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-2">
         {items.map((item) => {
           const linked = Boolean(item.taskId && item.linkedTask);
           const pending = Boolean(pendingAttach[item.previewId]);
@@ -401,7 +402,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
           const deleting = Boolean(pendingDelete[item.previewId]);
           const itemFeedback = feedback[item.previewId];
           return (
-            <article key={item.previewId} className="df-surface min-w-0 overflow-hidden p-4 shadow-sm sm:p-5">
+            <article key={item.previewId} className="df-surface min-w-0 overflow-hidden p-4 shadow-sm">
               <div className="flex min-w-0 items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <h3 className="break-words text-sm font-extrabold leading-5 text-[var(--df-color-text-strong)]" title={summaryLabel(item)}>{summaryLabel(item)}</h3>
@@ -419,7 +420,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
               </div>
 
               {linked && item.linkedTask && (
-                <div className="mt-4 min-w-0 rounded-xl border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-3">
+                <div className="mt-3 min-w-0 rounded-lg border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-2.5">
                   <div className="text-[10px] font-black uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]">Linked task</div>
                   <div className="mt-1 min-w-0 break-words text-[12px] font-extrabold text-[var(--df-color-text-strong)]">
                     <span className="df-break-technical">{item.linkedTask.displayId || item.linkedTask.id}</span>
@@ -430,7 +431,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
                 </div>
               )}
 
-              <div data-preview-actions="normal" className="mt-4 flex min-w-0 flex-wrap gap-2">
+              <div data-preview-actions="normal" className="mt-3 flex min-w-0 flex-wrap gap-2">
                 <a href={item.latestPreviewUrl} target="_blank" rel="noopener noreferrer" className="df-button df-button--primary min-w-0 max-w-full"><ExternalLink size={13} className="shrink-0" /> <span className="break-words">Open Latest Preview</span></a>
                 <button type="button" onClick={() => void copyLatest(item)} className="df-button df-button--secondary min-w-0 max-w-full"><Link2 size={13} className="shrink-0" /> <span className="break-words">Copy Latest Link</span></button>
                 {linked && item.linkedTask && (
@@ -439,7 +440,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
               </div>
 
               {!linked && (
-                <div className="mt-4 min-w-0 rounded-xl border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-3">
+                <div className="mt-3 min-w-0 rounded-lg border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-2.5">
                   <div className="mb-2 min-w-0">
                     <div className="text-[10px] font-black uppercase tracking-[0.08em] text-[var(--df-color-text-muted)]">Attach frozen evidence</div>
                     <p className="df-meta mt-1 break-words">Link this preview to a task while preserving the selected revision as evidence.</p>
@@ -463,7 +464,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
               {itemFeedback && <div className="mt-3"><PreviewFeedback state={itemFeedback} /></div>}
 
               {!linked && (
-                <div data-preview-actions="destructive" className="mt-4 flex min-w-0 items-center justify-between gap-3 border-t border-[var(--df-color-border)] pt-3">
+                <div data-preview-actions="destructive" className="mt-3 flex min-w-0 items-center justify-between gap-3 border-t border-[var(--df-color-border)] pt-3">
                   <div className="min-w-0">
                     <div className="text-[10px] font-black uppercase tracking-[0.08em] text-[var(--df-color-text-subtle)]">Destructive action</div>
                     <p className="df-meta mt-0.5 break-words">Delete permanently removes this standalone preview and all revisions.</p>
@@ -485,7 +486,7 @@ export default function UiPreviewLibraryPage({ onOpenTask, initialItems = [], di
       </div>
 
       {nextCursor && (
-        <div className="mt-5 flex justify-center">
+        <div className="mt-4 flex justify-center">
           <button type="button" onClick={() => void load('append', nextCursor)} disabled={loadingMore} className="df-button df-button--secondary">{loadingMore ? 'Loading…' : 'Load more'}</button>
         </div>
       )}

@@ -29,8 +29,8 @@ test('library surface clearly communicates global/latest semantics and core acti
     disableAutoLoad: true,
     onOpenTask: () => {},
   }));
-  assert.match(html, /UI Previews/);
-  assert.match(html, /Global/);
+  assert.match(html, /UI Previews Library/);
+  assert.match(html, /Global library/);
   assert.match(html, /All local previews/);
   assert.match(html, />All</);
   assert.match(html, />Standalone</);
@@ -44,6 +44,16 @@ test('library surface clearly communicates global/latest semantics and core acti
   assert.match(html, /rel="noopener noreferrer"/);
   assert.match(html, /Delete/);
   assert.doesNotMatch(html, />uip-1</);
+});
+
+test('library hierarchy relies on the shell page title and keeps the content toolbar compact', () => {
+  const component = fs.readFileSync('src/components/UiPreviewLibraryPage.tsx', 'utf8');
+  assert.doesNotMatch(component, /<h2[^>]*>UI Previews<\/h2>/);
+  assert.match(component, /Global library/);
+  assert.match(component, /p-3\.5 sm:px-5 sm:py-4/);
+  assert.match(component, /mb-3 flex min-w-0 flex-wrap items-start justify-between gap-3/);
+  assert.match(component, /grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-2/);
+  assert.match(component, /df-button df-button--secondary !min-h-8 shrink-0/);
 });
 
 test('linked item keeps library presence and exposes task context/open action', () => {

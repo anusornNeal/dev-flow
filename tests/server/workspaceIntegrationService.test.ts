@@ -4,12 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests } from '../../src/server/services/sessionWorkspaceService.js';
-import {
+const dbRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-integration-db-'));
+process.env.DEVFLOW_DB_PATH = path.join(dbRoot, 'devflow.db');
+const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
+executeAllMigrations();
+const { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
+const {
   abortWorkspaceIntegration,
   integrateWorkspaceCommits,
   retryWorkspaceIntegration,
-} from '../../src/server/services/workspaceIntegrationService.js';
+} = await import('../../src/server/services/workspaceIntegrationService.js');
 
 function git(root: string, args: string[], allowFailure = false) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });

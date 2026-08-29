@@ -28,7 +28,8 @@ import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.j
 import { reconcileExecutionLifecycleStage } from './executionLifecycleReconciliationService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { assertTaskPrerequisitesSatisfied, getTaskPrerequisiteBlockers } from './taskDependencyService.js';
-import { DEFAULT_BOARD_LOOP_SELECTION_POLICY, evaluateExecutionContinuation, getProjectBoardLoopIntent, persistBoardLoopIntent, type BoardLoopIntent, type BoardLoopSelectionPolicy } from './executionContinuationService.js';
+
+import { DEFAULT_BOARD_LOOP_SELECTION_POLICY, evaluateExecutionContinuation, getProjectBoardLoopIntent, persistBoardLoopIntent, resolveBoardLoopSelectionPolicy, type BoardLoopIntent, type BoardLoopSelectionPolicy } from './executionContinuationService.js';
 import { classifyReasoningPipelineBoundary } from './mcpToolJobScheduler.js';
 import { getLatestExternalTaskStatusRecord, isExternalTaskStatusRecordStale } from './externalTaskStatusService.js';
 import { getRuntimeContractImpact, getRuntimeSourceFreshness } from './runtimeIdentityService.js';
@@ -1665,13 +1666,8 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
     const existingLoop = getProjectBoardLoopIntent(cleanProjectId);
     const activeLoop = existingLoop?.status === 'active' ? existingLoop : null;
     const partition = resolveNextTaskPartition(requestedPartition, activeLoop);
-    if (activeLoop && requestedSelectionPolicy && requestedSelectionPolicy !== activeLoop.selectionPolicy) {
-      throw createApiError(409, 'BOARD_LOOP_SELECTION_POLICY_CONFLICT', 'Active board-loop selection policy is authoritative until that loop is terminal.', {
-        affectedId: activeLoop.loopId,
-        details: { activeSelectionPolicy: activeLoop.selectionPolicy, requestedSelectionPolicy },
-      });
-    }
-    const selectionPolicy = activeLoop?.selectionPolicy || requestedSelectionPolicy || DEFAULT_BOARD_LOOP_SELECTION_POLICY;
+
+    const selectionPolicy = resolveBoardLoopSelectionPolicy(activeLoop?.selectionPolicy, requestedSelectionPolicy);
     const requestedTask = input.requestedTaskId ? canonicalRequestedLoopTask(cleanProjectId, input.requestedTaskId) : null;
     const loopRequested = input.boardLoopRequested === true || Boolean(activeLoop);
     const loopSeed = loopRequested ? {

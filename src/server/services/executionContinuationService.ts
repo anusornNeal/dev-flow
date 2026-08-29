@@ -94,8 +94,21 @@ const BOARD_LOOP_EVIDENCE_KIND = 'board-loop-intent';
 export type BoardLoopSelectionPolicy = 'todo-only' | 'include-backlog';
 export const DEFAULT_BOARD_LOOP_SELECTION_POLICY: BoardLoopSelectionPolicy = 'todo-only';
 
+
 export function normalizeBoardLoopSelectionPolicy(value: unknown): BoardLoopSelectionPolicy {
   return value === 'include-backlog' ? 'include-backlog' : DEFAULT_BOARD_LOOP_SELECTION_POLICY;
+}
+
+export function resolveBoardLoopSelectionPolicy(
+  activePolicy: BoardLoopSelectionPolicy | null | undefined,
+  requestedPolicy: BoardLoopSelectionPolicy | null | undefined,
+): BoardLoopSelectionPolicy {
+  if (!activePolicy) return requestedPolicy || DEFAULT_BOARD_LOOP_SELECTION_POLICY;
+  if (!requestedPolicy || requestedPolicy === activePolicy) return activePolicy;
+  if (activePolicy === 'todo-only' && requestedPolicy === 'include-backlog') return 'include-backlog';
+  throw createApiError(409, 'BOARD_LOOP_SELECTION_POLICY_CONFLICT', 'Active board-loop selection policy cannot be downgraded while that loop is active.', {
+    details: { activeSelectionPolicy: activePolicy, requestedSelectionPolicy: requestedPolicy },
+  });
 }
 
 export type BoardLoopIntent = {

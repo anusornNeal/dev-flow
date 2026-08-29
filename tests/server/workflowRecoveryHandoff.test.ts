@@ -232,7 +232,34 @@ async function json(baseUrl: string, query: URLSearchParams) {
   return { response, body };
 }
 
-test('fresh client receives the accepted durable job and original managed workspace instead of replay guidance', async () => {
+test('fresh client receives the accepted durable job and original managed workspace instead of replay guidance', async () => {test('recovery handoff fails closed when a closure-critical tool is not callable in the client registry', async () => {
+  const fixture = seedClaimedTask('missing-required-tool');
+  seedCurrentExecution(fixture, 'missing-required-tool');
+
+  await withServer(async (baseUrl) => {
+    const capabilities = await (await fetch(`${baseUrl}/api/capabilities`)).json() as any;
+    const query = new URLSearchParams({
+      taskId: fixture.displayId,
+      previousContractVersion: capabilities.contractVersion,
+      previousRuntimeInstanceId: capabilities.runtimeInstanceId,
+      previousToolSurfaceIdentity: capabilities.toolSurfaceIdentity,
+      clientToolsVisible: 'true',
+      clientUnavailableToolNames: 'adopt_task_execution_owned_changes',
+    });
+    const { response, body } = await json(baseUrl, query);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.recoveryParity.server.ready, true);
+    assert.equal(body.recoveryParity.clientObserved.state, 'missing-tools');
+    assert.deepEqual(body.recoveryParity.clientObserved.missingRequiredRecoveryToolNames, ['adopt_task_execution_owned_changes']);
+    assert.equal(body.recoveryParity.endToEnd.ready, false);
+    assert.ok(body.recoveryParity.endToEnd.reasonCodes.includes('CLIENT_REQUIRED_RECOVERY_TOOLS_MISSING'));
+    assert.equal(body.recoveryParity.endToEnd.recoverySurface, 'get_recovery_handoff');
+    assert.match(body.recoveryParity.endToEnd.nextAction, /refresh|reconnect/i);
+  });
+});
+
+
   const fixture = seedClaimedTask('job');
   const execution = seedCurrentExecution(fixture, 'job');
   const job = createCurrentPendingJob(fixture, execution, 'handoff', {

@@ -409,6 +409,22 @@ test('recovery parity separates server readiness from client-observed MCP surfac
   assert.equal(missingTools.recoveryParity.endToEnd.ready, false);
   assert.ok(missingTools.recoveryParity.endToEnd.reasonCodes.includes('CLIENT_TOOLS_NOT_VISIBLE'));
   assert.equal(missingTools.recoveryParity.endToEnd.recoverySurface, 'get_recovery_handoff');
+
+  const missingRequiredTool = getDevFlowDiagnostics({
+    supervisorState: null,
+    clientState: {
+      contractVersion: current.runtime.contractVersion,
+      runtimeInstanceId: current.runtime.runtimeInstanceId,
+      toolSurfaceIdentity: current.runtime.toolSurfaceIdentity,
+      toolsVisible: true,
+      unavailableToolNames: ['adopt_task_execution_owned_changes'],
+    },
+  } as any) as any;
+  assert.equal(missingRequiredTool.recoveryParity.clientObserved.state, 'missing-tools');
+  assert.deepEqual(missingRequiredTool.recoveryParity.clientObserved.missingRequiredRecoveryToolNames, ['adopt_task_execution_owned_changes']);
+  assert.equal(missingRequiredTool.recoveryParity.endToEnd.ready, false);
+  assert.ok(missingRequiredTool.recoveryParity.endToEnd.reasonCodes.includes('CLIENT_REQUIRED_RECOVERY_TOOLS_MISSING'));
+  assert.equal(missingRequiredTool.recoveryParity.endToEnd.recoverySurface, 'get_recovery_handoff');
 });
 
 test('a fresh process receives a different runtime instance id', () => {

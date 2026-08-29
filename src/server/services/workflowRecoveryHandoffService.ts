@@ -38,6 +38,7 @@ type RecoveryArgs = {
   previousRuntimeInstanceId?: string;
   previousToolSurfaceIdentity?: string;
   clientToolsVisible?: boolean | string;
+  clientUnavailableToolNames?: string | string[];
 };
 
 function clean(value: unknown) {
@@ -50,13 +51,17 @@ function clientStateFromArgs(args: RecoveryArgs): RuntimeClientState | undefined
     : args.clientToolsVisible === false || args.clientToolsVisible === 'false'
       ? false
       : undefined;
+  const unavailableToolNames = Array.isArray(args.clientUnavailableToolNames)
+    ? args.clientUnavailableToolNames.map(clean).filter(Boolean)
+    : clean(args.clientUnavailableToolNames).split(',').map((name) => name.trim()).filter(Boolean);
   const state: RuntimeClientState = {
     contractVersion: clean(args.previousContractVersion) || undefined,
     runtimeInstanceId: clean(args.previousRuntimeInstanceId) || undefined,
     toolSurfaceIdentity: clean(args.previousToolSurfaceIdentity) || undefined,
     toolsVisible,
+    unavailableToolNames,
   };
-  return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.toolsVisible !== undefined ? state : undefined;
+  return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.toolsVisible !== undefined || state.unavailableToolNames.length > 0 ? state : undefined;
 }
 
 function runtimeEvidence(args: RecoveryArgs) {

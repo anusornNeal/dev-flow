@@ -200,6 +200,19 @@ test('workflow health separates server recovery readiness from stale or unobserv
   assert.equal(full.capabilities.recovery.ready, false);
   assert.match(full.recommendations.join('\n'), /client.*recovery|recovery.*client|refresh|reconnect/i);
 
+  const missingRequiredTool = getWorkflowHealth(stateFor(repo), {
+    projectId: 'project-health',
+    responseMode: 'full',
+    clientToolsVisible: true,
+    clientUnavailableToolNames: ['adopt_task_execution_owned_changes'],
+  }) as any;
+  assert.equal(missingRequiredTool.capabilities.recovery.serverReady, true);
+  assert.equal(missingRequiredTool.capabilities.recovery.clientObserved.state, 'missing-tools');
+  assert.deepEqual(missingRequiredTool.capabilities.recovery.clientObserved.missingRequiredRecoveryToolNames, ['adopt_task_execution_owned_changes']);
+  assert.equal(missingRequiredTool.capabilities.recovery.endToEnd.ready, false);
+  assert.ok(missingRequiredTool.capabilities.recovery.endToEnd.reasonCodes.includes('CLIENT_REQUIRED_RECOVERY_TOOLS_MISSING'));
+  assert.match(missingRequiredTool.recommendations.join('\n'), /refresh|reconnect/i);
+
   const unobserved = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
   assert.equal(unobserved.capabilities.recovery.serverReady, true);
   assert.equal(unobserved.capabilities.recovery.clientObserved.state, 'unknown');

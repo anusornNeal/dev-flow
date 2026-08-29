@@ -88,6 +88,7 @@ export interface RuntimeClientState {
   runtimeInstanceId?: string;
   toolSurfaceIdentity?: string;
   toolsVisible?: boolean;
+  unavailableToolNames?: readonly string[];
 }
 
 export interface RuntimeIdentityWithContract extends RuntimeIdentity {
@@ -131,6 +132,11 @@ export interface RuntimeServerRecoveryState {
   serverReady?: boolean;
   toolSurfaceIdentity?: string;
   missingCapabilityIds?: readonly string[];
+  capabilities?: readonly {
+    id?: string;
+    toolName?: string;
+    callable?: boolean;
+  }[];
 }
 
 export interface RuntimeRecoveryParity {
@@ -148,6 +154,7 @@ export interface RuntimeRecoveryParity {
     contractMatch: boolean | null;
     runtimeMatch: boolean | null;
     toolSurfaceMatch: boolean | null;
+    missingRequiredRecoveryToolNames: string[];
   };
   endToEnd: {
     state: RuntimeRecoveryEndToEndState;
@@ -176,10 +183,14 @@ export function classifyRecoveryCapabilityParity(
   const runtimeMatch = previousRuntime ? previousRuntime === current.runtimeInstanceId : null;
   const toolSurfaceMatch = previousToolSurface ? previousToolSurface === current.toolSurfaceIdentity : null;
   const toolsVisible = clientState?.toolsVisible === undefined ? null : clientState.toolsVisible;
+  const unavailableToolNames = new Set((clientState?.unavailableToolNames || []).map((name) => String(name || '').trim()).filter(Boolean));
+  const missingRequiredRecoveryToolNames = (serverRecovery.capabilities || [])
+    .map((capability) => String(capability?.toolName || '').trim())
+    .filter((toolName) => toolName && unavailableToolNames.has(toolName));
   const identityMismatch = contractMatch === false || runtimeMatch === false || toolSurfaceMatch === false;
   const clientObservationState: RuntimeRecoveryClientObservationState = !observed
     ? 'unknown'
-    : toolsVisible === false
+    : toolsVisible === false || missingRequiredRecoveryToolNames.length > 0
       ? 'missing-tools'
       : identityMismatch
         ? 'stale'
@@ -190,6 +201,7 @@ export function classifyRecoveryCapabilityParity(
   const reasonCodes: string[] = [];
   if (!serverReady) reasonCodes.push('SERVER_RECOVERY_SURFACE_NOT_READY');
   if (toolsVisible === false) reasonCodes.push('CLIENT_TOOLS_NOT_VISIBLE');
+  if (missingRequiredRecoveryToolNames.length > 0) reasonCodes.push('CLIENT_REQUIRED_RECOVERY_TOOLS_MISSING');
   if (contractMatch === false) reasonCodes.push('CLIENT_CONTRACT_MISMATCH');
   if (runtimeMatch === false) reasonCodes.push('CLIENT_RUNTIME_MISMATCH');
   if (toolSurfaceMatch === false) reasonCodes.push('CLIENT_TOOL_SURFACE_MISMATCH');
@@ -227,6 +239,7 @@ export function classifyRecoveryCapabilityParity(
       contractMatch,
       runtimeMatch,
       toolSurfaceMatch,
+      missingRequiredRecoveryToolNames,
     },
     endToEnd: {
       state: endToEndState,

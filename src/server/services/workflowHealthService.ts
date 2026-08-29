@@ -67,13 +67,17 @@ function workflowHealthClientState(args: Record<string, any>): RuntimeClientStat
     : args.clientToolsVisible === false || args.clientToolsVisible === 'false'
       ? false
       : undefined;
+  const unavailableToolNames = Array.isArray(args.clientUnavailableToolNames)
+    ? args.clientUnavailableToolNames.map(clean).filter(Boolean)
+    : clean(args.clientUnavailableToolNames).split(',').map((name) => name.trim()).filter(Boolean);
   const state: RuntimeClientState = {
     contractVersion: clean(args.previousContractVersion) || undefined,
     runtimeInstanceId: clean(args.previousRuntimeInstanceId) || undefined,
     toolSurfaceIdentity: clean(args.previousToolSurfaceIdentity) || undefined,
     toolsVisible,
+    unavailableToolNames,
   };
-  return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.toolsVisible !== undefined
+  return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.toolsVisible !== undefined || state.unavailableToolNames.length > 0
     ? state
     : undefined;
 }

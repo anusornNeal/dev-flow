@@ -468,7 +468,8 @@ test('MCP cleanup preserves coding workflows within the established surface budg
   }
   const profileSummary = getToolProfileSummary();
   assert.ok(profileSummary.full.toolCount <= 109);
-  assert.ok(profileSummary.full.schemaBytes <= 173_705);
+  // Explicit client callable-tool evidence adds two bounded recovery schema fields.
+  assert.ok(profileSummary.full.schemaBytes <= 174_250);
 });
 
 test('MCP profile resolution defaults to lean coding and preserves explicit valid profiles', () => {

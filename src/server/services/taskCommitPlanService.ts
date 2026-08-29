@@ -180,9 +180,12 @@ export function resolveTaskVerificationCoverage(
     } else {
       staleCommands.push(stored.command);
       const changedFields = current ? [
-        'semanticKey', 'commandConfigFingerprint', 'affectedInputFingerprint', 'dependencyFingerprint',
-        'environmentFingerprint', 'platform', 'arch', 'runtime',
-      ].filter((field) => (current as any)?.[field] !== (stored as any)?.[field]) : ['affectedInputPaths'];
+        ...((JSON.stringify(current.targets ?? []) !== JSON.stringify(stored.targets ?? [])) ? ['targets'] : []),
+        ...[
+          'semanticKey', 'commandConfigFingerprint', 'affectedInputFingerprint', 'dependencyFingerprint',
+          'environmentFingerprint', 'platform', 'arch', 'runtime',
+        ].filter((field) => (current as any)?.[field] !== (stored as any)?.[field]),
+      ] : ['affectedInputPaths'];
       staleDetails.push({ command: stored.command, changedFields });
     }
   }

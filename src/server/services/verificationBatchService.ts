@@ -28,7 +28,7 @@ export function buildVerificationCoverageIdentity(value: any): VerificationCover
         value.targets
           .map((entry: unknown): string => String(entry || '').trim().replace(/\\/g, '/'))
           .filter((entry: string) => entry.length > 0),
-      )).sort()
+      ))
     : [];
   const affectedInputPaths: string[] = Array.isArray(value.affectedInputPaths)
     ? Array.from(new Set<string>(

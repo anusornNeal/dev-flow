@@ -121,6 +121,42 @@ test('commit plan revalidates focused verification coverage with its recorded ta
   assert.deepEqual(plan.verificationCoverage.staleCommands, []);
 });
 
+test('commit plan preserves focused target order across verification recording and revalidation', () => {
+  const { projectId, workspace, taskId, session } = createFixture('focused-target-order');
+  fs.writeFileSync(path.join(workspace.root, 'src', 'owned.ts'), 'export const owned = 8;\n');
+  execution.recordExecutionOwnedChanges(session.id, ['src/owned.ts'], { repoRoot: workspace.root, source: 'task-edit' });
+  const captured = execution.captureExecutionVerificationProvenance(session.id, { repoRoot: workspace.root });
+  const state = { countersCache: {} } as any;
+  const targets = ['src/unrelated.ts', 'src/owned.ts'];
+  const commandIdentity = projectCommands.getProjectCommandExecutionIdentity(state, {
+    projectId,
+    workspaceId: workspace.workspaceId,
+    command: 'focused-check',
+    targets,
+    affectedInputPaths: targets,
+  });
+  const coverage = verificationBatch.buildVerificationCoverageIdentity(commandIdentity);
+  assert.ok(commandIdentity);
+  assert.ok(coverage);
+  assert.deepEqual(coverage?.targets, targets, 'coverage must preserve argv-significant target order');
+  execution.recordExecutionVerificationEvidence(session.id, [{ name: 'focused-check', status: 'passed' }], {
+    repoRoot: workspace.root,
+    provenance: {
+      policy: 'checks-passed',
+      expectedRepoRevision: captured.repoRevision,
+      expectedOwnedFingerprint: captured.ownedFingerprint,
+      candidateId: 'vc-focused-target-order',
+      candidateRepoRevision: captured.repoRevision,
+      executionKey: commandIdentity!.key,
+      coverage: [coverage!],
+    },
+  });
+
+  const plan = commitPlan.buildTaskCommitPlan(state, { taskId, workspaceId: workspace.workspaceId });
+  assert.equal(plan.verificationCoverage.status, 'covered');
+  assert.deepEqual(plan.verificationCoverage.staleCommands, []);
+});
+
 test('commit plan marks focused coverage stale when its recorded target no longer exists', () => {
   const { projectId, workspace, taskId, session } = createFixture('focused-coverage-missing-target');
   const targetPath = 'src/transient-target.ts';

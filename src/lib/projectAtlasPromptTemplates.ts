@@ -56,7 +56,8 @@ export function buildProjectAtlasPrompt(
 ) {
   const variant = PROJECT_ATLAS_PROMPT_VARIANTS.find((item) => item.id === variantId) ?? PROJECT_ATLAS_PROMPT_VARIANTS[0];
   const focusNode = atlas.nodes.find((node) => node.id === input.selectedNodeId);
-  const taskFiles = input.task?.targetFiles?.filter(Boolean) ?? [];
+  const taskFiles = normalizePromptTargetFiles(input.task?.targetFiles);
+  const normalizedTask = input.task ? { ...input.task, targetFiles: taskFiles } : undefined;
   const relevantNodeIds = findRelevantNodeIds(atlas, taskFiles, focusNode);
   const relevantDomains = findRelevantDomains(atlas, relevantNodeIds);
   const relatedTests = findRelatedTests(atlas, relevantNodeIds);
@@ -73,7 +74,7 @@ export function buildProjectAtlasPrompt(
     'Use Project Atlas as navigation context. Verified facts come from repository scanning; inferred summaries are hints and must be checked against exact files.',
     'Do not edit unrelated modules. Keep explicit targetFiles and implementation maps authoritative over inferred Atlas suggestions.',
     '',
-    renderTaskBlock(input.task),
+    renderTaskBlock(normalizedTask),
     renderDomains(relevantDomains.length ? relevantDomains : atlas.domains.slice(0, 8)),
     renderReadOrder(readOrder),
     renderRelatedTests(relatedTests),
@@ -83,6 +84,11 @@ export function buildProjectAtlasPrompt(
     '- Do not broaden the implementation beyond the task/card without naming the reason.',
     '- Do not skip exact file reads before editing.',
   ].filter(Boolean).join('\n\n');
+}
+
+function normalizePromptTargetFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
 }
 
 function renderTaskBlock(task?: ProjectAtlasPromptTask) {

@@ -83,6 +83,28 @@ test('buildProjectAtlasPrompt supports all variants with caveats and boundaries'
   }
 });
 
+test('prompt targetFiles handling is array-safe and preserves valid file context', () => {
+  const valid = buildProjectAtlasPrompt('plan-implementation', atlas, {
+    task: { title: 'Valid target files', targetFiles: ['src/server/routes/tasks.ts'] },
+  });
+  assert.match(valid, /src\/server\/routes\/tasks\.ts/);
+
+  const empty = buildProjectAtlasPrompt('plan-implementation', atlas, {
+    task: { title: 'Empty target files', targetFiles: [] },
+  });
+  assert.match(empty, /Target files: not provided/);
+
+  const omitted = buildProjectAtlasPrompt('plan-implementation', atlas, {
+    task: { title: 'Omitted target files' },
+  });
+  assert.match(omitted, /Target files: not provided/);
+
+  const malformed = buildProjectAtlasPrompt('plan-implementation', atlas, {
+    task: { title: 'Malformed target files', targetFiles: { unexpected: true } as any },
+  });
+  assert.match(malformed, /Target files: not provided/);
+});
+
 test('task-focused prompt includes task files, domains, tests, and out-of-scope boundary', () => {
   const prompt = buildProjectAtlasPrompt('plan-implementation', atlas, {
     task: {

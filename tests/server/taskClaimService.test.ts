@@ -27,6 +27,8 @@ git(['config', 'user.email', 'devflow@example.test']);
 git(['add', '.']);
 git(['commit', '-m', 'initial']);
 
+process.env.DEVFLOW_RUNTIME_SOURCE_ROOT = repoRoot;
+
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
@@ -1570,6 +1572,114 @@ test('board-loop stop remains active until requested scope is terminal, then cla
   assert.equal(terminalRead.action, 'no-action');
   assert.equal(terminalRead.loop?.status, 'terminal');
   assert.equal(terminalRead.loop?.loopId, loopId);
+});
+
+test('contract-sensitive stale runtime blocks unowned scheduler selection and atomic claim until source refreshes', () => {
+  const projectId = 'project-runtime-refresh-gate';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'runtime-gated-ready', ['src/RuntimeGatedReady.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-900' });
+  const originalHead = git(['rev-parse', 'HEAD']);
+  const contractRelativePath = 'src/server/contracts/devflowContract.ts';
+  const contractPath = path.join(repoRoot, ...contractRelativePath.split('/'));
+
+  try {
+    const before = claims.getNextActionForSession(projectId, { sessionId: 'runtime-gate-worker', limit: 10 });
+    assert.equal(before.action, 'claim-new');
+    assert.equal(before.task?.taskId, 'runtime-gated-ready');
+
+    fs.mkdirSync(path.dirname(contractPath), { recursive: true });
+    fs.writeFileSync(contractPath, 'export const runtimeGateFixture = 1;\n', 'utf8');
+    git(['add', contractRelativePath]);
+    git(['commit', '-m', 'contract-sensitive scheduler gap']);
+
+    const blocked = claims.getNextActionForSession(projectId, { sessionId: 'runtime-gate-worker', limit: 10 }) as any;
+    assert.equal(blocked.action, 'no-action');
+    assert.deepEqual(blocked.reasonCodes, ['RUNTIME_REFRESH_REQUIRED']);
+    assert.equal(blocked.blocked?.[0]?.code, 'RUNTIME_REFRESH_REQUIRED');
+    assert.match(String(blocked.blocked?.[0]?.message || ''), /currently advertised|runtime refresh/i);
+    assert.match(String(blocked.blocked?.[0]?.nextAction || ''), /audit|author|follow-up|card/i);
+
+    const refused = claims.claimNextTaskForSession(projectId, { sessionId: 'runtime-gate-worker', ownerLabel: 'Chat Runtime Gate', limit: 10 }) as any;
+    assert.equal(refused.status, 'no-eligible');
+    assert.equal(refused.code, 'RUNTIME_REFRESH_REQUIRED');
+    assert.deepEqual(refused.reasonCodes, ['RUNTIME_REFRESH_REQUIRED']);
+    assert.equal(getTask('runtime-gated-ready')?.status, 'todo');
+    assert.equal(listExecutionSessionsForTask('runtime-gated-ready').length, 0);
+
+    git(['reset', '--hard', originalHead]);
+    const resumed = claims.getNextActionForSession(projectId, { sessionId: 'runtime-gate-worker', limit: 10 });
+    assert.equal(resumed.action, 'claim-new');
+    assert.equal(resumed.task?.taskId, 'runtime-gated-ready');
+  } finally {
+    git(['reset', '--hard', originalHead]);
+  }
+});
+
+test('owned scheduler continuation wins over the stale-contract new-work gate', () => {
+  const projectId = 'project-runtime-refresh-owned-first';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'runtime-owned', ['src/RuntimeOwned.ts'], { priority: 'medium', status: 'todo', displayId: 'NXT-902' });
+  seedCandidateTask(projectId, 'runtime-owned-ready', ['src/RuntimeOwnedReady.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-903' });
+  claims.claimTaskForSession('runtime-owned', { sessionId: 'runtime-owned-worker', ownerLabel: 'Chat Runtime Owned' });
+  const originalHead = git(['rev-parse', 'HEAD']);
+  const contractRelativePath = 'src/server/contracts/devflowContract.ts';
+  const contractPath = path.join(repoRoot, ...contractRelativePath.split('/'));
+
+  try {
+    fs.mkdirSync(path.dirname(contractPath), { recursive: true });
+    fs.writeFileSync(contractPath, 'export const runtimeOwnedFixture = 1;\n', 'utf8');
+    git(['add', contractRelativePath]);
+    git(['commit', '-m', 'contract-sensitive owned-work gap']);
+
+    const owned = claims.getNextActionForSession(projectId, { sessionId: 'runtime-owned-worker', limit: 10 });
+    assert.equal(owned.action, 'continue-owned');
+    assert.equal(owned.task?.taskId, 'runtime-owned');
+    assert.equal(owned.reasonCodes.includes('RUNTIME_REFRESH_REQUIRED'), false);
+
+    const duplicateClaim = claims.claimNextTaskForSession(projectId, { sessionId: 'runtime-owned-worker', ownerLabel: 'Chat Runtime Owned', limit: 10 }) as any;
+    assert.equal(duplicateClaim.status, 'no-eligible');
+    assert.equal(duplicateClaim.reasonCodes.includes('RUNTIME_REFRESH_REQUIRED'), false);
+
+    const freshWorker = claims.getNextActionForSession(projectId, { sessionId: 'runtime-unowned-worker', limit: 10 }) as any;
+    assert.equal(freshWorker.action, 'no-action');
+    assert.deepEqual(freshWorker.reasonCodes, ['RUNTIME_REFRESH_REQUIRED']);
+  } finally {
+    git(['reset', '--hard', originalHead]);
+  }
+});
+
+test('docs-only stale source preserves partitioned scheduler selection and claim behavior', () => {
+  const projectId = 'project-runtime-refresh-docs-only';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'runtime-docs-even', ['src/RuntimeDocsEven.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-910' });
+  seedCandidateTask(projectId, 'runtime-docs-odd', ['src/RuntimeDocsOdd.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-911' });
+  const originalHead = git(['rev-parse', 'HEAD']);
+  const docsRelativePath = 'docs/runtime-refresh-note.md';
+  const docsPath = path.join(repoRoot, ...docsRelativePath.split('/'));
+
+  try {
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'docs-only scheduler drift\n', 'utf8');
+    git(['add', docsRelativePath]);
+    git(['commit', '-m', 'docs-only scheduler gap']);
+
+    const next = claims.getNextActionForSession(projectId, {
+      sessionId: 'runtime-docs-worker', limit: 10, partitionCount: 2, partitionIndex: 1,
+    });
+    assert.equal(next.action, 'claim-new');
+    assert.equal(next.task?.taskId, 'runtime-docs-odd');
+    assert.equal(next.reasonCodes.includes('RUNTIME_REFRESH_REQUIRED'), false);
+
+    const claimed = claims.claimNextTaskForSession(projectId, {
+      sessionId: 'runtime-docs-worker', ownerLabel: 'Chat Runtime Docs', limit: 10, partitionCount: 2, partitionIndex: 1,
+    }) as any;
+    assert.equal(claimed.status, 'claimed');
+    assert.equal(claimed.task.id, 'runtime-docs-odd');
+    assert.equal(claimed.partition?.count, 2);
+    assert.equal(claimed.partition?.index, 1);
+  } finally {
+    git(['reset', '--hard', originalHead]);
+  }
 });
 
 test.after(() => {

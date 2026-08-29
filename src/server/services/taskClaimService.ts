@@ -31,6 +31,7 @@ import { assertTaskPrerequisitesSatisfied, getTaskPrerequisiteBlockers } from '.
 import { DEFAULT_BOARD_LOOP_SELECTION_POLICY, evaluateExecutionContinuation, getProjectBoardLoopIntent, persistBoardLoopIntent, type BoardLoopIntent, type BoardLoopSelectionPolicy } from './executionContinuationService.js';
 import { classifyReasoningPipelineBoundary } from './mcpToolJobScheduler.js';
 import { getLatestExternalTaskStatusRecord, isExternalTaskStatusRecordStale } from './externalTaskStatusService.js';
+import { getRuntimeContractImpact, getRuntimeSourceFreshness } from './runtimeIdentityService.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CLAIM_TTL_MS = 60_000;
@@ -521,7 +522,50 @@ function inspectOwnedReasoningTasks(projectTasks: any[], cleanSessionId: string,
   return { states, boundary, issue };
 }
 
-export function getNextActionForSession(projectId: string, input: { sessionId: string; limit?: number; partitionCount?: number; partitionIndex?: number }) {
+const RUNTIME_REFRESH_REASON_CODE = 'RUNTIME_REFRESH_REQUIRED' as const;
+
+function schedulerRuntimeRefreshGate() {
+  const sourceFreshness = getRuntimeSourceFreshness();
+  if (sourceFreshness.code !== 'stale') return null;
+  const contractImpact = getRuntimeContractImpact(sourceFreshness);
+  if (contractImpact.code !== 'contract-sensitive') return null;
+  return {
+    code: RUNTIME_REFRESH_REASON_CODE,
+    message: `The running DevFlow contract source is stale (${sourceFreshness.loadedRevision || 'unknown'} -> ${sourceFreshness.currentRevision || 'unknown'}) and the revision gap touches authoritative runtime/MCP surfaces. New scheduler work is paused until runtime refresh.`,
+    nextAction: 'Continue only compatible already-owned recovery/finalization work using the currently advertised tool surface. Do not create audit, authoring, follow-up, defect, or runtime-behavior cards from this stale evidence. When restart safety permits, use the guarded API restart and reconnect/refresh the client registry.',
+    evidence: {
+      loadedRevision: sourceFreshness.loadedRevision,
+      currentRevision: sourceFreshness.currentRevision,
+      matchedPaths: contractImpact.matchedPaths.slice(0, 8),
+      truncated: contractImpact.truncated,
+      reasonCodes: contractImpact.reasonCodes.slice(0, 8),
+    },
+  };
+}
+
+export type SchedulerNextActionResult = {
+  action: 'recover-current' | 'resolve-attention' | 'continue-owned' | 'claim-new' | 'confirm-loop-stop' | 'no-action';
+  projectId: string;
+  reasonCodes: string[];
+  task?: { taskId: string; displayId?: string };
+  continuation?: ReturnType<typeof boundedSchedulerContinuation>;
+  attention?: Record<string, any>;
+  claim?: Record<string, any>;
+  blocked?: Array<{
+    taskId?: string | null;
+    displayId?: string;
+    ownerLabel?: string | null;
+    code?: string;
+    reasonCodes?: string[];
+    message?: string;
+    nextAction?: string;
+    evidence?: Record<string, unknown>;
+  }>;
+  loop?: BoardLoopIntent;
+  background?: { taskIds: string[] };
+};
+
+export function getNextActionForSession(projectId: string, input: { sessionId: string; limit?: number; partitionCount?: number; partitionIndex?: number }): SchedulerNextActionResult {
   const cleanProjectId = String(projectId || '').trim();
   const cleanSessionId = String(input?.sessionId || '').trim();
   if (!cleanProjectId) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'projectId is required to resolve the scheduler next action.');
@@ -664,6 +708,17 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   }
 
   const limit = boundedNextTaskLimit(input.limit);
+  const runtimeRefresh = schedulerRuntimeRefreshGate();
+  if (runtimeRefresh) {
+    return {
+      action: 'no-action' as const,
+      projectId: cleanProjectId,
+      reasonCodes: [RUNTIME_REFRESH_REASON_CODE],
+      blocked: [runtimeRefresh],
+      ...(boardLoop ? { loop: boardLoop } : {}),
+    };
+  }
+
   const selectionPolicy = boardLoop?.selectionPolicy || DEFAULT_BOARD_LOOP_SELECTION_POLICY;
   const newWorkWindow = projection.entries
     .filter((entry) => automaticQueueStatusSelected(entry.taskStatus, selectionPolicy))
@@ -1577,6 +1632,21 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
         foregroundTaskIds: ownedInspection.boundary.foregroundTaskIds.slice(0, 8),
       };
     }
+    const runtimeRefresh = schedulerRuntimeRefreshGate();
+    if (runtimeRefresh) {
+      return {
+        status: 'no-eligible' as const,
+        code: RUNTIME_REFRESH_REASON_CODE,
+        projectId: cleanProjectId,
+        scanned: 0,
+        deferred: 0,
+        limit,
+        dependencyBlocked: [],
+        reasonCodes: [RUNTIME_REFRESH_REASON_CODE],
+        blocked: [runtimeRefresh],
+      };
+    }
+
     const requestedSelectionPolicy = parseBoardLoopSelectionPolicyInput(input.selectionPolicy);
     const existingLoop = getProjectBoardLoopIntent(cleanProjectId);
     const activeLoop = existingLoop?.status === 'active' ? existingLoop : null;

@@ -113,6 +113,10 @@ const HIGH_RISK_PATHS = [
   /(^|\/)src\/server\/services\/(verificationPlannerService|projectCommandConfigService|projectCommandService|applyAndVerifyService)\.ts$/i,
 ];
 
+const SAFE_MAPPABLE_HIGH_RISK_PATHS = [
+  /(^|\/)src\/server\/contracts\//i,
+];
+
 const LOW_RISK_PATHS = [
   /(^|\/)(README|CHANGELOG)(?:\.[^/]+)?$/i,
   /\.(md|txt)$/i,
@@ -294,12 +298,22 @@ function evaluateImpact(
     && groupedChecks.size > 0
     && unavailableChecks.length === 0
     && configuredChecks.length === groupedChecks.size;
-  const mode: 'configured' | 'fallback' = completeCoverage && risk !== 'high' ? 'configured' : 'fallback';
   const lane = uniqueMatchedRules.reduce<ExecutionLane | undefined>((current, rule) => {
     if (!rule.lane) return current;
     if (!current || LANE_RANK[rule.lane] > LANE_RANK[current]) return rule.lane;
     return current;
   }, undefined);
+  const configuredScopes = configuredCommands.flatMap((command) => {
+    const scope = resolvedByCommand.get(command)?.scope;
+    return scope ? [scope] : [];
+  });
+  const highRiskFiles = files.filter((file) => HIGH_RISK_PATHS.some((pattern) => pattern.test(normalizePath(file))));
+  const highRiskSafeMappingEligible = highRiskFiles.length > 0
+    && highRiskFiles.every((file) => SAFE_MAPPABLE_HIGH_RISK_PATHS.some((pattern) => pattern.test(normalizePath(file))));
+  const highRiskMappedEvidenceSatisfied = risk !== 'high'
+    || (highRiskSafeMappingEligible && lane === 'safe' && configuredScopes.some((scope) => scope === 'broad' || scope === 'full'))
+    || (highRiskSafeMappingEligible && lane === 'full' && configuredScopes.some((scope) => scope === 'full'));
+  const mode: 'configured' | 'fallback' = completeCoverage && highRiskMappedEvidenceSatisfied ? 'configured' : 'fallback';
   return {
     mode,
     coveredFiles,
@@ -437,13 +451,12 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
 
   let selectedResolved: VerificationCommandDescriptor[] = [];
   let commands: string[] = [];
-  const mappingMayNarrow = impactEvaluation.mode === 'configured'
-    && lane === 'fast'
-    && input.requestedLane !== 'safe'
+  const mappingMaySelectConfigured = impactEvaluation.mode === 'configured'
     && input.requestedLane !== 'full'
-    && classification.risk !== 'high';
+    && ((lane === 'fast' && input.requestedLane !== 'safe' && classification.risk !== 'high')
+      || (lane === 'safe' && classification.risk === 'high'));
 
-  if (mappingMayNarrow) {
+  if (mappingMaySelectConfigured) {
     commands = impactEvaluation.configuredCommands;
     if (resolvedCommands.length > 0) {
       const configured = new Set(commands);
@@ -489,7 +502,7 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   const steps = commands.map((command) => {
     const descriptor = selectedByCommand.get(command);
     const mappedTargets = configuredTargetsByCommand.get(command) || [];
-    const targets = mappingMayNarrow || descriptor?.acceptsTargets === true ? mappedTargets : [];
+    const targets = mappingMaySelectConfigured || descriptor?.acceptsTargets === true ? mappedTargets : [];
     const mappingReason = impactEvaluation.mode === 'configured' && impactEvaluation.configuredCommands.includes(command)
       ? 'Selected by configured change-impact mapping.'
       : undefined;

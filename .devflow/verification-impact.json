@@ -14,6 +14,28 @@
       "reason": "Documentation-only changes receive a lightweight repository sanity check."
     },
     {
+      "id": "mcp-contract-safe",
+      "patterns": [
+        "src/server/contracts/devflowContract.ts",
+        "tests/server/devflowSafeEditRoute.test.ts",
+        "tests/server/devflowToolProfile.test.ts"
+      ],
+      "checks": [
+        {
+          "command": "test-focused",
+          "targets": [
+            "tests/server/devflowSafeEditRoute.test.ts",
+            "tests/server/devflowToolProfile.test.ts"
+          ]
+        },
+        {
+          "command": "typecheck"
+        }
+      ],
+      "lane": "safe",
+      "reason": "MCP contract and tool-profile changes use focused transport/profile regressions plus typecheck while preserving SAFE risk semantics."
+    },
+    {
       "id": "task-claim-focused",
       "patterns": [
         "src/server/services/taskClaimService.ts",

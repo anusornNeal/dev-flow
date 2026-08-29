@@ -201,6 +201,57 @@ test('target-aware mapped coverage selects only the relevant focused check and e
   assert.deepEqual(plan.impact.omittedCommands.map((entry: any) => entry.command).sort(), ['test-backup-integrity', 'test-command-service']);
 });
 
+test('high-risk SAFE mapping selects configured targeted checks only when broad evidence is also mapped', () => {
+  const plan = planVerification({
+    changedFiles: ['src/server/contracts/devflowContract.ts'],
+    requestedLane: 'fast',
+    resolvedCommands: [
+      { command: 'test-focused', semanticKey: 'focused', scope: 'targeted', cost: 'low', resourceKey: 'focused', acceptsTargets: true },
+      { command: 'typecheck', semanticKey: 'typecheck', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+      { command: 'test', semanticKey: 'full-test', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+    impactRules: [{
+      id: 'mcp-contract-safe',
+      patterns: ['src/server/contracts/devflowContract.ts'],
+      checks: [
+        { command: 'test-focused', targets: ['tests/server/devflowSafeEditRoute.test.ts', 'tests/server/devflowToolProfile.test.ts'] },
+        { command: 'typecheck' },
+      ],
+      lane: 'safe',
+    }],
+  });
+
+  assert.equal(plan.risk, 'high');
+  assert.equal(plan.lane, 'safe');
+  assert.equal(plan.impact.mode, 'configured');
+  assert.deepEqual(plan.commands, ['test-focused', 'typecheck']);
+  assert.equal(plan.commands.includes('test'), false);
+  assert.deepEqual(plan.steps.find((step: any) => step.command === 'test-focused')?.targets, [
+    'tests/server/devflowSafeEditRoute.test.ts',
+    'tests/server/devflowToolProfile.test.ts',
+  ]);
+  assert.equal(plan.requiresBroadVerify, true);
+});
+
+test('high-risk mapping without broad or full evidence still falls back conservatively', () => {
+  const plan = planVerification({
+    changedFiles: ['src/server/contracts/devflowContract.ts'],
+    resolvedCommands: [
+      { command: 'test-focused', semanticKey: 'focused', scope: 'targeted', cost: 'low', resourceKey: 'focused', acceptsTargets: true },
+      { command: 'test', semanticKey: 'full-test', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+    impactRules: [{
+      id: 'unsafe-targeted-only',
+      patterns: ['src/server/contracts/devflowContract.ts'],
+      checks: [{ command: 'test-focused', targets: ['tests/server/devflowSafeEditRoute.test.ts'] }],
+      lane: 'safe',
+    }],
+  });
+
+  assert.equal(plan.impact.mode, 'fallback');
+  assert.deepEqual(plan.commands, ['test']);
+});
+
 test('high-risk fallback preserves mapped targets for target-required presets instead of emitting a bare command', () => {
   const plan = planVerification({
     changedFiles: ['src/server/services/verificationPlannerService.ts'],
@@ -305,9 +356,18 @@ test('verification control-plane changes are high risk and cannot self-narrow', 
     requestedLane: 'fast',
     resolvedCommands: [
       { command: 'test-command-service', semanticKey: 'command', scope: 'targeted', cost: 'low', resourceKey: 'command' },
+      { command: 'typecheck', semanticKey: 'typecheck', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
       { command: 'verify', semanticKey: 'full', scope: 'full', cost: 'high', resourceKey: 'repo' },
     ],
-    impactRules: [{ id: 'self', patterns: ['.devflow/verification-impact.json'], commands: ['test-command-service'] }],
+    impactRules: [{
+      id: 'self',
+      patterns: ['.devflow/verification-impact.json'],
+      checks: [
+        { command: 'test-command-service' },
+        { command: 'typecheck' },
+      ],
+      lane: 'safe',
+    }],
   });
 
   assert.equal(plan.risk, 'high');

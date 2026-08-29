@@ -193,6 +193,26 @@ test('readFileSnippetsBatch enforces aggregate byte budget across 8 edit targets
   assert.equal(result.truncated, true);
   assert.equal(result.files.some((entry: any) => entry.error?.code === 'BATCH_BYTE_LIMIT'), true);
   console.log(`[read-bootstrap] files=8 separateCalls=8 batchCalls=1 bytes=${result.totalReturnedBytes}/${result.maxTotalBytes}`);
+}); 
+
+test('readFileSnippetsBatch does not treat complete line windows as batch byte-limit failures', () => {
+  const result = readFileSnippetsBatch(state, {
+    projectId: 'project-read-1',
+    allowPartial: true,
+    maxTotalBytes: 20,
+    files: [
+      { filePath: 'sample.txt', startLine: 2, endLine: 3 },
+      { filePath: 'other.txt', startLine: 2, endLine: 2 },
+    ],
+  });
+
+  assert.equal(result.successCount, 2);
+  assert.equal(result.errorCount, 0);
+  assert.equal(result.totalReturnedBytes <= 20, true);
+  assert.equal(result.files[0].content, 'two\nthree');
+  assert.equal(result.files[0].truncated, true);
+  assert.equal(result.files[1].content, 'beta');
+  assert.equal(result.files.some((entry: any) => entry.error?.code === 'BATCH_BYTE_LIMIT'), false);
 });
 
 test('readFileSnippetsBatch compact response mode caps large target content', () => {

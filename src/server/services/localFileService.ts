@@ -524,10 +524,6 @@ export function readFileSnippetsBatch(state: AppState, args: Record<string, any>
         includeFileRef: entry.includeFileRef ?? args.includeFileRef,
       }, root);
       const returnedBytes = Number(result.returnedBytes || 0);
-      if (readMaxBytes < requestedMaxBytes && result.truncated === true) {
-        results.push(errorResult(requestedPath, createApiError(413, 'BATCH_BYTE_LIMIT', `File '${requestedPath}' exceeds the remaining batch response byte budget.`, { affectedId: requestedPath })));
-        continue;
-      }
       if (returnedBytes > remainingBytes) {
         results.push(errorResult(requestedPath, createApiError(413, 'BATCH_BYTE_LIMIT', `File '${requestedPath}' exceeds the remaining batch response byte budget.`, { affectedId: requestedPath })));
         continue;

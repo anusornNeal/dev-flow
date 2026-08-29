@@ -39,9 +39,13 @@ function makeChildren(count = 6): any[] {
   }));
 }
 
-test('TaskCard shows every child display ID alongside all subtask titles', () => {
+test('TaskCard summarizes subtasks and shows only the three most actionable child rows', () => {
   const task = makeTask();
-  const children = makeChildren();
+  const children = makeChildren(7).map((child, index) => ({
+    ...child,
+    status: index === 0 ? 'done' : index === 1 ? 'in-progress' : index === 2 ? 'ready-for-review' : 'todo',
+    unresolvedBugCount: index === 3 ? 1 : 0,
+  }));
   const html = renderToStaticMarkup(React.createElement(TaskCard as any, {
     task,
     subtasks: children,
@@ -50,10 +54,29 @@ test('TaskCard shows every child display ID alongside all subtask titles', () =>
     onDragStart: noop,
     onUpdate: noop,
   }));
-  for (const child of children) {
-    assert.match(html, new RegExp(child.displayId));
-    assert.match(html, new RegExp(`Very long child title ${children.indexOf(child) + 1}`));
-  }
+  assert.match(html, /Subtasks 1\/7/);
+  assert.match(html, /DVF-501/);
+  assert.match(html, /DVF-502/);
+  assert.match(html, /DVF-503/);
+  assert.doesNotMatch(html, /DVF-500/);
+  assert.doesNotMatch(html, /DVF-504/);
+  assert.match(html, /\+3 more/);
+});
+
+test('TaskCard collapses fully completed subtasks to summary only', () => {
+  const task = makeTask();
+  const children = makeChildren(5).map((child) => ({ ...child, status: 'done' }));
+  const html = renderToStaticMarkup(React.createElement(TaskCard as any, {
+    task,
+    subtasks: children,
+    onSelect: noop,
+    onDelete: noop,
+    onDragStart: noop,
+    onUpdate: noop,
+  }));
+  assert.match(html, /Subtasks 5\/5/);
+  assert.match(html, /100%/);
+  for (const child of children) assert.doesNotMatch(html, new RegExp(child.displayId));
 });
 
 test('TaskCard shows a non-clickable Design badge only when frozen UI evidence exists', () => {

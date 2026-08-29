@@ -197,7 +197,7 @@ export default function App() {
             <UiPreviewLibraryPage onOpenTask={navigation.openPreviewTask} />
           ) : (
             <div className="flex-1 overflow-x-auto bg-df-canvas p-5 md:p-6">
-              <div className="flex min-h-[calc(100vh-210px)] w-max items-stretch pb-2">
+              <div className="grid min-h-[calc(100vh-210px)] w-full min-w-[1350px] items-stretch pb-2 [grid-template-columns:repeat(5,minmax(270px,1fr))]">
                 {BOARD_COLUMNS.map((column) => {
                   const columnTasks = filteredTasks
                     .filter((task) => task.status === column.id && !task.parentId)

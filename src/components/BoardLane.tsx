@@ -82,7 +82,7 @@ export function BoardLane({
         if (draggedOverColumn === column.id) setDraggedOverColumn(null);
       }}
       onDrop={(e) => handleDrop(e, column.id)}
-      className={`flex w-[320px] min-w-[320px] max-w-[320px] shrink-0 flex-col overflow-hidden border-r border-[var(--df-color-border)] px-4 pb-4 pt-3 transition-[background-color,border-color,opacity] ${
+      className={`flex min-w-0 flex-col overflow-hidden border-r border-[var(--df-color-border)] px-3 pb-3 pt-2.5 transition-[background-color,border-color,opacity] ${
         isDraggingAny && !isValidDrop ? 'opacity-55' : ''
       } ${
         isOver
@@ -94,7 +94,7 @@ export function BoardLane({
       aria-label={`${column.label} lane${isOver && dropStateLabel ? `, ${dropStateLabel.toLowerCase()}` : ''}`}
       data-drop-valid={isDraggingAny ? String(isValidDrop) : undefined}
     >
-      <div className="mb-3 flex min-w-0 flex-col gap-1.5 select-none">
+      <div className="mb-2 flex min-w-0 flex-col gap-1 select-none">
         <div className="flex min-w-0 items-center gap-2">
           <span className="shrink-0 text-[var(--df-color-text-muted)]">
             {getColIcon(column.iconName)}
@@ -126,7 +126,7 @@ export function BoardLane({
         )}
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto scrollbar-thin">
+      <div className="flex min-w-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto scrollbar-thin">
         {tasks.map(task => {
           const subtasks = allTasks.filter(candidate => candidate.parentId === task.id);
           return (
@@ -155,7 +155,7 @@ export function BoardLane({
         )}
 
         {tasks.length === 0 && (
-          <div className={`mt-2 flex h-24 min-w-0 flex-col items-center justify-center rounded-[var(--df-radius-md)] border-2 border-dashed px-3 text-center ${
+          <div className={`mt-1 flex min-h-[56px] min-w-0 flex-col items-center justify-center rounded-[var(--df-radius-md)] border-2 border-dashed px-3 text-center ${
             isDraggingAny && !isValidDrop
               ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)] text-[var(--df-color-danger)]'
               : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] text-[var(--df-color-text-subtle)]'

@@ -6,6 +6,9 @@ import { buildVerificationStageSegments, FULL_VERIFY_PARALLELISM, VERIFICATION_S
 
 const MAX_STEP_OUTPUT_BYTES = 20_000;
 const MAX_CAPTURE_BYTES = 10 * 1024 * 1024;
+export const FULL_VERIFY_DURABLE_BUDGET_MS = 300_000;
+export const FULL_VERIFY_HEADROOM_MS = 30_000;
+export const FULL_VERIFY_SOFT_LIMIT_MS = FULL_VERIFY_DURABLE_BUDGET_MS - FULL_VERIFY_HEADROOM_MS;
 
 type VerificationStepResult = {
   step: VerificationStep;
@@ -131,10 +134,12 @@ export async function runFullVerification() {
   const tempDbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-test-'));
   const previousDbPath = process.env.DEVFLOW_DB_PATH;
   process.env.DEVFLOW_DB_PATH = path.join(tempDbDir, 'devflow.db');
+  const verificationStartedAt = Date.now();
 
   try {
     const stages = Array.from(new Set(VERIFICATION_STEPS.map((step) => step.stage))).sort((a, b) => a - b);
-    for (const stage of stages) {
+    for (const [stageIndex, stage] of stages.entries()) {
+      const stageStartedAt = Date.now();
       const steps = VERIFICATION_STEPS.filter((step) => step.stage === stage);
       for (const segment of buildVerificationStageSegments(steps)) {
         const failed = segment.parallel && segment.steps.length > 1
@@ -142,8 +147,17 @@ export async function runFullVerification() {
           : await runSerialStage(segment.steps, tempDbDir);
         if (failed) return failed.exitCode ?? 1;
       }
+      const elapsedMs = Date.now() - verificationStartedAt;
+      console.log(`[verify] Stage ${stage} completed in ${Date.now() - stageStartedAt}ms; total ${elapsedMs}ms.`);
+      if (elapsedMs > FULL_VERIFY_SOFT_LIMIT_MS) {
+        console.error(`[verify] FULL verification exceeded the ${FULL_VERIFY_SOFT_LIMIT_MS}ms headroom limit inside the ${FULL_VERIFY_DURABLE_BUDGET_MS}ms durable command budget.`);
+        return 124;
+      }
+      if (stageIndex < stages.length - 1) {
+        console.log(`[verify] Durable budget remaining with headroom: ${FULL_VERIFY_SOFT_LIMIT_MS - elapsedMs}ms.`);
+      }
     }
-    console.log('[verify] Verification completed successfully.');
+    console.log(`[verify] Verification completed successfully in ${Date.now() - verificationStartedAt}ms.`);
     return 0;
   } finally {
     if (previousDbPath === undefined) delete process.env.DEVFLOW_DB_PATH;

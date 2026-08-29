@@ -6,7 +6,7 @@ export type VerificationStep = {
   parallelSafe: boolean;
 };
 
-export const FULL_VERIFY_PARALLELISM = 4;
+export const FULL_VERIFY_PARALLELISM = 6;
 
 export type VerificationStageSegment = {
   parallel: boolean;
@@ -34,12 +34,12 @@ export const VERIFICATION_STEPS: VerificationStep[] = [
   { label: 'devflow restart state', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowRestartState.test.ts'], stage: 1, parallelSafe: false },
   { label: 'devflow contract', command: 'npx', args: ['tsx', 'scripts/verify-devflow-contract.ts'], stage: 1, parallelSafe: false },
   { label: 'devflow tool profiles', command: 'npx', args: ['tsx', '--test', 'tests/server/devflowToolProfile.test.ts'], stage: 1, parallelSafe: false },
-  { label: 'task claim service', command: 'npx', args: ['tsx', '--test', 'tests/server/taskClaimService.test.ts'], stage: 1, parallelSafe: true },
-  { label: 'task claim routes', command: 'npx', args: ['tsx', '--test', 'tests/server/taskRouteModules.test.ts'], stage: 1, parallelSafe: true },
-  { label: 'task claim contract', command: 'npx', args: ['tsx', '--test', 'tests/server/taskClaimContract.test.ts'], stage: 1, parallelSafe: true },
-  { label: 'board loop skill registry', command: 'npx', args: ['tsx', '--test', 'tests/server/skillsRegistrySeed.test.ts'], stage: 1, parallelSafe: true },
-  { label: 'board loop skill content', command: 'npx', args: ['tsx', '--test', 'tests/server/authoringSkillContent.test.ts'], stage: 1, parallelSafe: true },
-  { label: 'task claim card ui', command: 'npx', args: ['tsx', '--test', 'tests/taskCardClaimUi.test.ts'], stage: 1, parallelSafe: true },
+  { label: 'task claim service', command: 'npx', args: ['tsx', '--test', 'tests/server/taskClaimService.test.ts'], stage: 2, parallelSafe: true },
+  { label: 'task claim routes', command: 'npx', args: ['tsx', '--test', 'tests/server/taskRouteModules.test.ts'], stage: 2, parallelSafe: true },
+  { label: 'task claim contract', command: 'npx', args: ['tsx', '--test', 'tests/server/taskClaimContract.test.ts'], stage: 2, parallelSafe: true },
+  { label: 'board loop skill registry', command: 'npx', args: ['tsx', '--test', 'tests/server/skillsRegistrySeed.test.ts'], stage: 2, parallelSafe: true },
+  { label: 'board loop skill content', command: 'npx', args: ['tsx', '--test', 'tests/server/authoringSkillContent.test.ts'], stage: 2, parallelSafe: true },
+  { label: 'task claim card ui', command: 'npx', args: ['tsx', '--test', 'tests/taskCardClaimUi.test.ts'], stage: 2, parallelSafe: true },
   { label: 'board refresh and atlas ui retirement', command: 'npx', args: ['tsx', '--test', 'tests/viewModels/boardPagingState.test.ts', 'tests/server/serverEventsClient.test.ts', 'tests/scripts/startAllHmrPolicy.test.ts', 'tests/server/projectAtlasUiRemoval.test.ts', 'tests/components/sidebarLayout.test.tsx', 'tests/components/projectSwitcher.test.tsx'], stage: 2, parallelSafe: true },
   { label: 'ui preview library repository service', command: 'npx', args: ['tsx', '--test', 'tests/server/uiPreviewRepository.test.ts', 'tests/server/uiPreviewService.test.ts'], stage: 2, parallelSafe: true },
   { label: 'ui preview library routes', command: 'npx', args: ['tsx', '--test', 'tests/server/uiPreviewRoutes.test.ts'], stage: 2, parallelSafe: true },
@@ -73,13 +73,13 @@ export const VERIFICATION_STEPS: VerificationStep[] = [
   { label: 'session workspace service', command: 'npx', args: ['tsx', '--test', 'tests/server/sessionWorkspaceService.test.ts'], stage: 2, parallelSafe: false },
   { label: 'steno session isolation', command: 'npx', args: ['tsx', '--test', 'tests/server/stenoSessionIsolation.test.ts'], stage: 2, parallelSafe: false },
   { label: 'workspace integration service', command: 'npx', args: ['tsx', '--test', 'tests/server/workspaceIntegrationService.test.ts'], stage: 2, parallelSafe: false },
-  { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'], stage: 3, parallelSafe: false },
-  { label: 'figma integration', command: 'npm', args: ['run', 'test:figma'], stage: 3, parallelSafe: false },
-  { label: 'gateway safety', command: 'npm', args: ['run', 'test:gateway'], stage: 3, parallelSafe: false },
+  { label: 'agent runs', command: 'npm', args: ['run', 'test:agent-runs'], stage: 3, parallelSafe: true },
+  { label: 'figma integration', command: 'npm', args: ['run', 'test:figma'], stage: 3, parallelSafe: true },
+  { label: 'gateway safety', command: 'npm', args: ['run', 'test:gateway'], stage: 3, parallelSafe: true },
   { label: 'start all launcher', command: 'npm', args: ['run', 'test:start-all'], stage: 3, parallelSafe: false },
-  { label: 'absolute paths', command: 'npm', args: ['run', 'test:absolute-paths'], stage: 3, parallelSafe: false },
-  { label: 'prompt templates', command: 'npm', args: ['run', 'test:prompt-templates'], stage: 3, parallelSafe: false },
-  { label: 'orchestration', command: 'npm', args: ['run', 'test:orchestration'], stage: 3, parallelSafe: false },
-  { label: 'sqlite persistence', command: 'npm', args: ['run', 'test:sqlite'], stage: 3, parallelSafe: false },
+  { label: 'absolute paths', command: 'npm', args: ['run', 'test:absolute-paths'], stage: 3, parallelSafe: true },
+  { label: 'prompt templates', command: 'npm', args: ['run', 'test:prompt-templates'], stage: 3, parallelSafe: true },
+  { label: 'orchestration', command: 'npm', args: ['run', 'test:orchestration'], stage: 3, parallelSafe: true },
+  { label: 'sqlite persistence', command: 'npm', args: ['run', 'test:sqlite'], stage: 3, parallelSafe: true },
   { label: 'doctor', command: 'npm', args: ['run', 'doctor'], stage: 3, parallelSafe: false },
 ];

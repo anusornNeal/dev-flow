@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const appSource = fs.readFileSync('src/App.tsx', 'utf8');
+const navigationSource = fs.readFileSync('src/app/useAppNavigation.ts', 'utf8');
 const sidebarSource = fs.readFileSync('src/components/Sidebar.tsx', 'utf8');
 const headerSource = fs.readFileSync('src/components/Header.tsx', 'utf8');
 const projectRoutesSource = fs.readFileSync('src/server/routes/projects.ts', 'utf8');
@@ -23,9 +24,10 @@ test('legacy Atlas browser route is removed without deleting agent-facing Atlas 
 });
 
 test('legacy #atlas startup is normalized to the Board without a reload loop', () => {
-  assert.match(appSource, /window\.location\.hash === '#atlas'/);
-  assert.match(appSource, /window\.history\.replaceState/);
-  assert.match(appSource, /setActivePage\('board'\)/);
-  assert.match(appSource, /addEventListener\('hashchange'/);
-  assert.doesNotMatch(appSource, /window\.location\.reload|setActivePage\('atlas'\)|ProjectAtlasPage/);
+  assert.match(navigationSource, /window\.location\.hash === '#atlas'/);
+  assert.match(navigationSource, /window\.history\.replaceState/);
+  assert.match(navigationSource, /setActivePage\('board'\)/);
+  assert.match(navigationSource, /addEventListener\('hashchange'/);
+  assert.doesNotMatch(navigationSource, /window\.location\.reload|setActivePage\('atlas'\)|ProjectAtlasPage/);
+  assert.doesNotMatch(appSource, /setActivePage\('atlas'\)|ProjectAtlasPage/);
 });

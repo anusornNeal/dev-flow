@@ -582,11 +582,21 @@ export function recordTaskExecutionMutationPaths(
 export function adoptTaskExecutionOwnedChanges(args: Record<string, any>) {
   const binding = getTaskExecutionMutationBinding(args);
   if (!binding) {
-    throw executionSessionError('EXECUTION_ADOPTION_TASK_WORKSPACE_REQUIRED', 'Legacy ownership adoption requires a task-bound managed workspace.');
+    throw executionSessionError('EXECUTION_ADOPTION_TASK_WORKSPACE_REQUIRED', 'Ownership adoption requires a task-bound managed workspace.');
   }
   const requestedTaskId = String(args?.taskId || '').trim();
-  if (requestedTaskId && requestedTaskId !== binding.task.id && requestedTaskId !== binding.task.displayId) {
+  if (!requestedTaskId) {
+    throw executionSessionError('EXECUTION_ADOPTION_TASK_REQUIRED', 'Ownership adoption requires the exact owning task id.');
+  }
+  if (requestedTaskId !== binding.task.id && requestedTaskId !== binding.task.displayId) {
     throw executionSessionError('EXECUTION_ADOPTION_TASK_MISMATCH', 'Requested task does not own the selected execution workspace.');
+  }
+  const requestedExecutionSessionId = String(args?.executionSessionId || '').trim();
+  if (!requestedExecutionSessionId) {
+    throw executionSessionError('EXECUTION_ADOPTION_EXECUTION_REQUIRED', 'Ownership adoption requires the exact active executionSessionId.');
+  }
+  if (requestedExecutionSessionId !== binding.session.id) {
+    throw executionSessionError('EXECUTION_ADOPTION_EXECUTION_MISMATCH', 'Requested execution session does not own the selected task workspace.');
   }
   const files = Array.isArray(args.files) ? args.files : [];
   authorizeTaskExecutionMutationPaths(args, files.map((entry: any) => entry?.path));

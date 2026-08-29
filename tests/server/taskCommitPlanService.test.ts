@@ -47,6 +47,7 @@ const claims = await import('../../src/server/services/taskClaimService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
 const projectCommands = await import('../../src/server/services/projectCommandService.js');
 const verificationBatch = await import('../../src/server/services/verificationBatchService.js');
+const { getFileRevision } = await import('../../src/server/services/localFileService.js');
 
 function createFixture(label: string, targetFiles: string[] = ['src/owned.ts']) {
   workspaceService.resetSessionWorkspaceRuntimeForTests();
@@ -82,6 +83,41 @@ function createFixture(label: string, targetFiles: string[] = ['src/owned.ts']) 
   const session = listExecutionSessionsForTask(taskId).find((entry: any) => entry.status === 'active')!;
   return { projectId, workspace, taskId, session, claim: claimed.claim };
 }
+
+test('replacement execution can adopt exact preserved WIP before task commit planning', () => {
+  const { workspace, taskId, session } = createFixture('adopt-preserved-wip');
+  const ownedPath = 'src/owned.ts';
+  fs.writeFileSync(path.join(workspace.root, ownedPath), 'export const owned = 77;\n');
+  const expectedRevision = getFileRevision(path.join(workspace.root, ownedPath)).token;
+  const preservedBytes = fs.readFileSync(path.join(workspace.root, ownedPath), 'utf8');
+
+  assert.throws(
+    () => execution.adoptTaskExecutionOwnedChanges({
+      taskId,
+      workspaceId: workspace.workspaceId,
+      executionSessionId: 'exec-foreign',
+      files: [{ path: ownedPath, expectedRevision }],
+      reason: 'Recover preserved WIP into the exact replacement execution.',
+    }),
+    (error: any) => error?.code === 'EXECUTION_ADOPTION_EXECUTION_MISMATCH' || error?.payload?.code === 'EXECUTION_ADOPTION_EXECUTION_MISMATCH',
+  );
+
+  const adopted = execution.adoptTaskExecutionOwnedChanges({
+    taskId,
+    workspaceId: workspace.workspaceId,
+    executionSessionId: session.id,
+    files: [{ path: ownedPath, expectedRevision }],
+    reason: 'Recover preserved WIP into the exact replacement execution.',
+  });
+  assert.deepEqual(adopted.adoptedPaths, [ownedPath]);
+  assert.equal(fs.readFileSync(path.join(workspace.root, ownedPath), 'utf8'), preservedBytes);
+  assert.equal(adopted.ownership.verificationFresh, null);
+
+  const plan = commitPlan.buildTaskCommitPlan({ countersCache: {} } as any, { taskId, workspaceId: workspace.workspaceId });
+  assert.deepEqual(plan.ownedChangedFiles, [ownedPath]);
+  assert.deepEqual(plan.unrelatedChangedFiles, []);
+  assert.equal(plan.blockers.some((entry: any) => entry.code === 'TASK_COMMIT_NO_OWNED_CHANGES'), false);
+});
 
 test('commit plan revalidates focused verification coverage with its recorded target paths', () => {
   const { projectId, workspace, taskId, session } = createFixture('focused-coverage');

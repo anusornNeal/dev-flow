@@ -63,6 +63,35 @@ export const gitToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: (args) => ({ method: 'GET', path: withQuery('/api/git/task-commit/plan', args) }),
   },
   {
+    name: 'adopt_task_execution_owned_changes',
+    description: 'Audited task-scoped recovery that adopts explicit dirty/unowned files into the exact active replacement execution after preserved-WIP recovery. Every file requires an exact current revision guard; task/workspace/execution identity and claimed scope remain authoritative.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...projectIdentifierProperties,
+        taskId: { type: 'string', description: 'Exact DevFlow task id/displayId that owns the selected workspace.' },
+        executionSessionId: { type: 'string', description: 'Exact active replacement execution session that will own the adopted files.' },
+        files: {
+          type: 'array', minItems: 1, maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', minLength: 1, maxLength: 500, description: 'Repository-relative dirty/unowned path inside the active task claim scope.' },
+              expectedRevision: { type: 'string', minLength: 1, maxLength: 256, description: 'Exact current file revision captured before adoption.' },
+            },
+            required: ['path', 'expectedRevision'],
+            additionalProperties: false,
+          },
+          description: 'Explicit revision-guarded dirty/unowned files to adopt.',
+        },
+        reason: { type: 'string', minLength: 10, maxLength: 500, description: 'Bounded audit reason for adopting preserved WIP into the replacement execution.' },
+      },
+      required: ['taskId', 'workspaceId', 'executionSessionId', 'files', 'reason'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/git/task-commit/adopt-owned-changes', body: args }),
+  },
+  {
     name: 'reconcile_task_owned_revision_drift',
     description: 'Audited task-scoped recovery for already-owned files whose current revision drifted from the last known owned revision. Requires exact task/workspace/execution authority, prior/current revision guards, and bounded audit provenance; successful reconciliation invalidates prior verification authority.',
     inputSchema: {

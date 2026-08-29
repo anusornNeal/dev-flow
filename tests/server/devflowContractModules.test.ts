@@ -18,7 +18,7 @@ const TASK_TOOL_NAMES = [
 
 const GIT_TOOL_NAMES = [
   'get_git_log', 'get_git_diff', 'get_git_show', 'get_git_status', 'get_change_summary', 'get_git_branch',
-  'ensure_git_branch', 'push_git_branch', 'get_git_sync_status', 'create_pull_request', 'plan_task_commit', 'reconcile_task_owned_revision_drift', 'commit_task_owned_changes', 'commit_git_changes',
+  'ensure_git_branch', 'push_git_branch', 'get_git_sync_status', 'create_pull_request', 'plan_task_commit', 'adopt_task_execution_owned_changes', 'reconcile_task_owned_revision_drift', 'commit_task_owned_changes', 'commit_git_changes',
 ];
 
 test('task-domain contracts are owned by a focused module and composed into the aggregate catalog', () => {
@@ -68,11 +68,22 @@ test('git-domain contracts are owned by a focused module and composed into the a
 
 test('task-aware commit tools expose scoped planning and async commit wiring', () => {
   const plan = gitToolDefinitions.find((tool) => tool.name === 'plan_task_commit');
+  const adopt = gitToolDefinitions.find((tool) => tool.name === 'adopt_task_execution_owned_changes');
   const reconcile = gitToolDefinitions.find((tool) => tool.name === 'reconcile_task_owned_revision_drift');
   const commit = gitToolDefinitions.find((tool) => tool.name === 'commit_task_owned_changes');
   assert.equal(plan?.lightweight, true);
   assert.equal((plan?.inputSchema as any)?.required?.includes('taskId'), true);
   assert.equal((plan?.inputSchema as any)?.required?.includes('workspaceId'), true);
+  assert.equal((adopt?.inputSchema as any)?.required?.includes('taskId'), true);
+  assert.equal((adopt?.inputSchema as any)?.required?.includes('workspaceId'), true);
+  assert.equal((adopt?.inputSchema as any)?.required?.includes('executionSessionId'), true);
+  assert.equal((adopt?.inputSchema as any)?.required?.includes('files'), true);
+  assert.equal((adopt?.inputSchema as any)?.required?.includes('reason'), true);
+  assert.equal((adopt?.inputSchema as any)?.properties?.files?.items?.additionalProperties, false);
+  assert.equal((adopt?.inputSchema as any)?.properties?.files?.items?.properties?.path?.minLength, 1);
+  assert.equal((adopt?.inputSchema as any)?.properties?.files?.items?.properties?.expectedRevision?.minLength, 1);
+  assert.match(String(adopt?.description || ''), /dirty\/unowned|revision-guarded/i);
+  assert.equal(adopt?.buildHttpRequest({ taskId: 'DVF-1', workspaceId: 'ws_1', executionSessionId: 'exec_1', files: [{ path: 'src/A.ts', expectedRevision: 'rev-1' }], reason: 'recover preserved wip' }).path, '/api/git/task-commit/adopt-owned-changes');
   assert.equal((reconcile?.inputSchema as any)?.required?.includes('taskId'), true);
   assert.equal((reconcile?.inputSchema as any)?.required?.includes('workspaceId'), true);
   assert.equal((reconcile?.inputSchema as any)?.required?.includes('executionSessionId'), true);

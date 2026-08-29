@@ -19,7 +19,7 @@ import { cleanupSessionWorkspace, createRevisionVerificationWorkspace, getSessio
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { integrateWorkspaceCommits, reconstructRecordedWorkspaceIntegration, type WorkspaceIntegrationSuccess } from './workspaceIntegrationService.js';
 import { loadProjectVerificationImpactRules } from './projectCommandConfigService.js';
-import { inspectProjectVerificationPresets, runProjectCommand } from './projectCommandService.js';
+import { inspectProjectVerificationPresets, runProjectCommand, type RunProjectCommandResult } from './projectCommandService.js';
 import { planVerification, type VerificationImpactCheck, type VerificationPlan } from './verificationPlannerService.js';
 import {
   getExecutionOwnershipState,
@@ -43,6 +43,7 @@ export type TaskWorkspaceFinalizationCheck = {
   summary?: string;
   output?: string;
   recordedAt?: string;
+  failureKind?: 'timeout' | 'command-failed' | 'command-error' | 'workspace-setup';
 };
 
 export type DetachedIntegratedFinalizationEvidence = {
@@ -269,6 +270,19 @@ function verificationCheckMatchesRequirement(check: TaskWorkspaceFinalizationChe
   return actualTargets.length === requiredTargets.length && actualTargets.every((target, index) => target === requiredTargets[index]);
 }
 
+type PostIntegrationCommandFailureKind = NonNullable<TaskWorkspaceFinalizationCheck['failureKind']>;
+
+function classifyPostIntegrationCommandResult(result: Pick<RunProjectCommandResult, 'ok' | 'status' | 'timedOut' | 'exitCode'>): PostIntegrationCommandFailureKind | null {
+  if (result.ok) return null;
+  if (result.timedOut || result.status === 'timed_out') return 'timeout';
+  return 'command-failed';
+}
+
+export function __classifyPostIntegrationCommandResultForTests(result: Pick<RunProjectCommandResult, 'ok' | 'status' | 'timedOut' | 'exitCode'>) {
+  return classifyPostIntegrationCommandResult(result);
+}
+
+
 function evaluatePostIntegrationRequirement(
   integration: WorkspaceIntegrationSuccess,
   checks: TaskWorkspaceFinalizationCheck[],
@@ -283,7 +297,9 @@ function evaluatePostIntegrationRequirement(
     || combinedPlan.commands.some((command) => !sourcePlan.commands.includes(command));
   const required = baseAdvanced || combinedPlan.risk === 'high' || planEscalated;
   const revision = integration.baseHeadAfter;
-  const revisionBound = checks.filter((check) => check.status === 'passed' && String(check.repoRevision || '').trim() === revision);
+  const revisionChecks = checks.filter((check) => String(check.repoRevision || '').trim() === revision);
+  const revisionBound = revisionChecks.filter((check) => check.status === 'passed');
+  const revisionAttempts = revisionChecks.filter((check) => check.status !== 'not-run');
   const hasFullEvidence = revisionBound.some((check) => check.scope === 'full');
   const hasBroadEvidence = hasFullEvidence || revisionBound.some((check) => check.scope === 'broad');
   const broadEvidenceRequired = combinedPlan.requiresBroadVerify;
@@ -292,14 +308,12 @@ function evaluatePostIntegrationRequirement(
     command: step.command,
     ...(step.targets?.length ? { targets: normalizeVerificationTargets(step.targets) } : {}),
   }));
-  const missingChecks = hasFullEvidence
+  let missingChecks = hasFullEvidence
     ? []
     : requiredChecks.filter((requirement) => {
         if (revisionBound.some((check) => verificationCheckMatchesRequirement(check, requirement))) return false;
         return normalizeVerificationTargets(requirement.targets).length > 0 || !reusableCommands.has(requirement.command);
       });
-  const requiredCommands = requiredChecks.map(verificationRequirementLabel);
-  const missingCommands = missingChecks.map(verificationRequirementLabel);
   const reusableCoverageSatisfied = coverage?.status === 'covered'
     && coverage.reusable
     && missingChecks.length === 0
@@ -307,17 +321,25 @@ function evaluatePostIntegrationRequirement(
       if (revisionBound.some((check) => verificationCheckMatchesRequirement(check, requirement))) return true;
       return normalizeVerificationTargets(requirement.targets).length === 0 && reusableCommands.has(requirement.command);
     }));
+  if (required && broadEvidenceRequired && !hasBroadEvidence && !reusableCoverageSatisfied && missingChecks.length === 0 && requiredChecks.length > 0) {
+    missingChecks = [requiredChecks.find((requirement) => normalizeVerificationTargets(requirement.targets).length === 0) || requiredChecks[0]];
+  }
+  const requiredCommands = requiredChecks.map(verificationRequirementLabel);
+  const missingCommands = missingChecks.map(verificationRequirementLabel);
   const noCommandsRequired = requiredChecks.length === 0;
   const evidenceSatisfied = !required
     || (!broadEvidenceRequired && noCommandsRequired)
     || (missingCommands.length === 0
-      && (broadEvidenceRequired ? hasBroadEvidence : revisionBound.length > 0 || reusableCoverageSatisfied));
+      && (reusableCoverageSatisfied || (broadEvidenceRequired ? hasBroadEvidence : revisionBound.length > 0)));
 
   let reason = 'Pre-integration evidence remains valid for the integrated state.';
-  if (required && evidenceSatisfied && reusableCoverageSatisfied) reason = 'Reusable authoritative verification coverage remains valid for the integrated affected inputs, dependencies, command configuration, and environment.';
+  if (required && revisionAttempts.some((check) => check.status === 'failed') && missingChecks.length > 0) {
+    reason = `Post-integration verification was attempted at the integrated revision, but these requirements are still non-passing: ${missingCommands.join(', ')}.`;
+  } else if (required && evidenceSatisfied && reusableCoverageSatisfied) reason = 'Reusable authoritative verification coverage remains valid for the integrated affected inputs, dependencies, command configuration, and environment.';
   else if (required && baseAdvanced) reason = 'The target branch advanced after the workspace base revision and reusable coverage is incomplete, so combined-state verification must be revision-bound to the integrated HEAD.';
   else if (required && combinedPlan.risk === 'high') reason = 'High-risk combined changes require revision-bound post-integration verification.';
   else if (required && planEscalated) reason = 'Combined-state impact escalated the verification plan after integration.';
+
 
   return {
     required: required && !evidenceSatisfied,
@@ -339,15 +361,48 @@ function evaluatePostIntegrationRequirement(
 }
 
 
+export function __evaluatePostIntegrationRequirementForTests(input: {
+  integration: WorkspaceIntegrationSuccess;
+  checks: TaskWorkspaceFinalizationCheck[];
+  sourcePlan: VerificationPlan;
+  combinedPlan: VerificationPlan;
+  coverage?: TaskVerificationCoverageResolution | null;
+}) {
+  return evaluatePostIntegrationRequirement(input.integration, input.checks, input.sourcePlan, input.combinedPlan, input.coverage || null);
+}
+
 function executeRevisionBoundPostIntegrationVerification(
   state: AppState,
   project: { id: string; localPath?: string | null },
   operationId: string,
   requirement: PostIntegrationRequirement,
 ) {
-  const sandbox = createRevisionVerificationWorkspace(project, requirement.repoRevision, operationId);
   const checks: TaskWorkspaceFinalizationCheck[] = [];
   let cleanup: { removed: boolean; cleanupError?: string } = { removed: false };
+  let setup: { status: 'succeeded' | 'failed'; error?: string } = { status: 'succeeded' };
+  let sandbox: ReturnType<typeof createRevisionVerificationWorkspace> | null = null;
+  try {
+    sandbox = createRevisionVerificationWorkspace(project, requirement.repoRevision, operationId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setup = { status: 'failed', error: message };
+    for (const required of requirement.missingChecks) {
+      const targets = normalizeVerificationTargets(required.targets);
+      checks.push({
+        name: `post-integration: ${verificationRequirementLabel(required)}`,
+        command: required.command,
+        ...(targets.length > 0 ? { targets } : {}),
+        status: 'failed',
+        failureKind: 'workspace-setup',
+        scope: requirement.broadEvidenceRequired ? 'broad' : 'targeted',
+        repoRevision: requirement.repoRevision,
+        summary: `Verify-only workspace setup failed: ${message}`,
+        recordedAt: new Date().toISOString(),
+      });
+    }
+    return { checks, cleanup, repoRevision: requirement.repoRevision, setup };
+  }
+
   try {
     for (const required of requirement.missingChecks) {
       const targets = normalizeVerificationTargets(required.targets);
@@ -359,14 +414,20 @@ function executeRevisionBoundPostIntegrationVerification(
           forceFresh: true,
           responseMode: 'compact',
         });
+        const failureKind = classifyPostIntegrationCommandResult(result);
         checks.push({
           name: `post-integration: ${verificationRequirementLabel(required)}`,
           command: required.command,
           ...(targets.length > 0 ? { targets } : {}),
           status: result.ok ? 'passed' : 'failed',
+          ...(failureKind ? { failureKind } : {}),
           scope: requirement.broadEvidenceRequired ? 'broad' : 'targeted',
           repoRevision: sandbox.repoRevision,
-          summary: result.ok ? 'Passed in isolated verify-only workspace at the integrated revision.' : `Verification failed with exit code ${result.exitCode ?? 'unknown'}.`,
+          summary: result.ok
+            ? 'Passed in isolated verify-only workspace at the integrated revision.'
+            : failureKind === 'timeout'
+              ? `Verification timed out after ${result.durationMs}ms.`
+              : `Verification failed with exit code ${result.exitCode ?? 'unknown'}.`,
           output: [result.stdout, result.stderr].filter(Boolean).join('\n').slice(0, 8000),
           recordedAt: new Date().toISOString(),
         });
@@ -376,6 +437,7 @@ function executeRevisionBoundPostIntegrationVerification(
           command: required.command,
           ...(targets.length > 0 ? { targets } : {}),
           status: 'failed',
+          failureKind: 'command-error',
           scope: requirement.broadEvidenceRequired ? 'broad' : 'targeted',
           repoRevision: sandbox.repoRevision,
           summary: error instanceof Error ? error.message : String(error),
@@ -384,9 +446,13 @@ function executeRevisionBoundPostIntegrationVerification(
       }
     }
   } finally {
-    cleanup = sandbox.cleanup();
+    try {
+      cleanup = sandbox.cleanup();
+    } catch (error) {
+      cleanup = { removed: false, cleanupError: error instanceof Error ? error.message : String(error) };
+    }
   }
-  return { checks, cleanup, repoRevision: sandbox.repoRevision };
+  return { checks, cleanup, repoRevision: sandbox.repoRevision, setup };
 }
 
 export type TaskFinalizationFaultBoundary =
@@ -1004,8 +1070,13 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         effectiveChecks.push(...automaticVerification.checks);
         evidenceChecks = effectiveChecks;
         postIntegration = evaluatePostIntegrationRequirement(integration, effectiveChecks, sourcePlan, combinedPlan, targetCoverage);
+        const automaticQualityDebt = collectInitialFinalizationQualityDebt(projectedTask, {
+          ...input,
+          checks: effectiveChecks,
+          ownerBreakGlass: ownerBreakGlass || undefined,
+        }, targetCoverage);
         qualityDebt = [
-          ...initialQualityDebt,
+          ...automaticQualityDebt,
           ...(postIntegration.required ? [{
             code: 'POST_INTEGRATION_VERIFICATION_REQUIRED' as const,
             source: 'verification' as const,
@@ -1031,6 +1102,8 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
             qualityDebtSummary,
             verifyOnlyWorkspace: {
               repoRevision: automaticVerification.repoRevision,
+              setup: automaticVerification.setup,
+              checks: automaticVerification.checks,
               cleanup: automaticVerification.cleanup,
             },
           },

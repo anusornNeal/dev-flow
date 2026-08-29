@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, Check, ChevronDown, FolderGit, Pencil, Plus, Search
 import type { Project } from '../types';
 import ConfirmModal from './ConfirmModal';
 
-export const PROJECT_SWITCHER_POPOVER_CLASS = 'fixed z-[80] w-[400px] max-w-[calc(100vw-2rem)]';
+export const PROJECT_SWITCHER_POPOVER_CLASS = 'fixed z-[80] w-[500px] max-w-[calc(100vw-2rem)]';
 export const PROJECT_SWITCHER_ORDER_STORAGE_KEY = 'devflow.project-switcher.order.v1';
 
 interface ProjectOrderStorage {
@@ -28,7 +28,7 @@ export function resolveProjectSwitcherPopoverLayout(
   trigger: ProjectSwitcherTriggerRect,
   viewportWidth: number,
   viewportHeight: number,
-  preferredWidth = 400,
+  preferredWidth = 500,
   margin = 16,
   gap = 8,
 ): ProjectSwitcherPopoverLayout {
@@ -314,7 +314,7 @@ export default function ProjectSwitcher({
         maxHeight: `${popoverLayout.maxHeight}px`,
       }}
     >
-      <div className="shrink-0 border-b border-df-border p-3">
+      <div className="shrink-0 border-b border-df-border px-3 py-2.5">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[10px] font-black uppercase tracking-[0.14em] text-df-accent">Project workspace</p>
@@ -330,7 +330,7 @@ export default function ProjectSwitcher({
           </button>
         </div>
         {!isCreating && !editingProjectId && (
-          <label className="mt-3 flex items-center gap-2 rounded-xl border border-df-border bg-df-surface px-3 py-2 focus-within:ring-2 focus-within:ring-[var(--df-color-focus-ring)]">
+          <label className="mt-2.5 flex items-center gap-2 rounded-xl border border-df-border bg-df-surface px-3 py-2 focus-within:ring-2 focus-within:ring-[var(--df-color-focus-ring)]">
             <Search size={14} className="shrink-0 text-df-text-muted" />
             <input
               ref={searchRef}
@@ -347,7 +347,7 @@ export default function ProjectSwitcher({
       </div>
 
       {!isCreating && !editingProjectId && (
-        <div id="project-switcher-options" role="listbox" aria-label="Projects" className="min-h-0 flex-1 overflow-y-auto p-2">
+        <div id="project-switcher-options" role="listbox" aria-label="Projects" className="min-h-0 flex-1 overflow-y-auto p-1.5">
           {filteredProjects.length === 0 ? (
             <p className="px-3 py-8 text-center text-[11px] text-df-text-muted">No projects match “{query}”.</p>
           ) : filteredProjects.map((project, index) => {
@@ -357,7 +357,7 @@ export default function ProjectSwitcher({
             return (
               <div
                 key={project.id}
-                className={`group mb-1 flex min-w-0 items-stretch gap-1 rounded-xl border p-1 transition-colors ${
+                className={`group mb-0.5 flex min-w-0 items-stretch gap-1 rounded-xl border p-0.5 transition-colors ${
                   active
                     ? 'border-[var(--df-color-border-strong)] bg-df-surface-muted'
                     : highlighted
@@ -371,27 +371,27 @@ export default function ProjectSwitcher({
                   aria-selected={active}
                   onMouseEnter={() => setHighlightedIndex(index)}
                   onClick={() => selectProject(project)}
-                  className="min-w-0 flex-1 rounded-lg px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                  className="min-w-0 flex-1 rounded-lg px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="min-w-0 flex-1 truncate text-[11px] font-extrabold text-df-text" title={project.name}>{project.name}</span>
                     {active && <Check size={13} className="shrink-0 text-df-accent" />}
                   </span>
-                  <span className="mt-1 block truncate text-[9px] font-mono text-df-text-muted" title={project.repoUrl || undefined}>
+                  <span className="mt-0.5 block truncate text-[9px] font-mono text-df-text-muted" title={project.repoUrl || undefined}>
                     {formatProjectRepoLabel(project.repoUrl)}
                   </span>
                   <span className="mt-0.5 block truncate text-[9px] font-mono text-[var(--df-color-text-subtle)]" title={project.localPath || undefined}>
                     {project.localPath || 'No local path configured'}
                   </span>
                 </button>
-                <div className="flex shrink-0 items-center gap-0.5 pr-1">
+                <div className="flex shrink-0 items-center gap-0.5 pr-0.5">
                   <button
                     type="button"
                     aria-label={`Move ${project.name} up`}
                     title={`Move ${project.name} up`}
                     disabled={orderIndex <= 0}
                     onClick={() => moveProject(project.id, -1)}
-                    className="rounded-lg p-1.5 text-df-text-muted hover:bg-df-surface-raised hover:text-df-accent disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-df-text-muted hover:bg-df-surface-raised hover:text-df-accent disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
                   >
                     <ArrowUp size={12} />
                   </button>
@@ -401,7 +401,7 @@ export default function ProjectSwitcher({
                     title={`Move ${project.name} down`}
                     disabled={orderIndex < 0 || orderIndex >= orderedProjects.length - 1}
                     onClick={() => moveProject(project.id, 1)}
-                    className="rounded-lg p-1.5 text-df-text-muted hover:bg-df-surface-raised hover:text-df-accent disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-df-text-muted hover:bg-df-surface-raised hover:text-df-accent disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
                   >
                     <ArrowDown size={12} />
                   </button>
@@ -410,7 +410,7 @@ export default function ProjectSwitcher({
                     onClick={() => startEditing(project)}
                     title={`Edit ${project.name}`}
                     aria-label={`Edit ${project.name}`}
-                    className="rounded-lg p-1.5 text-df-text-muted hover:bg-df-surface-raised hover:text-df-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-df-text-muted hover:bg-df-surface-raised hover:text-df-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
                   >
                     <Pencil size={12} />
                   </button>
@@ -419,7 +419,7 @@ export default function ProjectSwitcher({
                     onClick={() => setProjectToDelete(project.id)}
                     title={`Delete ${project.name}`}
                     aria-label={`Delete ${project.name}`}
-                    className="rounded-lg p-1.5 text-df-text-muted hover:bg-[var(--df-color-danger-surface)] hover:text-df-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-df-text-muted hover:bg-[var(--df-color-danger-surface)] hover:text-df-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]"
                   >
                     <Trash2 size={12} />
                   </button>
@@ -434,7 +434,7 @@ export default function ProjectSwitcher({
         const project = projects.find((item) => item.id === editingProjectId);
         if (!project) return null;
         return (
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
             <div className="min-w-0">
               <p className="truncate text-[11px] font-extrabold text-df-text" title={project.name}>Edit {project.name}</p>
               <p className="mt-0.5 truncate text-[9px] font-mono text-df-text-muted" title={project.repoUrl || undefined}>{formatProjectRepoLabel(project.repoUrl)}</p>
@@ -450,7 +450,7 @@ export default function ProjectSwitcher({
       })()}
 
       {isCreating && (
-        <form onSubmit={createProject} className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4">
+        <form onSubmit={createProject} className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3">
           <p className="text-[11px] font-extrabold text-df-text">Bind new repository</p>
           <input required value={createForm.name} onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} placeholder="Project name" className="w-full rounded-xl border border-df-border bg-df-surface px-3 py-2 text-[10px] text-df-text outline-none focus:border-df-accent" />
           <input required type="url" value={createForm.repoUrl} onChange={(event) => setCreateForm((current) => ({ ...current, repoUrl: event.target.value }))} placeholder="Git repository URL" className="w-full rounded-xl border border-df-border bg-df-surface px-3 py-2 text-[10px] font-mono text-df-text outline-none focus:border-df-accent" />
@@ -465,7 +465,7 @@ export default function ProjectSwitcher({
       )}
 
       {!isCreating && !editingProjectId && (
-        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-df-border px-3 py-2.5">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-df-border px-3 py-2">
           <span className="min-w-0 truncate text-[9px] font-mono text-df-text-muted">↑↓ navigate · Enter select · Esc close</span>
           <button type="button" onClick={() => { setIsCreating(true); setQuery(''); }} className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] font-extrabold text-df-accent hover:bg-df-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--df-color-focus-ring)]">
             <Plus size={12} /> New project

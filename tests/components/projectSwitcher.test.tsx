@@ -102,7 +102,7 @@ test('keyboard navigation resolves Escape, Up/Down, and Enter deterministically'
 
 test('project switcher popover clamps its fixed panel inside the viewport', () => {
   const wide = resolveProjectSwitcherPopoverLayout({ left: 900, bottom: 64 }, 1000, 700);
-  assert.equal(wide.width, 400);
+  assert.equal(wide.width, 500);
   assert.equal(wide.left + wide.width <= 984, true);
   assert.equal(wide.top >= 16, true);
   assert.equal(wide.top + wide.maxHeight <= 684, true);
@@ -132,7 +132,14 @@ test('switcher trigger gives the active project a large readable workspace contr
   assert.match(html, /Dev Flow/);
   assert.match(html, /github\.com\/anusornNeal\/dev-flow/);
   assert.match(html, /aria-haspopup="dialog"/);
-  assert.match(PROJECT_SWITCHER_POPOVER_CLASS, /w-\[400px\]/);
+  assert.match(PROJECT_SWITCHER_POPOVER_CLASS, /w-\[500px\]/);
+});
+
+test('project rows use compact spacing without shrinking action hit targets', () => {
+  const source = fs.readFileSync('src/components/ProjectSwitcher.tsx', 'utf8');
+  assert.match(source, /px-2\.5 py-1\.5 text-left/);
+  assert.match(source, /h-7 w-7 items-center justify-center/);
+  assert.match(source, /overflow-y-auto p-1\.5/);
 });
 
 test('full project values are preserved for labels and tooltips', () => {

@@ -315,7 +315,7 @@ test('recursive delete fails before deleting parent or claimed descendant', asyn
   assert.ok(activeExecution(childId));
 });
 
-test('legacy agent cancellation settles its run without stealing Chat lifecycle ownership', async () => {
+test('retired legacy agent cancellation route is unavailable and preserves Chat lifecycle ownership', async () => {
   const id = lifecycleTask('legacy-cancel', undefined, { agent: 'Codex' });
   const claimed = claimLifecycleTask(id);
   const execution = activeExecution(id);
@@ -326,11 +326,25 @@ test('legacy agent cancellation settles its run without stealing Chat lifecycle 
     method: 'POST',
     body: JSON.stringify({ reason: 'test cancellation' }),
   });
-  assert.equal(result.response.status, 200, JSON.stringify(result.body));
-  assert.ok(result.body.cancelledCount > 0);
+  assert.equal(result.response.status, 404, JSON.stringify(result.body));
   assert.equal(getTask(id)?.status, 'in-progress');
   assert.equal(getTask(id)?.claim?.workspaceId, claimed.claim.workspaceId);
   assert.equal(activeExecution(id)?.id, execution!.id);
+});
+
+test('all retired legacy agent mutation routes are unavailable', async () => {
+  const id = lifecycleTask('legacy-mutations-retired', undefined, { agent: 'Codex' });
+  createAgentRun({ taskId: id, projectId: project.id, agent: 'Codex', model: 'GPT-5.5', effort: 'medium' });
+  const requests = [
+    { path: `/api/tasks/${id}/agent-runs/retry`, body: {} },
+    { path: `/api/tasks/${id}/agent-runs/cancel`, body: { reason: 'should be unavailable' } },
+    { path: `/api/tasks/${id}/agent-complete`, body: { status: 'success', summary: 'should be unavailable' } },
+    { path: `/api/tasks/${id}/agent-runs/run-missing/complete`, body: { success: true } },
+  ];
+  for (const request of requests) {
+    const result = await jsonRequest(request.path, { method: 'POST', body: JSON.stringify(request.body) });
+    assert.equal(result.response.status, 404, `${request.path}: ${JSON.stringify(result.body)}`);
+  }
 });
 
 test('emergency move cannot bypass a real running durable operation', async () => {

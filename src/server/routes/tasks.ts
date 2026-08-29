@@ -43,7 +43,6 @@ import {
   toMutationResponse,
   validateParentReviewMove,
 } from './taskRouteSupport';
-export { completeAgentRunForTask, continueTaskQueueForProject, triggerTaskAgent } from './taskRouteSupport';
 export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
   registerTaskSetAuthoringRoute(app, deps);
   registerTaskReadRoutes(app, deps);  registerTaskBugRoutes(app, deps);  registerTaskReviewRoutes(app, deps);  registerLegacyTaskAgentRoutes(app, deps);  registerTaskClaimRoutes(app, deps);

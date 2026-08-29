@@ -330,10 +330,6 @@ test('agent-neutral orchestration contract keeps workers replaceable without pro
   assert.equal((result as any).verificationEvidence, undefined);
   assert.equal((result as any).gitEvidence, undefined);
 
-  const routeSupport = await import('../../src/server/routes/taskRouteSupport.js');
-  assert.equal(routeSupport.normalizeAgentCompletionResultState({ status: 'success' }), 'COMPLETE');
-  assert.equal(routeSupport.normalizeAgentCompletionResultState({ status: 'failed' }), 'BLOCKED');
-  assert.equal(routeSupport.normalizeAgentCompletionResultState({ status: 'cancelled' }), 'HANDOFF_READY');
 });
 
 test('authoritative docs keep Codex Copy Prompt autonomous and status synchronization non-blocking', () => {

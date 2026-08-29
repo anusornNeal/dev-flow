@@ -2,26 +2,16 @@ import fs from 'fs';
 import path from 'path';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
-import { getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask } from '../repositories/agentRunRepository';
-import { saveTask } from '../repositories/taskRepository.js';
+import { listAgentRunsForTask } from '../repositories/agentRunRepository';
 import { getAgentRunHistoryPaths, resolveFromDevFlowAppRoot } from '../services/agentRunService';
-import { findTaskByIdentifier, normalizeAgentCompletionPayload, validateAgentCompletionPayload } from '../services/taskService';
+import { findTaskByIdentifier } from '../services/taskService';
 import { sendApiError } from '../services/api';
-import { taskHasLifecycleOwnership } from '../services/taskClaimService.js';
-import { canRetryRun as canRetryRunUseCase, validateCompletion as validateCompletionUseCase } from '../useCases/agentRunUseCases';
-import {
-  appendTaskLog,
-  applyRunSummaryToTask,
-  persistTaskMutationWithLifecycle,
-  requireAgentOwnedRequest,
-  type TriggerTaskAgentFailure,
-} from './taskRouteSupport';
 
 /**
- * Legacy agent-run HTTP surface kept isolated from the main task route composition.
- * Compatibility-only quarantine: new local-native workers synchronize through external task status/orchestration metadata and must not be launched through these routes by default.
- * New execution-session architecture must not build new dependencies on these routes.
+ * Read-only compatibility surface for historical legacy agent-run evidence.
+ * Fresh-process launch/retry/cancel/completion mutations were retired after the
+ * managed execution and external-worker cutovers. New orchestration must never
+ * depend on this module for lifecycle mutation.
  */
 export function registerLegacyTaskAgentRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/tasks/:id/agent-runs', (req, res) => {
@@ -61,82 +51,5 @@ export function registerLegacyTaskAgentRoutes(app: express.Express, deps: ApiRou
     } catch (error) {
       return sendApiError(res, error);
     }
-  });
-
-  app.post('/api/tasks/:id/agent-runs/retry', (req, res) => {
-    const task = findTaskByIdentifier(deps.state, req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-    const activeRun = getActiveRunForTask(task.id);
-    if (activeRun) return res.status(409).json({ error: `Task already has active run ${activeRun.id}`, run: activeRun });
-    const latestRun = getLatestAgentRunForTask(task.id);
-    if (!latestRun || !canRetryRunUseCase(latestRun as any)) return res.status(400).json({ error: 'Only a failed latest run can be retried.' });
-    const result = AgentOrchestrationWorker.trigger(task, deps, 'retry endpoint', latestRun.id);
-    saveTask(task);
-    if (!result.triggered) {
-      const blockedResult = result as TriggerTaskAgentFailure;
-      return res.status(400).json({ error: blockedResult.reason, code: blockedResult.code, run: blockedResult.run });
-    }
-    return res.status(201).json({ success: true, run: result.run, task });
-  });
-
-  app.post('/api/tasks/:id/agent-runs/cancel', (req, res) => {
-    const task = findTaskByIdentifier(deps.state, req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-    const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'cancelled manually';
-    const cancelledCount = AgentOrchestrationWorker.cancelRuns(task.id, reason);
-    let persistedTask = task;
-    if (cancelledCount > 0) {
-      task.updatedAt = new Date().toISOString();
-      appendTaskLog(task, `Agent run cancelled: ${reason}`, 'update');
-    }
-    applyRunSummaryToTask(task, getLatestAgentRunForTask(task.id));
-    if (cancelledCount > 0 && !taskHasLifecycleOwnership(task)) {
-      persistedTask = persistTaskMutationWithLifecycle(task, { ...task, status: 'todo' }, 'legacy agent run cancellation');
-    } else {
-      if (cancelledCount > 0 && taskHasLifecycleOwnership(task)) {
-        appendTaskLog(task, 'Legacy agent run cancelled; Chat lifecycle ownership and task lane were preserved.', 'update');
-      }
-      saveTask(task);
-      persistedTask = task;
-    }
-    return res.json({ success: true, cancelledCount, task: persistedTask, runs: listAgentRunsForTask(task.id) });
-  });
-
-  app.post('/api/tasks/:id/agent-complete', (req, res) => {
-    const task = findTaskByIdentifier(deps.state, req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-    if (!requireAgentOwnedRequest(req)) return res.status(403).json({ error: 'Agent completion callback requires x-agent-request=true.' });
-    const payloadError = validateAgentCompletionPayload(req.body);
-    if (payloadError) return res.status(400).json({ error: payloadError });
-    const useCaseValidation = validateCompletionUseCase({ status: req.body.status, summary: req.body.summary });
-    if (!useCaseValidation.ok) return res.status(400).json({ error: useCaseValidation.reason });
-    const payload = normalizeAgentCompletionPayload(req.body);
-    const activeRun = getActiveRunForTask(task.id);
-    const latestRun = getLatestAgentRunForTask(task.id);
-    const run = payload.runId ? [activeRun, latestRun, ...listAgentRunsForTask(task.id)].find((entry) => entry?.id === payload.runId) || null : activeRun;
-    if (!run) return res.status(409).json({ error: 'No matching active run was found for this task.' });
-    if (payload.runId && run.id !== payload.runId) return res.status(409).json({ error: 'Completion callback runId does not match the task active run.' });
-    if (!['queued', 'starting', 'running'].includes(run.status)) return res.status(409).json({ error: `Run ${run.id} is already settled with status ${run.status}.` });
-    try {
-      const result = AgentOrchestrationWorker.applyCompletionCallback(task, run, deps, payload);
-      return res.json({ success: true, task: result.task, run: result.run });
-    } catch (error) {
-      return sendApiError(res, error);
-    }
-  });
-
-  app.post('/api/tasks/:id/agent-runs/:runId/complete', (req, res) => {
-    const task = findTaskByIdentifier(deps.state, req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-    const run = getActiveRunForTask(task.id) || getLatestAgentRunForTask(task.id);
-    if (!run || run.id !== req.params.runId) return res.status(404).json({ error: 'Run not found or not associated with task.' });
-    const payload = normalizeAgentCompletionPayload({
-      runId: req.params.runId,
-      status: req.body?.success === false ? 'failed' : 'success',
-      summary: req.body?.errorMessage || (req.body?.success === false ? 'Run failed' : 'Run completed successfully'),
-      changedFiles: [], tests: [],
-    });
-    const result = AgentOrchestrationWorker.applyCompletionCallback(task, run, deps, payload);
-    return res.json({ success: true, task: result.task, run: result.run });
   });
 }

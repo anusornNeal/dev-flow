@@ -4,6 +4,7 @@ import { getTaskByIdentifier } from '../repositories/taskRepository.js';
 import { getLatestTaskFinalizationOperation } from '../repositories/taskFinalizationOperationRepository.js';
 import { buildTaskCommitPlan, commitTaskOwnedChanges } from './taskCommitPlanService.js';
 import { getRepoRevisionForRoot } from './repoRevisionService.js';
+import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import type { VerificationImpactCheck } from './verificationPlannerService.js';
 import {
   normalizeVerificationTargets,
@@ -113,8 +114,20 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
       );
     }
     const planDebt = (plan as any).qualityDebt;
+    const workspaceRecovery = inspectWorkspaceRecovery(workspaceId);
+    const noOwnedChangesOnly = plan.blockers.length === 1
+      && plan.blockers[0]?.code === 'TASK_COMMIT_NO_OWNED_CHANGES';
+    const cleanNoOpSource = noOwnedChangesOnly
+      && plan.ownedChangedFiles.length === 0
+      && plan.unrelatedChangedFiles.length === 0
+      && plan.scopeDrift.length === 0
+      && plan.ownershipDrift.length === 0
+      && workspaceRecovery.dirtyFiles.length === 0
+      && workspaceRecovery.uniqueCommits.length === 0
+      && ['already-integrated', 'patch-equivalent'].includes(workspaceRecovery.disposition);
+    const effectiveBlockers = cleanNoOpSource ? [] : plan.blockers;
     if (
-      plan.blockers.length > 0
+      effectiveBlockers.length > 0
       || plan.verificationFresh !== true
       || plan.verificationCoverage?.status !== 'covered'
       || plan.verificationCoverage?.reusable !== true
@@ -126,14 +139,14 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
         'Autonomous tail stops unless source verification and ownership are unambiguously GREEN and reusable.',
         {
           transitions,
-          blockers: plan.blockers,
+          blockers: effectiveBlockers,
           verificationFresh: plan.verificationFresh,
           verificationCoverage: plan.verificationCoverage,
           qualityDebt: planDebt || null,
         },
       );
     }
-    if (plan.commitDisposition === 'ambiguous-no-changes') {
+    if (plan.commitDisposition === 'ambiguous-no-changes' && !cleanNoOpSource) {
       return autonomousTailAttention(
         'commit-plan',
         'AUTONOMOUS_TAIL_COMMIT_AMBIGUOUS',
@@ -143,7 +156,13 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
     }
 
     try {
-      if (plan.commitDisposition === 'commit-required') {
+      if (cleanNoOpSource) {
+        transitions.push({
+          stage: 'commit',
+          status: 'skipped-clean-no-op',
+          detail: workspaceRecovery.disposition,
+        });
+      } else if (plan.commitDisposition === 'commit-required') {
         const committed = commitTaskOwnedChanges(state, { taskId, workspaceId, message: commitMessage });
         transitions.push({
           stage: 'commit',

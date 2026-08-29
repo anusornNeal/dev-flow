@@ -226,6 +226,53 @@ function preparedAutonomousTailFixture(label: string) {
   return { ...prepared, execution };
 }
 
+function preparedAutonomousNoOpTailFixture(label: string) {
+  const prepared = fixture(label);
+  const claimed = getTask(prepared.task.id)!;
+  const ownershipEpochId = `claim-epoch-00000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`;
+  claimed.claim = { workspaceId: prepared.workspace.workspaceId, sessionIdHash: prepared.workspace.sessionIdHash, ownershipEpochId, ownerLabel: 'Fixture chat', ownerKind: 'chat', claimedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  saveTask(claimed);
+  const execution = createExecutionSession({ projectId: prepared.task.projectId, taskId: prepared.task.id, workspaceId: prepared.workspace.workspaceId, branch: prepared.workspace.branch, repoRoot: prepared.workspace.root, ownershipEpochId });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'context-ready',
+    reasonCode: `${label}-context`,
+    evidence: { id: `${label}-context`, kind: 'context-bundle', status: 'completed' },
+  });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'implementing',
+    reasonCode: `${label}-implementing`,
+    evidence: { id: `${label}-implementing`, kind: 'coordination', status: 'completed' },
+  });
+  const ownership = getExecutionOwnershipState(execution.id, { repoRoot: prepared.workspace.root });
+  const identity = getProjectCommandExecutionIdentity(prepared.state, {
+    projectId: prepared.project.id,
+    workspaceId: prepared.workspace.workspaceId,
+    command: 'test',
+    affectedInputPaths: [],
+  });
+  assert.ok(identity);
+  const coverage = buildVerificationCoverageIdentity(identity);
+  assert.ok(coverage);
+  recordExecutionVerificationEvidence(execution.id, [{ name: 'test', command: 'test', status: 'passed' }], {
+    repoRoot: prepared.workspace.root,
+    provenance: {
+      policy: 'checks-passed',
+      expectedRepoRevision: ownership.repoRevision,
+      expectedOwnedFingerprint: ownership.ownedFingerprint,
+      candidateId: `autonomous-no-op-${label}`,
+      candidateRepoRevision: ownership.repoRevision,
+      executionKey: identity!.key,
+      coverage: [coverage!],
+    },
+  });
+  recordExecutionLifecycleTransition(execution.id, {
+    toStage: 'verifying',
+    reasonCode: `${label}-verification`,
+    evidence: { id: `${label}-verification`, kind: 'verification-candidate', status: 'completed' },
+  });
+  return { ...prepared, execution };
+}
+
 function detachedFinalizationFixture(label: string) {
   const prepared = preparedFinalizationFixture(label);
   const sourceHead = git(prepared.workspace.root, ['rev-parse', 'HEAD']).stdout;
@@ -770,6 +817,36 @@ test('autonomous tail resumes the same integrated operation after workspace runt
   assert.equal(replay.idempotent, true);
   assert.equal(Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout), beforeCommitCount + 1);
   assert.equal((getTask(prepared.task.id)?.logs || []).filter((entry: any) => entry.id === `log-workspace-finalized-${first.operationId}`).length, 1);
+});
+
+test('autonomous tail finalizes a verified clean no-op task without creating an empty commit', async () => {
+  const prepared = preparedAutonomousNoOpTailFixture('autonomous-clean-no-op');
+  const beforeHead = git(prepared.root, ['rev-parse', 'HEAD']).stdout;
+  const beforeCount = Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout);
+
+  const result = await runTaskWorkspaceHappyPathTail(prepared.state, {
+    taskId: prepared.task.id,
+    workspaceId: prepared.workspace.workspaceId,
+    commitMessage: 'refactor: clean no-op coordination proof',
+    triggerJobId: 'job-clean-no-op-proof',
+  });
+
+  assert.equal(result.status, 'completed', JSON.stringify(result));
+  assert.equal(result.transitions.some((entry: any) => entry.stage === 'commit' && entry.status === 'skipped-clean-no-op'), true);
+  assert.equal(git(prepared.root, ['rev-parse', 'HEAD']).stdout, beforeHead);
+  assert.equal(Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout), beforeCount, 'clean no-op tail must not create an empty commit');
+  assert.equal(getTask(prepared.task.id)?.status, 'done');
+  assert.equal(fs.existsSync(prepared.workspace.root), false);
+
+  const replay = await runTaskWorkspaceHappyPathTail(prepared.state, {
+    taskId: prepared.task.id,
+    workspaceId: prepared.workspace.workspaceId,
+    commitMessage: 'refactor: clean no-op coordination proof',
+    triggerJobId: 'job-clean-no-op-proof',
+  });
+  assert.equal(replay.status, 'completed');
+  assert.equal(replay.idempotent, true);
+  assert.equal(Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout), beforeCount);
 });
 
 test('task presentation drift after integration does not revoke a frozen finalization operation', () => {

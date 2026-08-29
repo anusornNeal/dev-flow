@@ -3,7 +3,6 @@ import path from 'path';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
-import { getSettings } from '../repositories/settingsRepository.js';
 import { getActiveRunForTask, getLatestAgentRunForTask, listAgentRunsForTask } from '../repositories/agentRunRepository';
 import { saveTask } from '../repositories/taskRepository.js';
 import { getAgentRunHistoryPaths, resolveFromDevFlowAppRoot } from '../services/agentRunService';
@@ -14,7 +13,6 @@ import { canRetryRun as canRetryRunUseCase, validateCompletion as validateComple
 import {
   appendTaskLog,
   applyRunSummaryToTask,
-  continueTaskQueueForProject,
   persistTaskMutationWithLifecycle,
   requireAgentOwnedRequest,
   type TriggerTaskAgentFailure,
@@ -121,7 +119,6 @@ export function registerLegacyTaskAgentRoutes(app: express.Express, deps: ApiRou
     if (!['queued', 'starting', 'running'].includes(run.status)) return res.status(409).json({ error: `Run ${run.id} is already settled with status ${run.status}.` });
     try {
       const result = AgentOrchestrationWorker.applyCompletionCallback(task, run, deps, payload);
-      if (getSettings().autoWork && payload.status === 'success') continueTaskQueueForProject(task.projectId, deps);
       return res.json({ success: true, task: result.task, run: result.run });
     } catch (error) {
       return sendApiError(res, error);
@@ -140,7 +137,6 @@ export function registerLegacyTaskAgentRoutes(app: express.Express, deps: ApiRou
       changedFiles: [], tests: [],
     });
     const result = AgentOrchestrationWorker.applyCompletionCallback(task, run, deps, payload);
-    if (getSettings().autoWork && payload.status === 'success') continueTaskQueueForProject(task.projectId, deps);
     return res.json({ success: true, task: result.task, run: result.run });
   });
 }

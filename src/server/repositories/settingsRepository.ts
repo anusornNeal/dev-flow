@@ -39,7 +39,8 @@ export function getSettings() {
   const openAiTunnelId = map.get('openAiTunnelId') || '';
   const jiraBaseUrl = map.get('jiraBaseUrl') || process.env.JIRA_BASE_URL || '';
   const jiraEmail = map.get('jiraEmail') || process.env.JIRA_EMAIL || '';
-  const autoWork = map.get('autoWork') === 'true';
+  // Auto Work is retired from active scheduling; preserve the legacy column as cold compatibility data only.
+  const autoWork = false;
   const agentExecutionMode = map.get('agentExecutionMode') || '';
 
   return { githubToken, jiraToken, figmaToken, openAiRuntimeApiKey, openAiTunnelId, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode };
@@ -61,7 +62,7 @@ export function saveSettings(settings: Partial<ReturnType<typeof getSettings>>) 
     stmt.run('openAiTunnelId', updated.openAiTunnelId ?? '');
     stmt.run('jiraBaseUrl', updated.jiraBaseUrl ?? '');
     stmt.run('jiraEmail', updated.jiraEmail ?? '');
-    stmt.run('autoWork', updated.autoWork ? 'true' : 'false');
+    stmt.run('autoWork', 'false');
     stmt.run('agentExecutionMode', updated.agentExecutionMode ?? '');
     for (const key of changedSecretKeys) stmt.run(key, '');
   })();

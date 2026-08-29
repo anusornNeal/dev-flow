@@ -9,7 +9,6 @@ import { evaluateChecklistToggleMutation } from '../useCases/taskUseCases';
 import { VALID_STATUSES } from '../constants';
 import { validateEnum } from '../validation';
 import { appendTaskLog, canOverrideTaskLock, createTaskLogEntry, getTaskIndexByIdentifier, persistTaskMutationWithLifecycle, validateParentReviewMove } from './taskRouteSupport';
-import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
 
 export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps) {  app.post('/api/tasks/batch', (req, res) => {
     let rawItems = req.body;
@@ -109,7 +108,6 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
 
         const persistedTask = persistTaskMutationWithLifecycle(currentTask, updatedTask, 'POST /tasks/batch update');
         updatedTasks.push(persistedTask);
-        AgentOrchestrationWorker.maybeTrigger(persistedTask, currentTask, deps, 'POST /tasks/batch update');
         continue;
       }
 
@@ -164,7 +162,6 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
 
       saveTask(newTask);
       importedTasks.push(newTask);
-      AgentOrchestrationWorker.maybeTrigger(newTask, undefined, deps, 'POST /tasks/batch create');
     }
 
     
@@ -299,14 +296,12 @@ export function registerTaskBatchRoutes(app: express.Express, deps: ApiRouteDeps
           return { success: false, affectedId: task.id, error: { code: 'TASK_LOCKED', message: 'Task is locked by an agent. Use emergency flag to override.', retryable: false, affectedId: task.id } };
         }
 
-        const previousTask = { ...task };
         task.agent = item.agent || undefined;
         task.model = item.model || undefined;
         task.effort = item.effort || undefined;
         task.updatedAt = new Date().toISOString();
         task.logs = [...(task.logs || []), createTaskLogEntry(`Agent configuration updated via Batch API: Agent=${item.agent || 'None'}, Model=${item.model || 'Default'}, Effort=${item.effort || 'Auto'}`)];
         saveTask(task);
-        AgentOrchestrationWorker.maybeTrigger(task, previousTask, deps, 'POST /tasks/batch/assign');
         return { success: true, affectedId: task.id, task };
       });
 

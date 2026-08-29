@@ -1,4 +1,3 @@
-import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { VALID_AGENTS, LEGACY_VALID_EFFORTS_FALLBACK, VALID_MODELS, VALID_STATUSES } from '../constants';
@@ -222,7 +221,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
         saveTask(newTask);
         createdTasks.push(newTask);
-        AgentOrchestrationWorker.maybeTrigger(newTask, undefined, deps, 'POST /tasks endpoint');
       }
 
       
@@ -300,7 +298,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       return res.status(403).json({ error: 'Task is locked by an agent. Use emergency flag to override.' });
     }
 
-    const previousTask = { ...task };
     task.agent = req.body.agent || undefined;
     task.model = req.body.model || undefined;
     task.effort = req.body.effort || undefined;
@@ -312,7 +309,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       type: 'update',
     }];
 
-    AgentOrchestrationWorker.maybeTrigger(task, previousTask, deps, '/assign endpoint');
     saveTask(task);
     return res.json(toMutationResponse(req, task, task));
   });
@@ -416,7 +412,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
         const persistedTask = persistTaskMutationWithLifecycle(currentTask, updatedTask, 'PUT /tasks list update');
         updatedTasks.push(persistedTask);
-        AgentOrchestrationWorker.maybeTrigger(persistedTask, currentTask, deps, 'PUT /tasks list update');
         continue;
       }
 
@@ -478,7 +473,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
 
       saveTask(newTask);
       importedTasks.push(newTask);
-      AgentOrchestrationWorker.maybeTrigger(newTask, undefined, deps, 'PUT /tasks list create');
     }
 
     
@@ -595,7 +589,6 @@ export function registerTaskRoutes(app: express.Express, deps: ApiRouteDeps) {
       if (qualityError) return res.status(400).json({ error: qualityError });
 
       const persistedTask = persistTaskMutationWithLifecycle(currentTask, updatedTask, 'PUT /tasks/:id endpoint');
-      AgentOrchestrationWorker.maybeTrigger(persistedTask, currentTask, deps, 'PUT /tasks/:id endpoint');
       return res.json(toMutationResponse(req, persistedTask, persistedTask));
     } catch (err: any) {
       if (idempotencyKey) {

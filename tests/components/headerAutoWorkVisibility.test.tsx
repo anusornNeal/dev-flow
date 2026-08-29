@@ -79,6 +79,6 @@ test('App and Settings no longer keep manual ngrok URL UI state', () => {
   assert.doesNotMatch(settingsSource, /ngrokUrl|NgrokSettingsSection/);
 });
 
-test('legacy AutoWorkToggle source is retained for future redesign', () => {
-  assert.equal(fs.existsSync('src/components/AutoWorkToggle.tsx'), true);
+test('legacy AutoWorkToggle source is removed after Auto Work retirement', () => {
+  assert.equal(fs.existsSync('src/components/AutoWorkToggle.tsx'), false);
 });

@@ -61,7 +61,7 @@ test('getSettings ignores a legacy ngrokUrl row while preserving unrelated setti
   assert.equal('ngrokUrl' in settings, false);
   assert.equal(settings.jiraBaseUrl, 'https://jira.example.invalid');
   assert.equal(settings.jiraEmail, 'dev@example.invalid');
-  assert.equal(settings.autoWork, true);
+  assert.equal(settings.autoWork, false);
   assert.equal(settings.agentExecutionMode, 'safe');
 });
 
@@ -160,6 +160,28 @@ test('POST /api/settings validates and persists OpenAI tunnel id', async () => {
 });
 
 test('POST /api/settings no longer validates ngrokUrl as an active field', async () => {
+
+test('retired Auto Work input cannot re-enable legacy scheduling', async () => {
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('autoWork', 'true');
+  assert.equal(getSettings().autoWork, false);
+
+  await withSettingsServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ autoWork: true }),
+    });
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.success, true);
+    assert.equal(readStoredValue('autoWork'), 'false');
+
+    const getResponse = await fetch(`${baseUrl}/api/settings`);
+    const getBody = await getResponse.json() as Record<string, unknown>;
+    assert.equal(getBody.autoWork, false);
+  });
+});
+
   insertLegacyNgrokUrl('legacy-value');
 
   await withSettingsServer(async (baseUrl) => {

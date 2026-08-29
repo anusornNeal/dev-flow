@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type express from 'express';
 import type { ApiRouteDeps } from '../types';
-import { AgentOrchestrationWorker } from '../services/agentOrchestrationWorker';
 import { createApiError, sendApiError } from '../services/api';
 import {
   applyTaskCategoryAndTagsUpdate,
@@ -283,7 +282,6 @@ export function registerTaskSetAuthoringRoute(app: express.Express, deps: ApiRou
       const tasks = await withIdempotency(req.body?.idempotencyKey, fingerprint, async () => {
         const prepared = preflightTaskSet(req, deps);
         saveTasksAtomic(prepared);
-        for (const task of prepared) AgentOrchestrationWorker.maybeTrigger(task, undefined, deps, 'POST /tasks/task-set endpoint');
         return prepared;
       });
       return res.status(201).json(responsePayload(req, tasks));

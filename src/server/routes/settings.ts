@@ -1,5 +1,3 @@
-import { getProject } from '../repositories/projectRepository.js';
-import { getTasks } from '../repositories/taskRepository.js';
 import express from 'express';
 import type { ApiRouteDeps } from '../types';
 import { saveSettings, getSettings } from '../repositories/settingsRepository.js';
@@ -7,9 +5,6 @@ import fs from 'fs';
 import path from 'path';
 import db from '../../db/index';
 import { getDevFlowDataDir, getDevFlowDbPath, resolveFromDevFlowAppRoot } from '../../lib/devFlowPaths';
-import { runAgentLaunchPreflight } from '../services/agentLaunchConfig';
-import { resolveAgentExecutionMode } from '../services/agentRunService';
-import { continueTaskQueueForProject } from './tasks';
 import { getCredentialVaultDiagnostics } from '../services/credentialVaultService';
 import { createVerifiedBackupSnapshot, getRecoveryStatus, runLatestRestoreDrill, verifyBackupFile } from '../services/backupIntegrityService';
 
@@ -27,40 +22,6 @@ function persistSettingsOrRespond(res: express.Response, settings: Partial<Param
   }
 }
 
-function validateAutoWorkConfiguration(deps: ApiRouteDeps) {
-  const queuedTasks = getTasks()
-    .filter((task) => task.status === 'todo' && task.agent)
-    .sort((left, right) => new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime());
-
-  const settings = getSettings();
-  const executionMode = resolveAgentExecutionMode(settings.agentExecutionMode || process.env.DEVFLOW_AGENT_EXECUTION_MODE);
-  for (const task of queuedTasks) {
-    const project = getProject(task.projectId);
-    const preflight = runAgentLaunchPreflight({
-      agent: task.agent,
-      localPath: project?.localPath,
-      model: task.model,
-      effort: task.effort,
-      executionMode,
-      appRoot: resolveFromDevFlowAppRoot(),
-    });
-
-    if (!preflight.ok) {
-      const displayId = task.displayId || task.id;
-      return {
-        ok: false,
-        error: `Auto Work cannot be enabled because ${displayId} is not launch-ready: ${preflight.message}`,
-        code: 'AUTO_WORK_CONFIG_INVALID',
-        taskId: task.id,
-        displayId,
-        preflightCode: preflight.code,
-      };
-    }
-  }
-
-  return { ok: true };
-}
-
 export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps) {
   app.get('/api/settings', (_req, res) => {
     const settings = getSettings();
@@ -72,7 +33,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       openAiTunnelId: settings.openAiTunnelId ?? '',
       jiraBaseUrl: settings.jiraBaseUrl ?? '',
       jiraEmail: settings.jiraEmail ?? '',
-      autoWork: settings.autoWork ?? false,
+      autoWork: false,
       agentExecutionMode: settings.agentExecutionMode ?? '',
       credentialVault: getCredentialVaultDiagnostics(),
       recovery: getRecoveryStatus(),
@@ -81,7 +42,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
   app.post('/api/settings', (req, res) => {
     const settings: Partial<Parameters<typeof saveSettings>[0]> = {};
-    const { githubToken, jiraToken, figmaToken, openAiRuntimeApiKey, openAiTunnelId, jiraBaseUrl, jiraEmail, autoWork, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken, clearOpenAiRuntimeApiKey } = req.body;
+    const { githubToken, jiraToken, figmaToken, openAiRuntimeApiKey, openAiTunnelId, jiraBaseUrl, jiraEmail, agentExecutionMode, clearGithubToken, clearJiraToken, clearFigmaToken, clearOpenAiRuntimeApiKey } = req.body;
 
     // Validate types
     if (githubToken !== undefined && typeof githubToken !== 'string') {
@@ -107,9 +68,6 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
     }
     if (jiraEmail !== undefined && typeof jiraEmail !== 'string') {
       return res.status(400).json({ error: 'jiraEmail must be a string' });
-    }
-    if (autoWork !== undefined && typeof autoWork !== 'boolean') {
-      return res.status(400).json({ error: 'autoWork must be a boolean' });
     }
     if (agentExecutionMode !== undefined && typeof agentExecutionMode !== 'string') {
       return res.status(400).json({ error: 'agentExecutionMode must be a string' });
@@ -161,54 +119,6 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
 
     if (typeof jiraEmail === 'string') {
       settings.jiraEmail = jiraEmail.trim();
-    }
-
-    if (typeof autoWork === 'boolean') {
-      if (autoWork) {
-        const validation = validateAutoWorkConfiguration(deps);
-        if (!validation.ok) {
-          return res.status(409).json(validation);
-        }
-      }
-      settings.autoWork = autoWork;
-      
-      let autoWorkTrigger: any = { triggered: false, reason: 'No eligible todo tasks found.' };
-      if (autoWork) {
-        const queuedTasks = getTasks().filter(task => task.status === 'todo' && task.agent);
-        const uniqueProjectIds = Array.from(new Set(queuedTasks.map(t => t.projectId).filter(Boolean)));
-        const startedRuns: any[] = [];
-        const reasons: string[] = [];
-        for (const projectId of uniqueProjectIds) {
-          if (projectId) {
-            const result = continueTaskQueueForProject(projectId, deps);
-            if (result.triggered) {
-              if (Array.isArray(result.runs) && result.runs.length > 0) {
-                startedRuns.push(...result.runs);
-              } else if (result.run) {
-                startedRuns.push(result.run);
-              }
-            } else if (result.reason) {
-              reasons.push(result.reason);
-            }
-          }
-        }
-        if (startedRuns.length > 0) {
-          autoWorkTrigger = {
-            triggered: true,
-            reason: `Started ${startedRuns.length} eligible task(s) across ${uniqueProjectIds.length} project(s).`,
-            run: startedRuns[0],
-            runs: startedRuns,
-          };
-        } else if (reasons.length > 0) {
-          autoWorkTrigger = { triggered: false, reason: reasons[0] };
-        }
-      }
-
-      if (typeof agentExecutionMode === 'string') {
-        settings.agentExecutionMode = agentExecutionMode;
-      }
-      if (!persistSettingsOrRespond(res, settings)) return;
-      return res.json({ success: true, autoWork, autoWorkTrigger });
     }
 
     if (typeof agentExecutionMode === 'string') {

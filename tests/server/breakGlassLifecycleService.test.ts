@@ -84,7 +84,7 @@ function fixture(label: string) {
   assert.equal(executions.length, 1);
   const execution = executions[0];
   const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
-  return { root, project, task, claimed, workspace, execution, state };
+  return { root, runtimeRoot, project, task, claimed, workspace, execution, state };
 }
 
 function mutateOwned(f: ReturnType<typeof fixture>, value = 'owned-wip\n') {
@@ -105,6 +105,19 @@ function baseRequest(f: ReturnType<typeof fixture>, action: any, operationId: st
     executionSessionId: f.execution.id,
     ownershipEpochId: getExecutionSessionOwnershipEpoch(f.execution.id).ownershipEpochId,
   } as any;
+}
+
+function loseWorkspaceAuthority(f: ReturnType<typeof fixture>, options: { releaseClaim?: boolean } = {}) {
+  if (options.releaseClaim !== false) {
+    const task = getTask(f.task.id)!;
+    task.claim = undefined;
+    task.updatedAt = new Date().toISOString();
+    saveTask(task);
+  }
+  fs.rmSync(path.join(f.runtimeRoot, 'workspaces', 'registry', `${f.workspace.workspaceId}.json`), { force: true });
+  fs.rmSync(f.workspace.root, { recursive: true, force: true });
+  resetSessionWorkspaceRuntimeForTests();
+  assert.equal(getSessionWorkspaceMetadataForRecovery(f.workspace.workspaceId), null);
 }
 
 type DetachedFailureMode = 'none' | 'infrastructure' | 'code';
@@ -339,6 +352,105 @@ test('explicit discard captures bounded dirty-file evidence then removes only th
   assert.ok(Array.isArray((result.operation.evidence as any).discardIntent.dirtyFiles));
   assert.ok((result.operation.evidence as any).discardIntent.dirtyFiles.includes('owned.txt'));
   assert.ok((result.operation.evidence as any).discardIntent.dirtyFiles.includes('extra.tmp'));
+});
+
+test('supersede-execution can retire one exact stale execution after its workspace metadata is gone', () => {
+  const f = fixture('supersede-missing-workspace');
+  loseWorkspaceAuthority(f);
+
+  const request = {
+    ...baseRequest(f, 'supersede-execution', 'bg-supersede-missing-workspace-1'),
+    workspaceId: undefined,
+    noReplacement: true,
+  };
+  const result = executeBreakGlassLifecycle(f.state, request);
+
+  assert.equal(result.operation.status, 'completed');
+  assert.equal((result.operation.result as any).supersededExecutionSessionId, f.execution.id);
+  assert.equal(listExecutionSessionsForTask(f.task.id).filter((entry: any) => entry.status === 'active').length, 0);
+  assert.equal((result.operation.evidence as any).missingWorkspaceSupersession?.executionSessionId, f.execution.id);
+  assert.equal((result.operation.evidence as any).missingWorkspaceSupersession?.workspaceMetadataAvailable, false);
+});
+
+test('supersede-execution accepts a missing historical workspace id only when the exact execution recorded the same id', () => {
+  const f = fixture('supersede-missing-workspace-id');
+  loseWorkspaceAuthority(f);
+
+  const result = executeBreakGlassLifecycle(f.state, {
+    ...baseRequest(f, 'supersede-execution', 'bg-supersede-missing-workspace-id-1'),
+    noReplacement: true,
+  });
+  assert.equal(result.operation.status, 'completed');
+  assert.equal((result.operation.evidence as any).missingWorkspaceSupersession?.recordedWorkspaceId, f.workspace.workspaceId);
+
+  const mismatch = fixture('supersede-missing-workspace-mismatch');
+  loseWorkspaceAuthority(mismatch);
+  assert.throws(
+    () => executeBreakGlassLifecycle(mismatch.state, {
+      ...baseRequest(mismatch, 'supersede-execution', 'bg-supersede-missing-workspace-mismatch-1'),
+      workspaceId: 'ws_wrong_historical_id',
+      noReplacement: true,
+    }),
+    (error: any) => error?.payload?.code === 'BREAK_GLASS_EXECUTION_IDENTITY_MISMATCH',
+  );
+
+  const foreign = fixture('supersede-missing-foreign-execution');
+  loseWorkspaceAuthority(foreign);
+  assert.throws(
+    () => executeBreakGlassLifecycle(mismatch.state, {
+      ...baseRequest(mismatch, 'supersede-execution', 'bg-supersede-missing-foreign-execution-1'),
+      workspaceId: undefined,
+      executionSessionId: foreign.execution.id,
+      ownershipEpochId: getExecutionSessionOwnershipEpoch(foreign.execution.id).ownershipEpochId,
+      noReplacement: true,
+    }),
+    (error: any) => error?.payload?.code === 'BREAK_GLASS_EXECUTION_IDENTITY_MISMATCH',
+  );
+});
+
+test('missing-workspace supersession refuses a still-live claim and unresolved durable operation', () => {
+  const live = fixture('supersede-missing-live-claim');
+  loseWorkspaceAuthority(live, { releaseClaim: false });
+  assert.throws(
+    () => executeBreakGlassLifecycle(live.state, {
+      ...baseRequest(live, 'supersede-execution', 'bg-supersede-missing-live-claim-1'),
+      workspaceId: undefined,
+      noReplacement: true,
+    }),
+    (error: any) => error?.payload?.code === 'BREAK_GLASS_HARD_SAFETY_BLOCKED',
+  );
+  assert.equal(getExecutionSessionState(live.execution.id).session.status, 'active');
+
+  const pending = fixture('supersede-missing-pending');
+  loseWorkspaceAuthority(pending);
+  recordExecutionPendingOperationReference(pending.execution.id, {
+    operationId: 'missing-workspace-pending-op',
+    evidenceId: 'missing-workspace-pending-evidence',
+    kind: 'mutation',
+    status: 'running',
+  });
+  assert.throws(
+    () => executeBreakGlassLifecycle(pending.state, {
+      ...baseRequest(pending, 'supersede-execution', 'bg-supersede-missing-pending-1'),
+      workspaceId: undefined,
+      noReplacement: true,
+    }),
+    (error: any) => error?.payload?.code === 'BREAK_GLASS_PENDING_OPERATION',
+  );
+  assert.equal(getExecutionSessionState(pending.execution.id).session.status, 'active');
+});
+
+test('missing workspace remains a hard requirement for unrelated break-glass actions', () => {
+  const f = fixture('missing-workspace-other-action');
+  loseWorkspaceAuthority(f);
+  assert.throws(
+    () => executeBreakGlassLifecycle(f.state, {
+      ...baseRequest(f, 'finalize-as-integrated', 'bg-missing-workspace-finalize-1'),
+      workspaceId: undefined,
+      expectedCommit: git(f.root, ['rev-parse', 'HEAD']),
+    }),
+    (error: any) => error?.payload?.code === 'WORKSPACE_ID_REQUIRED',
+  );
 });
 
 test('supersede-execution requires explicit replacement identity and preserves historical audit evidence', () => {

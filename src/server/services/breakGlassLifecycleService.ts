@@ -185,10 +185,10 @@ function validateExpectedExecution(task: any, input: BreakGlassLifecycleInput) {
   const expectedId = clean(input.executionSessionId, 200);
   if (!expectedId) return null;
   const session = getExecutionSessionById(expectedId);
-  if (!session || session.taskId !== task.id || (input.workspaceId && session.workspaceId !== input.workspaceId)) {
-    throw createApiError(409, 'BREAK_GLASS_EXECUTION_IDENTITY_MISMATCH', 'Expected execution identity does not match the selected task/workspace.', {
+  if (!session || session.taskId !== task.id || session.projectId !== task.projectId || (input.workspaceId && session.workspaceId !== input.workspaceId)) {
+    throw createApiError(409, 'BREAK_GLASS_EXECUTION_IDENTITY_MISMATCH', 'Expected execution identity does not match the selected project/task/workspace.', {
       affectedId: expectedId,
-      details: { taskId: task.id, workspaceId: input.workspaceId || null },
+      details: { projectId: task.projectId, taskId: task.id, workspaceId: input.workspaceId || null },
     });
   }
   const expectedEpoch = clean(input.ownershipEpochId, 200);
@@ -200,6 +200,42 @@ function validateExpectedExecution(task: any, input: BreakGlassLifecycleInput) {
     });
   }
   return session;
+}
+
+function resolveSupersedeExecutionWorkspace(task: any, input: BreakGlassLifecycleInput) {
+  const targeted = validateExpectedExecution(task, input);
+  if (!targeted) throw createApiError(400, 'EXECUTION_SESSION_ID_REQUIRED', 'supersede-execution requires executionSessionId.');
+  const requestedWorkspaceId = clean(input.workspaceId, 200);
+  const recordedWorkspaceId = clean(targeted.workspaceId, 200);
+  const recordedWorkspace = recordedWorkspaceId ? getSessionWorkspaceMetadataForRecovery(recordedWorkspaceId) : null;
+
+  if (requestedWorkspaceId) {
+    if (recordedWorkspace) return { targeted, workspace: expectedWorkspace(task, input, true), missingWorkspace: null };
+    return {
+      targeted,
+      workspace: null,
+      missingWorkspace: {
+        executionSessionId: targeted.id,
+        recordedWorkspaceId: recordedWorkspaceId || null,
+        requestedWorkspaceId,
+        workspaceMetadataAvailable: false,
+      },
+    };
+  }
+
+  if (recordedWorkspace) {
+    throw createApiError(400, 'WORKSPACE_ID_REQUIRED', "workspaceId is required for break-glass action 'supersede-execution' while the managed workspace remains available.");
+  }
+  return {
+    targeted,
+    workspace: null,
+    missingWorkspace: {
+      executionSessionId: targeted.id,
+      recordedWorkspaceId: recordedWorkspaceId || null,
+      requestedWorkspaceId: null,
+      workspaceMetadataAvailable: false,
+    },
+  };
 }
 
 function assertCurrentCandidate(authority: ReturnType<typeof computeLifecycleAuthoritySnapshot>, input: BreakGlassLifecycleInput) {
@@ -230,12 +266,22 @@ function hardSafetyChecks(authority: ReturnType<typeof computeLifecycleAuthority
       && Boolean(clean(input.executionSessionId));
     const detachedMissingWorkspace = input.action === 'reconcile-integrated-detached'
       && blocker.code === 'WORKSPACE_METADATA_MISSING';
-    const passed = targetedSupersession || detachedMissingWorkspace;
+    const staleExecutionMissingWorkspace = input.action === 'supersede-execution'
+      && blocker.code === 'WORKSPACE_METADATA_MISSING'
+      && Boolean(clean(input.executionSessionId))
+      && authority.claim.active !== true;
+    const passed = targetedSupersession || detachedMissingWorkspace || staleExecutionMissingWorkspace;
     checks.push({
       code: blocker.code,
       passed,
       message: blocker.message,
-      bypass: targetedSupersession ? 'explicit-targeted-supersession' : detachedMissingWorkspace ? 'detached-integrated-exact-proof' : null,
+      bypass: targetedSupersession
+        ? 'explicit-targeted-supersession'
+        : detachedMissingWorkspace
+          ? 'detached-integrated-exact-proof'
+          : staleExecutionMissingWorkspace
+            ? 'exact-stale-execution-missing-workspace'
+            : null,
     });
     if (!passed) {
       throw createApiError(409, 'BREAK_GLASS_HARD_SAFETY_BLOCKED', 'Break-glass cannot bypass repository/workspace/cross-worker identity safety.', {
@@ -796,12 +842,25 @@ function executeSupersede(operation: LifecycleEmergencyOperationRecord, input: B
       updatedAt: now,
     });
   }
+  const missingWorkspaceSupersession = input.action === 'supersede-execution' && targeted && !workspace
+    ? {
+        executionSessionId: targeted.id,
+        recordedWorkspaceId: clean(targeted.workspaceId, 200) || null,
+        requestedWorkspaceId: clean(input.workspaceId, 200) || null,
+        workspaceMetadataAvailable: false,
+      }
+    : null;
   return completion(operation, task.id, workspace?.workspaceId, {
     action: input.action,
     supersededExecutionSessionId: targeted?.id || null,
     replacement,
     noReplacement: input.noReplacement === true,
-  }, { replacement, noReplacement: input.noReplacement === true }, ['SUPERSESSION_POLICY'], hardChecks, 'preserved');
+  }, {
+    ...(operation.evidence || {}),
+    replacement,
+    noReplacement: input.noReplacement === true,
+    ...(missingWorkspaceSupersession ? { missingWorkspaceSupersession } : {}),
+  }, missingWorkspaceSupersession ? ['SUPERSESSION_POLICY', 'WORKSPACE_METADATA_MISSING'] : ['SUPERSESSION_POLICY'], hardChecks, 'preserved');
 }
 
 export function executeBreakGlassLifecycle(state: AppState, input: BreakGlassLifecycleInput) {
@@ -829,8 +888,15 @@ export function executeBreakGlassLifecycle(state: AppState, input: BreakGlassLif
     }
 
     let before: ReturnType<typeof computeLifecycleAuthoritySnapshot>;
-    try { before = computeLifecycleAuthoritySnapshot(task.id, { workspaceId: input.workspaceId }); }
-    catch (error) { throw error; }
+    const requestedWorkspaceId = clean(input.workspaceId, 200);
+    const missingSupersedeWorkspace = input.action === 'supersede-execution'
+      && requestedWorkspaceId
+      && !getSessionWorkspaceMetadataForRecovery(requestedWorkspaceId);
+    try {
+      before = computeLifecycleAuthoritySnapshot(task.id, {
+        workspaceId: missingSupersedeWorkspace ? undefined : input.workspaceId,
+      });
+    } catch (error) { throw error; }
     let operation = existing || createLifecycleEmergencyOperation({
       id: required.operationId,
       requestDigest,
@@ -864,7 +930,6 @@ export function executeBreakGlassLifecycle(state: AppState, input: BreakGlassLif
       if (task.projectId !== required.projectId) throw createApiError(409, 'BREAK_GLASS_PROJECT_IDENTITY_MISMATCH', 'Selected task belongs to a different project than the break-glass request.', { details: { requestedProjectId: required.projectId, actualProjectId: task.projectId } });
       const project = getProject(task.projectId);
       if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${task.projectId}' was not found.`);
-      const requestedWorkspaceId = clean(input.workspaceId, 200);
       const priorDiscardIntent = (operation.evidence as any)?.discardIntent;
       if (input.action === 'discard-wip' && input.destructiveAck === true && priorDiscardIntent && requestedWorkspaceId && !getSessionWorkspaceMetadataForRecovery(requestedWorkspaceId)) {
         return { replayed: false, operation: completion(operation, task.id, undefined, {
@@ -872,14 +937,19 @@ export function executeBreakGlassLifecycle(state: AppState, input: BreakGlassLif
           cleanup: { removed: true, workspaceId: requestedWorkspaceId, recoveredAfterResponseLoss: true },
         }, operation.evidence || {}, operation.bypassedGates || ['DIRTY_WIP_PRESERVATION'], operation.hardChecks || [], 'discarded-explicitly') };
       }
-      const workspaceRequired = !['supersede-task-work', 'reconcile-integrated-detached'].includes(input.action);
+      const workspaceRequired = !['supersede-task-work', 'supersede-execution', 'reconcile-integrated-detached'].includes(input.action);
+      const supersedeExecutionContext = input.action === 'supersede-execution'
+        ? resolveSupersedeExecutionWorkspace(task, input)
+        : null;
       const workspace = input.action === 'reconcile-integrated-detached'
         ? null
-        : expectedWorkspace(task, input, workspaceRequired);
+        : supersedeExecutionContext
+          ? supersedeExecutionContext.workspace
+          : expectedWorkspace(task, input, workspaceRequired);
       const authority = computeLifecycleAuthoritySnapshot(task.id, { workspaceId: workspace?.workspaceId || input.workspaceId });
       assertCurrentCandidate(authority, input);
       hardChecks = hardSafetyChecks(authority, input);
-      validateExpectedExecution(task, input);
+      if (!supersedeExecutionContext) validateExpectedExecution(task, input);
 
       if (input.action === 'commit-current-owned-diff') {
         if (!workspace) throw createApiError(400, 'WORKSPACE_ID_REQUIRED', 'Emergency commit requires workspaceId.');

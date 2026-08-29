@@ -143,6 +143,58 @@ function gitTreeIdentity(root: string, head: string) {
   return result.status === 0 && /^[a-f0-9]{40,64}$/.test(treeId) ? treeId : null;
 }
 
+export type RepoRevisionPathDelta = {
+  available: boolean;
+  fromRevision: string;
+  toRevision: string;
+  paths: string[];
+  truncated: boolean;
+  errorCode?: string;
+};
+
+export function getRepoChangedPathsBetweenRevisions(
+  root: string,
+  fromRevision: string,
+  toRevision: string,
+  limit = 50,
+): RepoRevisionPathDelta {
+  const normalizedRoot = path.resolve(root);
+  const from = String(fromRevision || '').trim().toLowerCase();
+  const to = String(toRevision || '').trim().toLowerCase();
+  const boundedLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
+  const unavailable = (errorCode: string): RepoRevisionPathDelta => ({
+    available: false,
+    fromRevision: from,
+    toRevision: to,
+    paths: [],
+    truncated: false,
+    errorCode,
+  });
+  if (!/^[a-f0-9]{7,64}$/.test(from) || !/^[a-f0-9]{7,64}$/.test(to)) return unavailable('REVISION_INVALID');
+  if (from === to) return { available: true, fromRevision: from, toRevision: to, paths: [], truncated: false };
+
+  const result = spawnSync('git', ['diff', '--name-only', '-z', from, to, '--'], {
+    cwd: normalizedRoot,
+    encoding: 'utf8',
+    shell: false,
+    timeout: 10_000,
+    maxBuffer: 256 * 1024,
+  });
+  if (result.error || result.status !== 0) return unavailable(result.error ? 'REVISION_DIFF_FAILED' : 'REVISION_UNRESOLVED');
+  const paths = Array.from(new Set(String(result.stdout || '')
+    .split('\0')
+    .map((entry) => entry.trim().replace(/\\/g, '/').replace(/^\.\//, ''))
+    .filter(Boolean)))
+    .sort();
+  return {
+    available: true,
+    fromRevision: from,
+    toRevision: to,
+    paths: paths.slice(0, boundedLimit),
+    truncated: paths.length > boundedLimit,
+  };
+}
+
 export function getRepoRevisionForRoot(root: string): RepoRevision {
   const normalizedRoot = path.resolve(root);
   const workspace = getGitWorkspaceSnapshotForRoot(normalizedRoot);

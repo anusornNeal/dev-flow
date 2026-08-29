@@ -1154,6 +1154,18 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
         code: runtimeDiagnosis.code,
         restartBlocked: runtimeDiagnosis.restartSafety?.blocked === true,
         restartSafety: restartSafetySummary,
+        ...(runtimeDiagnosis.contractImpact ? {
+          contractImpact: {
+            code: runtimeDiagnosis.contractImpact.code,
+            loadedRevision: runtimeDiagnosis.contractImpact.loadedRevision,
+            currentRevision: runtimeDiagnosis.contractImpact.currentRevision,
+            changedPaths: runtimeDiagnosis.contractImpact.changedPaths.slice(0, 20),
+            matchedPaths: runtimeDiagnosis.contractImpact.matchedPaths.slice(0, 20),
+            truncated: runtimeDiagnosis.contractImpact.truncated,
+            reasonCodes: runtimeDiagnosis.contractImpact.reasonCodes.slice(0, 8),
+          },
+        } : {}),
+        ...(runtimeDiagnosis.runningToolSurfaceIdentity ? { runningToolSurfaceIdentity: runtimeDiagnosis.runningToolSurfaceIdentity } : {}),
       } : null,
       repoCaches: compactRepoCaches,
       search: {

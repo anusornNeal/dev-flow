@@ -991,18 +991,26 @@ test('workflow health surfaces stale source with hard restart blockers separated
   const execution = seedHealthExecution('exec-health-restart-debt', task.id, workspace.workspaceId);
   const before = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
   assert.equal(before.runtime.sourceFreshness.code, 'current');
-  fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source v2\n');
-  git(runtimeSourceRoot, ['add', 'runtime-source.txt']);
-  git(runtimeSourceRoot, ['commit', '-m', 'runtime source v2']);
+  const contractPath = path.join(runtimeSourceRoot, 'src', 'server', 'contracts', 'devflowContract.ts');
+  fs.mkdirSync(path.dirname(contractPath), { recursive: true });
+  fs.writeFileSync(contractPath, 'export const contractSurface = 2;\n');
+  git(runtimeSourceRoot, ['add', 'src/server/contracts/devflowContract.ts']);
+  git(runtimeSourceRoot, ['commit', '-m', 'contract surface v2']);
 
   try {
     const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
     const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
     assert.equal(compact.runtime.sourceFreshness.code, 'stale');
-    assert.equal(compact.runtime.diagnosis.code, 'runtime-source-stale');
+    assert.equal(compact.runtime.diagnosis.code, 'runtime-source-stale-contract-sensitive');
+    assert.equal(compact.runtime.diagnosis.contractImpact.code, 'contract-sensitive');
+    assert.equal(compact.runtime.diagnosis.contractImpact.matchedPaths.includes('src/server/contracts/devflowContract.ts'), true);
+    assert.match(compact.runtime.diagnosis.runningToolSurfaceIdentity, /^[0-9a-f]{64}$/);
     assert.equal(compact.runtime.diagnosis.restartSafety.cleanupDebtCount >= 1, true);
     assert.equal(compact.runtime.diagnosis.restartSafety.debtReasonCodes.includes('SAFE_ORPHAN_EXECUTION'), true);
     assert.equal(full.diagnostics.runtimeSource.restartSafety.cleanupDebtCount >= 1, true);
+    assert.equal(full.diagnostics.runtimeSource.diagnosis.code, 'runtime-source-stale-contract-sensitive');
+    assert.equal(full.diagnostics.runtimeSource.diagnosis.contractImpact.code, 'contract-sensitive');
+    assert.equal(full.diagnostics.runtimeSource.diagnosis.contractImpact.matchedPaths.includes('src/server/contracts/devflowContract.ts'), true);
     assert.equal(full.diagnostics.runtimeSource.diagnosis.restartSafety.cleanupDebt.some((entry: any) =>
       entry.executionSessionId === execution.id && entry.classification === 'safe-orphan'), true);
     assert.equal(full.diagnostics.runtimeSource.diagnosis.restartSafety.active.some((entry: any) =>

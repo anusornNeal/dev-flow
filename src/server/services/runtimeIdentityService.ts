@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths.js';
-import { getRepoRevisionForRoot } from './repoRevisionService.js';
+import { getRepoChangedPathsBetweenRevisions, getRepoRevisionForRoot } from './repoRevisionService.js';
 import { queryExecutionSessions } from '../repositories/executionSessionRepository.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { classifyLifecycleLiveWorkAuthority, type LiveWorkAuthorityClassification } from './lifecycleAuthorityService.js';
@@ -37,6 +37,18 @@ export interface RuntimeSourceFreshness {
   detail: string;
   nextAction: string;
 }
+export type RuntimeContractImpactCode = 'not-applicable' | 'none' | 'contract-sensitive' | 'unknown';
+
+export interface RuntimeContractImpact {
+  code: RuntimeContractImpactCode;
+  loadedRevision: string | null;
+  currentRevision: string | null;
+  changedPaths: string[];
+  matchedPaths: string[];
+  truncated: boolean;
+  reasonCodes: string[];
+}
+
 
 export interface RuntimeRestartSafetyEntry {
   taskId: string | null;
@@ -91,6 +103,7 @@ export type RuntimeDiagnosisCode =
   | 'client-registry-desync'
   | 'contract-changed'
   | 'runtime-source-stale'
+  | 'runtime-source-stale-contract-sensitive'
   | 'runtime-source-dirty-ambiguous'
   | 'runtime-source-unavailable'
   | 'runtime-current';
@@ -103,6 +116,9 @@ export interface RuntimeDiagnosis {
   sourceFreshness?: RuntimeSourceFreshness;
   concurrentDiagnostics?: RuntimeDiagnosis[];
   restartSafety?: RuntimeRestartSafety;
+  contractImpact?: RuntimeContractImpact;
+  runningToolSurfaceIdentity?: string;
+
 }
 
 export type RuntimeRecoveryClientObservationState = 'unknown' | 'ready' | 'stale' | 'missing-tools';
@@ -342,6 +358,86 @@ export function getRuntimeSourceFreshness(): RuntimeSourceFreshness {
   };
 }
 
+const MAX_RUNTIME_CONTRACT_GAP_PATHS = 50;
+const MAX_RUNTIME_CONTRACT_MATCHED_PATHS = 20;
+const RUNTIME_CONTRACT_SENSITIVE_PREFIXES = ['src/server/contracts/'] as const;
+const RUNTIME_CONTRACT_SENSITIVE_PATHS = new Set([
+  'src/server/mcp.ts',
+  'src/server/routes/devflow.ts',
+  'src/server/services/mcpToolMonitor.ts',
+  'src/server/services/mcpTransportMonitor.ts',
+  'src/server/services/runtimeIdentityService.ts',
+  'src/server/services/workflowHealthService.ts',
+  'src/server/services/workflowRecoveryHandoffService.ts',
+]);
+
+function isRuntimeContractSensitivePath(value: string) {
+  const normalized = String(value || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  return RUNTIME_CONTRACT_SENSITIVE_PATHS.has(normalized)
+    || RUNTIME_CONTRACT_SENSITIVE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+export function getRuntimeContractImpact(source: RuntimeSourceFreshness = getRuntimeSourceFreshness()): RuntimeContractImpact {
+  const common = {
+    loadedRevision: source.loadedRevision,
+    currentRevision: source.currentRevision,
+    changedPaths: [] as string[],
+    matchedPaths: [] as string[],
+    truncated: false,
+  };
+  if (source.code !== 'stale') {
+    return { code: 'not-applicable', ...common, reasonCodes: ['RUNTIME_SOURCE_NOT_STALE'] };
+  }
+  if (!source.loadedRevision || !source.currentRevision) {
+    return { code: 'unknown', ...common, reasonCodes: ['RUNTIME_REVISION_GAP_UNAVAILABLE'] };
+  }
+  const delta = getRepoChangedPathsBetweenRevisions(
+    runtimeSourceRoot(),
+    source.loadedRevision,
+    source.currentRevision,
+    MAX_RUNTIME_CONTRACT_GAP_PATHS,
+  );
+  if (!delta.available) {
+    return {
+      code: 'unknown',
+      ...common,
+      reasonCodes: ['RUNTIME_REVISION_GAP_UNAVAILABLE', delta.errorCode || 'REVISION_DIFF_FAILED'],
+    };
+  }
+  const matchedPaths = delta.paths.filter(isRuntimeContractSensitivePath).slice(0, MAX_RUNTIME_CONTRACT_MATCHED_PATHS);
+  if (matchedPaths.length > 0) {
+    return {
+      code: 'contract-sensitive',
+      loadedRevision: source.loadedRevision,
+      currentRevision: source.currentRevision,
+      changedPaths: delta.paths,
+      matchedPaths,
+      truncated: delta.truncated,
+      reasonCodes: ['RUNTIME_CONTRACT_SURFACE_CHANGED', ...(delta.truncated ? ['RUNTIME_REVISION_GAP_TRUNCATED'] : [])],
+    };
+  }
+  if (delta.truncated) {
+    return {
+      code: 'unknown',
+      loadedRevision: source.loadedRevision,
+      currentRevision: source.currentRevision,
+      changedPaths: delta.paths,
+      matchedPaths: [],
+      truncated: true,
+      reasonCodes: ['RUNTIME_REVISION_GAP_TRUNCATED', 'RUNTIME_CONTRACT_IMPACT_UNPROVEN'],
+    };
+  }
+  return {
+    code: 'none',
+    loadedRevision: source.loadedRevision,
+    currentRevision: source.currentRevision,
+    changedPaths: delta.paths,
+    matchedPaths: [],
+    truncated: false,
+    reasonCodes: ['RUNTIME_REVISION_GAP_NON_CONTRACT'],
+  };
+}
+
 export function getRuntimeRestartSafety(): RuntimeRestartSafety {
   const query = queryExecutionSessions({ status: 'active', limit: 100 });
   const authorityByTask = new Map<string, ReturnType<typeof classifyLifecycleLiveWorkAuthority> | null>();
@@ -534,19 +630,36 @@ export function classifyRuntimeIdentity(
   clientState?: RuntimeClientState,
 ): RuntimeDiagnosis | undefined {
   const source = current.sourceFreshness || getRuntimeSourceFreshness();
-  const sourceDiagnosis = classifySourceFreshness(source);
+  let sourceDiagnosis = classifySourceFreshness(source);
   const clientDiagnosis = classifyClientRuntimeIdentity(current, clientState);
+  if (sourceDiagnosis && source.code === 'stale') {
+    const contractImpact = getRuntimeContractImpact(source);
+    sourceDiagnosis = contractImpact.code === 'contract-sensitive'
+      ? {
+          code: 'runtime-source-stale-contract-sensitive',
+          detail: `${source.detail} The loaded-to-current revision gap touches authoritative MCP/runtime contract surfaces (${contractImpact.matchedPaths.join(', ')}).`,
+          nextAction: 'Use the existing guarded API restart when restart safety permits, then reconnect/refresh the client tool registry. Until then, rely only on the currently advertised running tool surface and do not infer newly integrated runtime/tool behavior.',
+          recoverySurface: 'get_recovery_handoff',
+          sourceFreshness: source,
+          contractImpact,
+          runningToolSurfaceIdentity: current.toolSurfaceIdentity,
+        }
+      : { ...sourceDiagnosis, contractImpact, runningToolSurfaceIdentity: current.toolSurfaceIdentity };
+  }
 
   if (sourceDiagnosis) {
     const restartSafety = getRuntimeRestartSafety();
     const blockerIdentities = restartSafety.active
       .map((entry) => `${entry.taskId || 'task-unknown'}/${entry.executionSessionId}/${entry.stage}`)
       .join(', ');
+    const contractSensitive = sourceDiagnosis.code === 'runtime-source-stale-contract-sensitive';
     const diagnosed = restartSafety.blocked
       ? {
           ...sourceDiagnosis,
           restartSafety,
-          nextAction: `Restart is blocked by durable operation or active WIP risk (${blockerIdentities || 'bounded active-session scan is truncated'}). Resolve or preserve the reported pending operation/WIP safely, then restart; lifecycle stage labels alone do not authorize or block restart.`,
+          nextAction: contractSensitive
+            ? `The running MCP/runtime contract is stale and restart is blocked by authoritative live work (${blockerIdentities || 'bounded active-session scan is truncated'}). Continue only compatible already-owned work or mechanical finalization using the currently advertised tool surface; do not reason from newly integrated runtime/tool behavior. Resolve or preserve blockers, then use the guarded API restart and reconnect/refresh the client registry.`
+            : `Restart is blocked by durable operation or active WIP risk (${blockerIdentities || 'bounded active-session scan is truncated'}). Resolve or preserve the reported pending operation/WIP safely, then restart; lifecycle stage labels alone do not authorize or block restart.`,
         }
       : restartSafety.cleanupDebt.length > 0
         ? {

@@ -74,9 +74,11 @@ function runtimeEvidence(args: RecoveryArgs) {
   const clientDiagnosis = classifiedDiagnosis && clientRecoveryCodes.has(classifiedDiagnosis.code)
     ? classifiedDiagnosis
     : classifiedDiagnosis?.concurrentDiagnostics?.find((entry) => clientRecoveryCodes.has(entry.code));
-  const diagnosis = recoveryParity.endToEnd.ready === false && clientDiagnosis && clientDiagnosis !== classifiedDiagnosis
-    ? { ...clientDiagnosis, concurrentDiagnostics: [classifiedDiagnosis!] }
-    : classifiedDiagnosis;
+  const diagnosis = classifiedDiagnosis?.code === 'runtime-source-stale-contract-sensitive'
+    ? classifiedDiagnosis
+    : recoveryParity.endToEnd.ready === false && clientDiagnosis && clientDiagnosis !== classifiedDiagnosis
+      ? { ...clientDiagnosis, concurrentDiagnostics: [classifiedDiagnosis!] }
+      : classifiedDiagnosis;
   return { diagnosis, recoveryParity, current, clientState };
 }
 

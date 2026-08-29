@@ -102,6 +102,65 @@ test('clean commit mismatch with the same Git tree is content-equivalent and req
   }
 });
 
+test('stale runtime classifies only authoritative contract revision gaps as tool-surface sensitive and clears after restart', () => {
+  const originalHead = runtimeGit(['rev-parse', 'HEAD']);
+  try {
+    const docsPath = path.join(runtimeSourceRoot, 'docs', 'runtime-note.md');
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'ui/docs only\n', 'utf8');
+    runtimeGit(['add', 'docs/runtime-note.md']);
+    runtimeGit(['commit', '-m', 'docs only runtime gap']);
+    const docsOnly = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(docsOnly.runtimeDiagnosis.code, 'runtime-source-stale');
+    assert.equal(docsOnly.runtimeDiagnosis.contractImpact.code, 'none');
+    assert.deepEqual(docsOnly.runtimeDiagnosis.contractImpact.matchedPaths, []);
+    assert.equal(docsOnly.runtimeDiagnosis.contractImpact.changedPaths.includes('docs/runtime-note.md'), true);
+
+    runtimeGit(['reset', '--hard', originalHead]);
+    const contractRelativePath = 'src/server/contracts/devflowContract.ts';
+    const contractPath = path.join(runtimeSourceRoot, ...contractRelativePath.split('/'));
+    fs.mkdirSync(path.dirname(contractPath), { recursive: true });
+    fs.writeFileSync(contractPath, 'export const fixtureContract = 2;\n', 'utf8');
+    runtimeGit(['add', contractRelativePath]);
+    runtimeGit(['commit', '-m', 'contract sensitive runtime gap']);
+    const contractHead = runtimeGit(['rev-parse', 'HEAD']);
+    const impacted = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(impacted.runtimeDiagnosis.code, 'runtime-source-stale-contract-sensitive');
+    assert.equal(impacted.runtimeDiagnosis.contractImpact.code, 'contract-sensitive');
+    assert.equal(impacted.runtimeDiagnosis.contractImpact.loadedRevision, originalHead);
+    assert.equal(impacted.runtimeDiagnosis.contractImpact.currentRevision, contractHead);
+    assert.equal(impacted.runtimeDiagnosis.contractImpact.matchedPaths.includes(contractRelativePath), true);
+    assert.equal(impacted.runtimeDiagnosis.runningToolSurfaceIdentity, impacted.runtime.toolSurfaceIdentity);
+    assert.match(impacted.runtimeDiagnosis.runningToolSurfaceIdentity, /^[0-9a-f]{64}$/);
+    assert.match(impacted.runtimeDiagnosis.nextAction, /guarded|restart|reconnect|advertised/i);
+
+    const childRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-contract-sensitive-restart-'));
+    const code = [
+      `process.env.DEVFLOW_APP_ROOT=${JSON.stringify(childRoot)};`,
+      `process.env.DEVFLOW_DB_PATH=${JSON.stringify(path.join(childRoot, 'devflow.db'))};`,
+      `process.env.DEVFLOW_JOBS_DIR=${JSON.stringify(path.join(childRoot, 'jobs'))};`,
+      `process.env.DEVFLOW_RUNTIME_SOURCE_ROOT=${JSON.stringify(runtimeSourceRoot)};`,
+      `const migrations=await import('./src/db/migrations/index.js');`,
+      `migrations.executeAllMigrations();`,
+      `const monitor=await import('./src/server/services/mcpToolMonitor.js');`,
+      `const diagnostics=monitor.getDevFlowDiagnostics({supervisorState:null});`,
+      `console.log(JSON.stringify({source:diagnostics.runtime.sourceFreshness, diagnosis:diagnostics.runtimeDiagnosis?.code || null}));`,
+    ].join('');
+    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
+      cwd: process.cwd(),
+      env: { ...process.env },
+      encoding: 'utf8',
+    });
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    const restarted = JSON.parse(child.stdout.trim().split(/\r?\n/).at(-1) || '{}');
+    assert.equal(restarted.source.code, 'current');
+    assert.equal(restarted.source.loadedRevision, contractHead);
+    assert.equal(restarted.diagnosis, null);
+  } finally {
+    runtimeGit(['reset', '--hard', originalHead]);
+  }
+});
+
 test('restart safety ignores safe-orphan changedFiles, but blocks live durable and live ownership authority', () => {
   const task = seedRuntimeTask('task-runtime-source-active', 'RT-0001');
   const workspace = sessionWorkspaces.createOrReuseSessionWorkspace(

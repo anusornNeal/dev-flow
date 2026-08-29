@@ -9,6 +9,7 @@ import express from 'express';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workflow-recovery-handoff-'));
 const repoRoot = path.join(tempRoot, 'repo');
+process.env.DEVFLOW_RUNTIME_SOURCE_ROOT = repoRoot;
 process.env.DEVFLOW_APP_ROOT = tempRoot;
 process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.db');
 process.env.DEVFLOW_JOBS_DIR = path.join(tempRoot, 'jobs');
@@ -865,6 +866,7 @@ test('recovery handoff correlates client registry loss with durable execution st
 });
 
 test('recovery handoff reports runtime restart from identity evidence and transport cutoff remains unknown when no trace proves abort/expiry', async () => {
+
   transportMonitor.clearMcpTransportRecords();
   const fixture = seedClaimedTask('cutoff-restart');
   seedCurrentExecution(fixture, 'cutoff-restart');
@@ -883,4 +885,39 @@ test('recovery handoff reports runtime restart from identity evidence and transp
     assert.equal(body.cutoffEvidence.transport.classification, 'unknown');
     assert.equal(body.cutoffEvidence.runtime.previousRuntimeObserved, true);
   });
+});
+
+test('recovery handoff preserves contract-sensitive stale-runtime diagnosis and running surface evidence', async () => {
+  const fixture = seedClaimedTask('stale-contract-handoff');
+  seedCurrentExecution(fixture, 'stale-contract-handoff');
+  const originalHead = git(repoRoot, ['rev-parse', 'HEAD']);
+
+  try {
+    await withServer(async (baseUrl) => {
+      const capabilities = await (await fetch(`${baseUrl}/api/capabilities`)).json() as any;
+      const contractRelativePath = 'src/server/contracts/devflowContract.ts';
+      const contractPath = path.join(repoRoot, ...contractRelativePath.split('/'));
+      fs.mkdirSync(path.dirname(contractPath), { recursive: true });
+      fs.writeFileSync(contractPath, 'export const recoveryContractSurface = 2;\n', 'utf8');
+      git(repoRoot, ['add', contractRelativePath]);
+      git(repoRoot, ['commit', '-m', 'contract sensitive recovery gap']);
+
+      const { response, body } = await json(baseUrl, new URLSearchParams({
+        taskId: fixture.displayId,
+        previousContractVersion: capabilities.contractVersion,
+        previousRuntimeInstanceId: capabilities.runtimeInstanceId,
+        previousToolSurfaceIdentity: capabilities.toolSurfaceIdentity,
+        clientToolsVisible: 'true',
+      }));
+      assert.equal(response.status, 200);
+      assert.equal(body.diagnosis.code, 'runtime-source-stale-contract-sensitive');
+      assert.equal(body.diagnosis.contractImpact.code, 'contract-sensitive');
+      assert.equal(body.diagnosis.contractImpact.matchedPaths.includes(contractRelativePath), true);
+      assert.equal(body.diagnosis.runningToolSurfaceIdentity, capabilities.toolSurfaceIdentity);
+      assert.equal(body.diagnosis.restartSafety.blocked, true);
+      assert.match(body.diagnosis.nextAction, /already-owned|compatible|advertised|guarded/i);
+    });
+  } finally {
+    git(repoRoot, ['reset', '--hard', originalHead]);
+  }
 });

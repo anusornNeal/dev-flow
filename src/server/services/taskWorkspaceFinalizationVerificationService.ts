@@ -114,6 +114,25 @@ function verificationCheckMatchesRequirement(
     && actualTargets.every((target, index) => target === requiredTargets[index]);
 }
 
+export function postIntegrationRequirementsAttempted(
+  requirement: PostIntegrationRequirement,
+  checks: TaskWorkspaceFinalizationCheck[],
+): boolean {
+  if (!requirement.required || requirement.missingChecks.length === 0) return true;
+  const revisionChecks = checks.filter((check) => String(check.repoRevision || '').trim() === requirement.repoRevision);
+  return requirement.missingChecks.every((missing) => revisionChecks.some((check) => (
+    (check.status === 'failed' || check.status === 'not-run')
+    && verificationCheckMatchesRequirement(check, missing)
+  )));
+}
+
+export function __postIntegrationRequirementsAttemptedForTests(input: {
+  requirement: PostIntegrationRequirement;
+  checks: TaskWorkspaceFinalizationCheck[];
+}) {
+  return postIntegrationRequirementsAttempted(input.requirement, input.checks);
+}
+
 type PostIntegrationCommandFailureKind = NonNullable<TaskWorkspaceFinalizationCheck['failureKind']>;
 
 function classifyPostIntegrationCommandResult(

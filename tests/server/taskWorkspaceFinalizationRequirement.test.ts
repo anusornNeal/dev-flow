@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   __classifyPostIntegrationCommandResultForTests,
   __evaluatePostIntegrationRequirementForTests,
+  __postIntegrationRequirementsAttemptedForTests,
 } from '../../src/server/services/taskWorkspaceFinalizationService.js';
 
 function plan(checks: Array<{ command: string; targets?: string[] }>) {
@@ -70,6 +71,29 @@ test('failed exact-revision verification remains an unsatisfied requirement with
   assert.deepEqual(requirement.missingChecks, checks);
   assert.deepEqual(requirement.missingCommands, ['test']);
   assert.match(requirement.reason, /still non-passing: test/);
+});
+
+test('terminal failed or not-run exact-revision attempts preserve debt without retrying forever', () => {
+  const required = [{ command: 'test' }];
+  const requirement = __evaluatePostIntegrationRequirementForTests({
+    integration,
+    checks: [],
+    sourcePlan: plan(required),
+    combinedPlan: plan(required),
+  });
+
+  assert.equal(__postIntegrationRequirementsAttemptedForTests({
+    requirement,
+    checks: [{ command: 'test', status: 'failed', scope: 'full', repoRevision: 'integrated-head', failureKind: 'timeout' }],
+  }), true);
+  assert.equal(__postIntegrationRequirementsAttemptedForTests({
+    requirement,
+    checks: [{ command: 'test', status: 'not-run', scope: 'broad', repoRevision: 'integrated-head', failureKind: 'workspace-setup' }],
+  }), true);
+  assert.equal(__postIntegrationRequirementsAttemptedForTests({
+    requirement,
+    checks: [{ command: 'test', status: 'failed', scope: 'full', repoRevision: 'stale-head', failureKind: 'command-failed' }],
+  }), false);
 });
 
 test('target-aware requirement only clears after the exact command+targets identity passes', () => {

@@ -453,32 +453,27 @@ test('integration conflict is preserved and shared base is not marked done', () 
   assert.equal(git(root, ['status', '--porcelain']).stdout, '');
 });
 
-test('finalization preserves checklist and verification debt while pausing for required combined-state verification', () => {
+test('finalization preserves checklist and verification debt while completing after a terminal combined-state verification attempt', () => {
   const incomplete = fixture('guards-incomplete');
   const saved = getTask(incomplete.task.id)!;
   saved.checklist[0].completed = false;
   saveTask(saved);
   const failedChecks = [{ name: 'focused', command: 'focused-test', status: 'failed' as const, summary: 'known quality debt' }];
   const withDebt = finalizeTaskWorkspace(incomplete.state, { taskId: incomplete.task.id, workspaceId: incomplete.workspace.workspaceId, checks: failedChecks });
-  assert.equal(withDebt.status, 'continuation');
-  assert.equal(withDebt.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
-  assert.equal(getTask(incomplete.task.id)?.status, 'in-progress');
+  assert.equal(withDebt.status, 'completed');
+  assert.equal(getTask(incomplete.task.id)?.status, 'done');
   assert.equal(getTask(incomplete.task.id)?.checklist?.[0]?.completed, false);
-  assert.equal(fs.existsSync(incomplete.workspace.root), true);
+  assert.equal(fs.existsSync(incomplete.workspace.root), false);
   assert.deepEqual((withDebt.operation.verification as any)?.qualityDebt?.map((entry: any) => entry.code).sort(), ['CHECKLIST_INCOMPLETE', 'POST_INTEGRATION_VERIFICATION_REQUIRED', 'VERIFICATION_NOT_PASSED']);
   assert.deepEqual((getTaskFinalizationOperation(withDebt.operation.id)?.verification as any)?.qualityDebtSummary?.codes.slice().sort(), ['CHECKLIST_INCOMPLETE', 'POST_INTEGRATION_VERIFICATION_REQUIRED', 'VERIFICATION_NOT_PASSED']);
 
   const missing = fixture('guards-missing-verification');
   const withoutChecks = finalizeTaskWorkspace(missing.state, { taskId: missing.task.id, workspaceId: missing.workspace.workspaceId, checks: [] });
-  assert.equal(withoutChecks.status, 'continuation');
-  assert.equal(withoutChecks.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
-  assert.equal(getTask(missing.task.id)?.status, 'in-progress');
-  assert.deepEqual(getTask(missing.task.id)?.verificationEvidence || [], []);
-  assert.equal(fs.existsSync(missing.workspace.root), true);
-  assert.equal((withoutChecks.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'VERIFICATION_EVIDENCE_MISSING'), true);
+  assert.equal(withoutChecks.status, 'completed');
+  assert.equal(getTask(missing.task.id)?.status, 'done');
+  assert.equal(fs.existsSync(missing.workspace.root), false);
   assert.equal((withoutChecks.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), true);
-  assert.deepEqual((getTaskFinalizationOperation(withoutChecks.operation.id)?.verification as any)?.qualityDebtSummary?.codes.slice().sort(), ['POST_INTEGRATION_VERIFICATION_REQUIRED', 'VERIFICATION_EVIDENCE_MISSING']);
-});test('finalization freezes explicit checklist completion and persists it before continuation debt is calculated', () => {
+});test('finalization freezes explicit checklist completion while preserving terminal verification debt', () => {
   const incomplete = fixture('checklist-attestation');
   const saved = getTask(incomplete.task.id)!;
   saved.checklist[0].completed = false;
@@ -492,8 +487,8 @@ test('finalization preserves checklist and verification debt while pausing for r
     completedChecklistIds: ['done'],
   });
 
-  assert.equal(result.status, 'continuation');
-  assert.equal(result.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
+  assert.equal(result.status, 'completed');
+  assert.equal(getTask(incomplete.task.id)?.status, 'done');
   assert.equal(getTask(incomplete.task.id)?.checklist?.[0]?.completed, true);
   assert.deepEqual((result.operation.verification as any)?.completedChecklistIds, ['done']);
   assert.equal((result.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'CHECKLIST_INCOMPLETE'), false);
@@ -542,7 +537,7 @@ test('finalization rejects invalid checklist completion ids before creating fina
 
 
 
-test('finalization pauses on combined-state verification escalation before terminalization and cleanup', () => {
+test('finalization records combined-state verification escalation debt and still terminalizes after the attempt', () => {
   const { root, task, workspace, state } = fixture('combined-gate');
   fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
   git(workspace.root, ['add', 'tracked.txt']);
@@ -552,15 +547,12 @@ test('finalization pauses on combined-state verification escalation before termi
   git(root, ['commit', '-m', 'sibling config change']);
 
   const paused = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
-  assert.equal(paused.status, 'continuation');
-  assert.equal(paused.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
+  assert.equal(paused.status, 'completed');
   assert.ok(paused.integration.combinedChangedFiles.includes('package.json'));
-  assert.equal(paused.postIntegration.required, true);
-  assert.equal(paused.operation.phase, 'verification-cleared');
   assert.equal((paused.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), true);
   assert.equal(paused.integration.baseHeadAfter, git(root, ['rev-parse', 'HEAD']).stdout);
-  assert.equal(getTask(task.id)?.status, 'in-progress');
-  assert.equal(fs.existsSync(workspace.root), true);
+  assert.equal(getTask(task.id)?.status, 'done');
+  assert.equal(fs.existsSync(workspace.root), false);
 });
 
 test('reusable coverage finalizes after an unrelated base advance without rerunning verification', () => {
@@ -583,7 +575,7 @@ test('reusable coverage finalizes after an unrelated base advance without rerunn
   assert.equal(getTask(task.id)?.status, 'done');
 });
 
-test('combined repository mapping pauses before terminalization until integrated-head verification clears', () => {
+test('combined repository mapping preserves missing integrated-head verification as terminal quality debt', () => {
   const { root, task, workspace, state } = fixture('combined-mapping');
   fs.mkdirSync(path.join(workspace.root, 'src', 'service'), { recursive: true });
   fs.writeFileSync(path.join(workspace.root, 'src', 'service', 'a.ts'), 'export const a = 1;\n');
@@ -613,36 +605,15 @@ test('combined repository mapping pauses before terminalization until integrated
     checks: [{ name: 'service', command: 'test:service', status: 'passed' }],
   });
 
-  assert.equal(first.status, 'continuation');
-  assert.equal(first.code, 'POST_INTEGRATION_VERIFICATION_REQUIRED');
+  assert.equal(first.status, 'completed');
   assert.ok(first.combinedPlan.commands.includes('test:integration'));
   assert.ok(first.postIntegration.missingCommands.includes('test:integration'));
-  assert.equal(first.operation.phase, 'verification-cleared');
-  assert.equal(first.continuation.nextAction.reintegrate, false);
   assert.equal((first.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), true);
   const integratedHead = git(root, ['rev-parse', 'HEAD']).stdout;
   assert.equal(first.integration.baseHeadAfter, integratedHead);
-  assert.equal(getTask(task.id)?.status, 'in-progress');
-  assert.equal(getTask(task.id)?.claim?.workspaceId, workspace.workspaceId);
-  assert.equal(fs.existsSync(workspace.root), true);
-
-  const second = finalizeTaskWorkspace(state, {
-    taskId: task.id,
-    workspaceId: workspace.workspaceId,
-    operationId: first.operation.id,
-    checks: [
-      { name: 'service', command: 'test:service', status: 'passed', repoRevision: integratedHead, scope: 'broad' },
-      { name: 'integration', command: 'test:integration', status: 'passed', repoRevision: integratedHead, scope: 'broad' },
-    ],
-  });
-
-  assert.equal(second.status, 'completed', JSON.stringify(second));
-  assert.equal(second.operation.id, first.operation.id);
-  assert.equal(second.integration.baseHeadAfter, integratedHead);
-  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
-  assert.equal((second.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), false);
   assert.equal(getTask(task.id)?.status, 'done');
   assert.equal(fs.existsSync(workspace.root), false);
+  assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
 });
 
 test('post-integration evidence failure returns a resumable continuation and retry does not integrate twice', () => {

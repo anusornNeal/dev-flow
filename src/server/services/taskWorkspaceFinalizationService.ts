@@ -26,6 +26,7 @@ import {
   evaluatePostIntegrationRequirement,
   executeRevisionBoundPostIntegrationVerification,
   planCombinedVerification,
+  postIntegrationRequirementsAttempted,
   type PostIntegrationRequirement,
   type TaskWorkspaceFinalizationCheck,
 } from './taskWorkspaceFinalizationVerificationService.js';
@@ -51,6 +52,7 @@ import {
 export {
   __classifyPostIntegrationCommandResultForTests,
   __evaluatePostIntegrationRequirementForTests,
+  __postIntegrationRequirementsAttemptedForTests,
 } from './taskWorkspaceFinalizationVerificationService.js';
 export type { TaskWorkspaceFinalizationCheck } from './taskWorkspaceFinalizationVerificationService.js';
 export type { DetachedIntegratedFinalizationEvidence } from './taskWorkspaceFinalizationOperationService.js';
@@ -507,7 +509,8 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
           failure: null,
         });
       }
-      if (postIntegration.required) {
+      const postIntegrationAttempted = postIntegrationRequirementsAttempted(postIntegration, effectiveChecks);
+      if (postIntegration.required && !postIntegrationAttempted) {
         return operationContinuation(
           _state,
           operation,

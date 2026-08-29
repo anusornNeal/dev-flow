@@ -77,7 +77,7 @@ test('tab keyboard navigation resolves Arrow, Home, and End keys', () => {
   assert.equal(resolveTaskInspectorTabKey('subtasks', 'Enter'), null);
 });
 
-test('status summary explains blocked, failed, and review-ready states with an actionable next step', () => {
+test('status summary uses canonical work and review state while legacy run history stays non-authoritative', () => {
   const blocked = resolveTaskInspectorStatusSummary({
     ...task,
     liveWork: { blocked: true, ownerLabel: 'Chat A', phaseLabel: 'Verification', activity: 'Waiting for a prerequisite', phaseIndex: 2, phaseCount: 4, updatedAt: '2026-08-08T00:00:00.000Z' },
@@ -86,13 +86,13 @@ test('status summary explains blocked, failed, and review-ready states with an a
   assert.match(blocked.summary, /Waiting for a prerequisite/);
   assert.match(blocked.nextAction, /Resolve the blocker/);
 
-  const failed = resolveTaskInspectorStatusSummary({
+  const historicalFailure = resolveTaskInspectorStatusSummary({
     ...task,
-    activeAgent: undefined,
+    activeAgent: 'legacy-worker',
     latestAgentRun: { id: 'run-failed', status: 'failed' },
   } as any);
-  assert.equal(failed.label, 'Run needs attention');
-  assert.match(failed.nextAction, /Open Activity/);
+  assert.equal(historicalFailure.label, 'Work in progress');
+  assert.doesNotMatch(historicalFailure.summary, /legacy|run/i);
 
   const review = resolveTaskInspectorStatusSummary({
     ...task,

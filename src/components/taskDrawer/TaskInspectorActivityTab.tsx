@@ -1,24 +1,12 @@
 import React from 'react';
-import { Clock3, Copy, FileText, MessageSquare, RefreshCw, ScrollText, TerminalSquare } from 'lucide-react';
+import { MessageSquare, ScrollText, TerminalSquare } from 'lucide-react';
 import type { Task } from '../../types';
-import type { RunHistoryFiles } from './useRunArtifacts';
 
 interface TaskInspectorActivityTabProps {
   task: Task;
   newComment: string;
   setNewComment: (value: string) => void;
   onAddComment: (event: React.FormEvent) => void;
-  canRetryLatestRun: boolean;
-  isRetryingRun: boolean;
-  onRetryLatestRun: () => void;
-  latestRunLogLoading: boolean;
-  latestRunLogError: string | null;
-  latestRunLogExists: boolean;
-  latestRunLogTail: string;
-  runHistoryFiles: RunHistoryFiles | null;
-  copiedHistoryPath: string | null;
-  onCopyHistoryPath: (value: string) => void;
-  onShowLog?: (run: { id: string; status?: string; agent?: string | null; model?: string | null }) => void;
 }
 
 function ActivitySection({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
@@ -32,7 +20,8 @@ function ActivitySection({ title, icon, children }: { title: string; icon: React
 
 export default function TaskInspectorActivityTab(props: TaskInspectorActivityTabProps) {
   const { task } = props;
-  const latestRun = task.latestAgentRun;
+  const liveWork = task.liveWork;
+  const legacyRun = task.latestAgentRun;
   const noteLogs = (task.logs || []).filter((entry) => entry.type === 'comment' || entry.message.startsWith('💬 Note:'));
 
   return (
@@ -67,40 +56,28 @@ export default function TaskInspectorActivityTab(props: TaskInspectorActivityTab
       </div>
 
       <div className="min-w-0 space-y-5">
-        <ActivitySection title="Latest agent run" icon={<TerminalSquare size={15} />}>
-          {latestRun ? (
-            <div className="min-w-0 space-y-4">
-              <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-                <div className="min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3"><span className="df-meta block uppercase">Run</span><code className="df-break-technical mt-1 block text-[12px]">{latestRun.id}</code></div>
-                <div className="min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3"><span className="df-meta block uppercase">Status</span><strong className="mt-1 block break-words text-[12px]">{latestRun.status}</strong></div>
-                <div className="min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3"><span className="df-meta block uppercase">Agent</span><strong className="mt-1 block break-words text-[12px]">{latestRun.agent || task.agent || 'Not assigned'}</strong></div>
-                <div className="min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3"><span className="df-meta block uppercase">Started</span><span className="mt-1 block text-[12px]">{latestRun.startedAt ? new Date(latestRun.startedAt).toLocaleString() : 'Not started'}</span></div>
+        <ActivitySection title="Current activity" icon={<TerminalSquare size={15} />}>
+          {liveWork ? (
+            <div className="min-w-0 space-y-3">
+              <div className={`df-feedback ${liveWork.blocked ? 'df-feedback--danger' : 'df-feedback--info'}`}>
+                <div className="df-feedback__summary">{liveWork.blocked ? 'Blocked' : liveWork.phaseLabel}</div>
+                <div className="df-feedback__detail df-break-technical">{liveWork.ownerLabel}{liveWork.activity ? ` · ${liveWork.activity}` : ''}</div>
               </div>
-              {latestRun.errorMessage && <div className="df-feedback df-feedback--danger"><div className="df-feedback__summary">Latest run failed</div><div className="df-feedback__detail df-break-technical">{latestRun.errorMessage}</div></div>}
-              {props.canRetryLatestRun && <button type="button" onClick={props.onRetryLatestRun} disabled={props.isRetryingRun} className="df-button df-button--secondary"><RefreshCw size={13} className={props.isRetryingRun ? 'animate-spin' : ''} /> {props.isRetryingRun ? 'Retrying…' : 'Retry run'}</button>}
             </div>
-          ) : <p className="df-meta">No agent run recorded.</p>}
+          ) : <p className="df-meta">No canonical live work is currently active.</p>}
         </ActivitySection>
 
-        <ActivitySection title="Execution log" icon={<FileText size={15} />}>
-          {props.latestRunLogLoading ? <p className="df-meta">Loading latest run log…</p> : props.latestRunLogError ? <div className="df-feedback df-feedback--danger"><div className="df-feedback__summary">Execution log unavailable</div><div className="df-feedback__detail df-break-technical">{props.latestRunLogError}</div></div> : props.latestRunLogExists && props.latestRunLogTail ? (
-            <details className="rounded-xl border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] p-3">
-              <summary className="cursor-pointer text-[11px] font-extrabold text-[var(--df-color-text-muted)]">Show latest log tail</summary>
-              <pre className="df-break-technical mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-[var(--df-color-surface-subtle)] p-4 font-mono text-[11px] leading-5 text-df-text">{props.latestRunLogTail}</pre>
-              {props.onShowLog && latestRun && <button type="button" onClick={() => props.onShowLog?.({ id: latestRun.id, status: latestRun.status, agent: task.agent, model: task.model })} className="df-button df-button--secondary mt-3 min-h-8">Open log viewer</button>}
-            </details>
-          ) : <p className="df-meta">No run log is available.</p>}
-        </ActivitySection>
-
-        {props.runHistoryFiles && (
-          <ActivitySection title="Run artifacts" icon={<Clock3 size={15} />}>
-            <div className="space-y-2">
-              {Object.entries(props.runHistoryFiles).filter(([, value]) => typeof value === 'string' && value).map(([key, value]) => (
-                <div key={key} className="flex min-w-0 items-start gap-2 rounded-xl border border-[var(--df-color-border)] px-3 py-2">
-                  <div className="min-w-0 flex-1"><span className="df-meta block uppercase">{key}</span><code className="df-break-technical mt-1 block text-[11px] leading-5" title={value}>{value}</code></div>
-                  <button type="button" onClick={() => props.onCopyHistoryPath(value)} aria-label={`Copy ${key}`} className="df-icon-button shrink-0"><Copy size={12} />{props.copiedHistoryPath === value && <span className="sr-only">Copied</span>}</button>
-                </div>
-              ))}
+        {legacyRun && (
+          <ActivitySection title="Historical legacy run" icon={<TerminalSquare size={15} />}>
+            <div className="min-w-0 space-y-3">
+              <div className="df-feedback df-feedback--info"><div className="df-feedback__summary">Read-only legacy history</div><div className="df-feedback__detail">This record is historical evidence only and does not control current task status or recovery.</div></div>
+              <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+                <div className="min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3"><span className="df-meta block uppercase">Run</span><code className="df-break-technical mt-1 block text-[12px]">{legacyRun.id}</code></div>
+                <div className="min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3"><span className="df-meta block uppercase">Historical status</span><strong className="mt-1 block break-words text-[12px]">{legacyRun.status}</strong></div>
+                <div className="min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3"><span className="df-meta block uppercase">Legacy agent</span><strong className="mt-1 block break-words text-[12px]">{legacyRun.agent || 'Not recorded'}</strong></div>
+                <div className="min-w-0 rounded-xl bg-[var(--df-color-surface-subtle)] p-3"><span className="df-meta block uppercase">Started</span><span className="mt-1 block text-[12px]">{legacyRun.startedAt ? new Date(legacyRun.startedAt).toLocaleString() : 'Not recorded'}</span></div>
+              </div>
+              {legacyRun.errorMessage && <div className="df-meta df-break-technical">Historical error: {legacyRun.errorMessage}</div>}
             </div>
           </ActivitySection>
         )}

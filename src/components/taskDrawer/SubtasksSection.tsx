@@ -30,14 +30,12 @@ interface SubtaskGroup {
   tasks: Task[];
 }
 
-function latestRunStatus(task: Task) {
-  const latest = task.latestAgentRun ?? task.agentRuns?.[task.agentRuns.length - 1];
-  return latest?.status;
+function unresolvedBugCount(task: Task) {
+  return task.unresolvedBugCount ?? (task.bugs || []).filter((bug) => ['open', 'fixing', 'fixed', 'reopened'].includes(bug.status)).length;
 }
 
 function needsAttention(task: Task) {
-  const runStatus = latestRunStatus(task);
-  return Boolean(task.liveWork?.blocked || runStatus === 'failed' || runStatus === 'timed-out');
+  return Boolean(task.liveWork?.blocked || unresolvedBugCount(task) > 0);
 }
 
 function statusLabel(task: Task) {
@@ -170,7 +168,7 @@ function SubtaskRow({ task, onSelectTask, showDivider }: SubtaskRowProps) {
   const done = task.status === 'done';
   const active = task.status === 'in-progress' && !attention;
   const selectTask = () => onSelectTask?.(task);
-  const owner = task.activeAgent || task.agent;
+  const owner = task.liveWork?.ownerLabel;
   const model = task.model ? getDisplayModelName(undefined, task.model) : null;
   const showPriority = task.priority === 'high' || task.priority === 'medium';
 

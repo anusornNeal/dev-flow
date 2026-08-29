@@ -45,7 +45,6 @@ export interface TaskInspectorStatusSummary {
 }
 
 export function resolveTaskInspectorStatusSummary(task: Task): TaskInspectorStatusSummary {
-  const latestRunStatus = task.latestAgentRun?.status || '';
   const unresolvedBugs = task.unresolvedBugCount ?? (task.bugs || []).filter((bug) => ['open', 'fixing', 'fixed', 'reopened'].includes(bug.status)).length;
 
   if (task.liveWork?.blocked) {
@@ -53,15 +52,6 @@ export function resolveTaskInspectorStatusSummary(task: Task): TaskInspectorStat
       label: 'Blocked',
       summary: task.liveWork.activity || `${task.liveWork.ownerLabel || 'Current worker'} is blocked during ${task.liveWork.phaseLabel || 'the active phase'}.`,
       nextAction: 'Resolve the blocker first, then resume the existing execution instead of starting duplicate work.',
-      tone: 'danger',
-    };
-  }
-
-  if (!task.activeAgent && ['failed', 'cancelled', 'timed_out', 'timed-out'].includes(latestRunStatus)) {
-    return {
-      label: 'Run needs attention',
-      summary: `The latest agent run ended as ${latestRunStatus.replace('_', ' ')}.`,
-      nextAction: 'Open Activity for the failure details and retry only after the cause is understood.',
       tone: 'danger',
     };
   }
@@ -93,10 +83,10 @@ export function resolveTaskInspectorStatusSummary(task: Task): TaskInspectorStat
     };
   }
 
-  if (task.liveWork || task.activeAgent || task.status === 'in-progress') {
+  if (task.liveWork || task.status === 'in-progress') {
     return {
       label: task.liveWork?.phaseLabel || 'Work in progress',
-      summary: task.liveWork?.activity || (task.activeAgent ? `${task.activeAgent} currently owns active work on this task.` : 'This task is currently being implemented.'),
+      summary: task.liveWork?.activity || 'This task is currently being implemented.',
       nextAction: 'Track the current execution in Activity and avoid launching overlapping work.',
       tone: 'warning',
     };
@@ -191,11 +181,9 @@ export default function TaskInspectorShell({
   const tabRefs = useRef<Partial<Record<TaskInspectorTab, HTMLButtonElement | null>>>({});
   const visibleTabs = showSubtasks ? TABS : TABS.filter((tab) => tab.id !== 'subtasks');
   const statusSummary = resolveTaskInspectorStatusSummary(task);
-  const latestRunStatus = task.latestAgentRun?.status || '';
   const unresolvedBugs = task.unresolvedBugCount ?? (task.bugs || []).filter((bug) => ['open', 'fixing', 'fixed', 'reopened'].includes(bug.status)).length;
   const hasActionableAttention = Boolean(
     task.liveWork?.blocked
-    || (!task.activeAgent && ['failed', 'cancelled', 'timed_out', 'timed-out'].includes(latestRunStatus))
     || task.status === 'ready-for-review'
     || unresolvedBugs > 0,
   );

@@ -145,11 +145,11 @@ test('TaskCard keeps long content bounded and makes blocked live work explicit',
   assert.match(html, />High</);
 });
 
-test('TaskCard presents failed execution as one attention state with readable detail', () => {
-  const errorMessage = 'Compilation failed because generated output did not match the expected contract and this detail should remain readable.';
+test('TaskCard does not promote historical legacy failure into current execution state', () => {
+  const errorMessage = 'Historical legacy failure detail';
   const html = renderToStaticMarkup(React.createElement(TaskCard as any, {
     task: makeTask({
-      agent: 'codex',
+      activeAgent: 'legacy-worker',
       latestAgentRun: { id: 'run-1', status: 'failed', errorMessage },
       agentRuns: [{ id: 'run-1', status: 'failed', errorMessage }],
     }),
@@ -160,10 +160,9 @@ test('TaskCard presents failed execution as one attention state with readable de
     onUpdate: noop,
   }));
 
-  assert.match(html, /aria-label="Execution state: Failed"/);
-  assert.equal((html.match(/>Failed</g) || []).length, 1);
-  assert.match(html, new RegExp(errorMessage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(html, /text-\[var\(--df-color-danger\)\]/);
+  assert.doesNotMatch(html, /Execution state:/);
+  assert.doesNotMatch(html, /legacy-worker/);
+  assert.doesNotMatch(html, new RegExp(errorMessage));
 });
 
 test('Task Details subtask section renders more than five children without show-more controls', () => {

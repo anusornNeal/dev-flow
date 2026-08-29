@@ -9,7 +9,6 @@ import CreateTaskModal from './CreateTaskModal';
 import ImageViewer from './ImageViewer';
 import { useTaskDrawerViewModel } from '../viewModels/useTaskDrawerViewModel';
 import { useDrawerDisclosure } from './taskDrawer/useDrawerDisclosure';
-import { useRunArtifacts } from './taskDrawer/useRunArtifacts';
 import { useTaskDrawerEditState } from './taskDrawer/useTaskDrawerEditState';
 import TaskInspectorShell, { type TaskInspectorTab } from './taskDrawer/TaskInspectorShell';
 import TaskOverviewTab from './taskDrawer/TaskOverviewTab';
@@ -44,7 +43,6 @@ export default function TaskDetailsDrawer({
   onUpdate,
   onDelete,
   onCreateTask,
-  onShowLog,
 }: TaskDetailsDrawerProps) {
   const drawerViewModel = useTaskDrawerViewModel();
   const [activeTab, setActiveTab] = useState<TaskInspectorTab>(() => (
@@ -54,9 +52,7 @@ export default function TaskDetailsDrawer({
   ));
   const [viewingImage, setViewingImage] = useState<TaskImage | null>(null);
   const [newComment, setNewComment] = useState('');
-  const [copiedHistoryPath, setCopiedHistoryPath] = useState<string | null>(null);
   const [isAddingSubtask, setIsAddingSubtask] = useState(false);
-  const [isRetryingRun, setIsRetryingRun] = useState(false);
   const [uiEvidencePage, setUiEvidencePage] = useState<TaskUiEvidencePage>({ items: [], nextCursor: null, limit: 20 });
   const [uiEvidenceLoading, setUiEvidenceLoading] = useState(false);
   const [uiEvidenceLoadingMore, setUiEvidenceLoadingMore] = useState(false);
@@ -124,9 +120,6 @@ export default function TaskDetailsDrawer({
   const hasSubtasks = subTasks.length > 0;
   const disclosure = useDrawerDisclosure(task.id);
   const edit = useTaskDrawerEditState({ task, onUpdate });
-  const runArtifacts = useRunArtifacts(task);
-  const latestRun = task.latestAgentRun;
-  const canRetryLatestRun = Boolean(latestRun && !task.activeAgent && ['failed', 'cancelled'].includes(latestRun.status));
 
   useEffect(() => {
     if (!hasSubtasks && activeTab === 'subtasks') setActiveTab('overview');
@@ -174,30 +167,6 @@ export default function TaskDetailsDrawer({
     };
     onUpdate({ ...task, logs: [...(task.logs || []), log], updatedAt: new Date().toISOString() });
     setNewComment('');
-  };
-
-  const handleCopyHistoryPath = (pathValue: string) => {
-    void navigator.clipboard?.writeText(pathValue);
-    setCopiedHistoryPath(pathValue);
-    window.setTimeout(() => setCopiedHistoryPath(null), 1800);
-  };
-
-  const handleRetryLatestRun = async () => {
-    if (!latestRun || isRetryingRun) return;
-    setIsRetryingRun(true);
-    try {
-      const response = await fetch(`/api/tasks/${task.id}/agent-runs/retry`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body?.error || `Retry failed with status ${response.status}`);
-      if (body?.task) onUpdate(body.task);
-    } catch (error) {
-      console.error('Failed to retry latest run:', error);
-    } finally {
-      setIsRetryingRun(false);
-    }
   };
 
   const overviewTab = (
@@ -284,17 +253,6 @@ export default function TaskDetailsDrawer({
       newComment={newComment}
       setNewComment={setNewComment}
       onAddComment={handleAddComment}
-      canRetryLatestRun={canRetryLatestRun}
-      isRetryingRun={isRetryingRun}
-      onRetryLatestRun={handleRetryLatestRun}
-      latestRunLogLoading={runArtifacts.latestRunLogLoading}
-      latestRunLogError={runArtifacts.latestRunLogError}
-      latestRunLogExists={runArtifacts.latestRunLogExists}
-      latestRunLogTail={runArtifacts.latestRunLogTail}
-      runHistoryFiles={runArtifacts.runHistoryFiles}
-      copiedHistoryPath={copiedHistoryPath}
-      onCopyHistoryPath={handleCopyHistoryPath}
-      onShowLog={onShowLog}
     />
   );
 

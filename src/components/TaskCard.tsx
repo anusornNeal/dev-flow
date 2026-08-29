@@ -19,9 +19,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { Task } from '../types';
-import { getAutoWorkState } from '../lib/autoWorkState';
 import CopyTemplateButton from './CopyTemplateButton';
-import { AgentLogo } from './AgentLogo';
 
 interface TaskCardProps {
   key?: string;
@@ -54,7 +52,7 @@ function taskCategoryBadge(task: Task) {
   return null;
 }
 
-export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDragStart, onUpdate, onShowLog }: TaskCardProps) {
+export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDragStart, onUpdate }: TaskCardProps) {
   const [idCopied, setIdCopied] = useState(false);
   const [isDrag, setIsDrag] = useState(false);
 
@@ -78,8 +76,6 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
   const completedSteps = task.checklist?.filter(item => item.completed).length || 0;
   const filesCount = task.targetFiles?.length || 0;
   const unresolvedBugCount = task.unresolvedBugCount ?? (task.bugs || []).filter((bug) => ['open', 'fixing', 'fixed', 'reopened'].includes(bug.status)).length;
-  const hasEffectiveAssignment = Boolean(task.agent || task.model || task.effort);
-  const autoWorkState = getAutoWorkState(task);
   const liveWork = task.liveWork;
   const liveWorkAgeMs = liveWork?.updatedAt ? Math.max(0, Date.now() - Date.parse(liveWork.updatedAt)) : null;
   const liveWorkFreshness = liveWorkAgeMs == null || !Number.isFinite(liveWorkAgeMs)
@@ -89,16 +85,6 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
       : liveWorkAgeMs < 60 * 60_000
         ? `${Math.floor(liveWorkAgeMs / 60_000)}m`
         : `${Math.floor(liveWorkAgeMs / (60 * 60_000))}h`;
-
-  const runStatusTone = autoWorkState
-    ? autoWorkState.kind === 'failed' || autoWorkState.kind === 'timed-out'
-      ? 'border-[var(--df-color-danger)] bg-[var(--df-color-danger-surface)] text-[var(--df-color-danger)]'
-      : autoWorkState.kind === 'ready-for-review'
-        ? 'border-[var(--df-color-success)] bg-[var(--df-color-success-surface)] text-[var(--df-color-success)]'
-        : ['queued-busy', 'queued', 'launching', 'running'].includes(autoWorkState.kind)
-          ? 'border-[var(--df-color-warning)] bg-[var(--df-color-warning-surface)] text-[var(--df-color-warning)]'
-          : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] text-[var(--df-color-text-muted)]'
-    : 'border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] text-[var(--df-color-text-muted)]';
 
   const priorityLabel = task.priority === 'high' ? 'High' : task.priority === 'low' ? 'Low' : 'Medium';
   const priorityTone = task.priority === 'high'
@@ -213,51 +199,6 @@ export default function TaskCard({ task, subtasks = [], onSelect, onDelete, onDr
           </div>
           {liveWorkFreshness && <span className="shrink-0 text-[8.5px] font-semibold text-[var(--df-color-text-subtle)]">{liveWorkFreshness}</span>}
           <span className="sr-only" aria-label={`Live work phase: ${liveWork.phaseLabel} (${liveWork.phaseIndex + 1}/${liveWork.phaseCount})`} />
-        </div>
-      )}
-
-      {!liveWork && (task.activeAgent || autoWorkState) && (
-        <div className="mt-2 min-w-0 rounded-[var(--df-radius-sm)] border border-[var(--df-color-border)] bg-[var(--df-color-surface-subtle)] px-2 py-1.5" aria-label={`Execution state: ${autoWorkState?.label || 'Assigned'}`}> 
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            {task.activeAgent && (
-              <span className="inline-flex min-w-0 max-w-[150px] items-center gap-1 rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] px-1.5 py-0.5 text-[9px] font-bold text-[var(--df-color-text-muted)]" title={`Assigned to ${task.activeAgent}`}>
-                <AgentLogo agent={task.activeAgent} size={9} className="shrink-0" />
-                <span className="truncate">{task.activeAgent}</span>
-              </span>
-            )}
-
-            {hasEffectiveAssignment && autoWorkState && (
-              <span className={`inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[9px] font-extrabold ${runStatusTone}`}>
-                {autoWorkState.label}
-              </span>
-            )}
-
-            {task.agentRuns && task.agentRuns.some(r => r.logFile) && (
-              <button
-                type="button"
-                className="ml-auto shrink-0 rounded-md border border-[var(--df-color-border)] bg-[var(--df-color-surface-raised)] px-1.5 py-0.5 text-[9px] font-bold text-[var(--df-color-text-muted)] transition-colors hover:border-[var(--df-color-info)] hover:text-[var(--df-color-info)]"
-                title="View latest run log"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!onShowLog) return;
-                  const latest = task.agentRuns!.filter(r => r.logFile).slice(-1)[0];
-                  if (latest) onShowLog({ id: latest.id, status: latest.status, agent: task.agent, model: task.model });
-                }}
-              >
-                Log
-              </button>
-            )}
-          </div>
-
-          {autoWorkState?.message && (
-            <div className={`mt-1.5 line-clamp-2 break-words text-[9.5px] leading-relaxed ${
-              autoWorkState.kind === 'failed' || autoWorkState.kind === 'timed-out'
-                ? 'text-[var(--df-color-danger)]'
-                : 'text-[var(--df-color-text-muted)]'
-            }`} title={autoWorkState.message}>
-              {autoWorkState.message}
-            </div>
-          )}
         </div>
       )}
 

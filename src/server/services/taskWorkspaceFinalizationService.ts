@@ -53,6 +53,7 @@ export {
   __classifyPostIntegrationCommandResultForTests,
   __evaluatePostIntegrationRequirementForTests,
   __postIntegrationRequirementsAttemptedForTests,
+  __verificationImpactRuleCommandsForTests,
 } from './taskWorkspaceFinalizationVerificationService.js';
 export type { TaskWorkspaceFinalizationCheck } from './taskWorkspaceFinalizationVerificationService.js';
 export type { DetachedIntegratedFinalizationEvidence } from './taskWorkspaceFinalizationOperationService.js';

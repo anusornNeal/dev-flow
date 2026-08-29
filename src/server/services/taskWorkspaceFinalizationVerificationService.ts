@@ -45,6 +45,13 @@ export type PostIntegrationRequirement = {
   };
 };
 
+export function __verificationImpactRuleCommandsForTests(rule: ReturnType<typeof loadProjectVerificationImpactRules>[number]) {
+  return Array.from(new Set([
+    ...(Array.isArray(rule?.commands) ? rule.commands : []),
+    ...(Array.isArray(rule?.checks) ? rule.checks.map((check) => check?.command) : []),
+  ].map((command) => String(command || '').trim()).filter(Boolean)));
+}
+
 export function planCombinedVerification(
   state: AppState,
   projectId: string,
@@ -56,7 +63,7 @@ export function planCombinedVerification(
   const requestedCommands = Array.from(new Set([
     ...checks.map((check) => String(check.command || '').trim()),
     ...coverageCommands.map((command) => String(command || '').trim()),
-    ...impactRules.flatMap((rule) => rule.commands.map((command) => String(command || '').trim())),
+    ...impactRules.flatMap((rule) => __verificationImpactRuleCommandsForTests(rule)),
   ].filter(Boolean)));
   const inspection = inspectProjectVerificationPresets(state, { projectId });
   const requestedCommandSet = new Set(requestedCommands);

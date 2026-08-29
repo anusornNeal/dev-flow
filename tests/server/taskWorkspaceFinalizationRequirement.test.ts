@@ -4,6 +4,7 @@ import {
   __classifyPostIntegrationCommandResultForTests,
   __evaluatePostIntegrationRequirementForTests,
   __postIntegrationRequirementsAttemptedForTests,
+  __verificationImpactRuleCommandsForTests,
 } from '../../src/server/services/taskWorkspaceFinalizationService.js';
 
 function plan(checks: Array<{ command: string; targets?: string[] }>) {
@@ -49,6 +50,22 @@ const integration = {
   baseRevision: 'base',
   baseHeadAfter: 'integrated-head',
 } as any;
+
+test('checks-only impact rules contribute commands without requiring a rule-level commands array', () => {
+  assert.deepEqual(__verificationImpactRuleCommandsForTests({
+    id: 'checks-only',
+    patterns: ['src/**'],
+    checks: [
+      { command: 'test-focused', targets: ['tests/server/example.test.ts'] },
+      { command: 'typecheck' },
+      { command: 'typecheck' },
+    ],
+  } as any), ['test-focused', 'typecheck']);
+  assert.deepEqual(__verificationImpactRuleCommandsForTests({
+    id: 'legacy-empty',
+    patterns: ['src/**'],
+  } as any), []);
+});
 
 test('failed exact-revision verification remains an unsatisfied requirement with truthful debt', () => {
   const checks = [{ command: 'test' }];

@@ -39,6 +39,7 @@ import {
   operationFailure,
   recoverRecordedIntegration,
   updateOperation,
+  validateRecordedIntegration,
   type DetachedIntegratedFinalizationEvidence,
 } from './taskWorkspaceFinalizationOperationService.js';
 import {
@@ -381,17 +382,7 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
     try {
       if (operation.integration) {
         integration = operation.integration as unknown as WorkspaceIntegrationSuccess;
-        const project = getProject(operation.projectId);
-        if (!project?.localPath) throw createApiError(409, 'FINALIZATION_PROJECT_ROOT_REQUIRED', 'Project root is unavailable for recorded integration verification.', { affectedId: operation.id });
-        reconstructRecordedWorkspaceIntegration({
-          workspaceId: operation.workspaceId,
-          projectRoot: project.localPath,
-          baseBranch: operation.baseBranch,
-          sourceBranch: getSessionWorkspaceMetadataForRecovery(operation.workspaceId)?.branch || 'removed-workspace',
-          baseRevision: operation.baseRevision,
-          sourceHead: operation.sourceHead,
-          strategy: integration.strategy,
-        });
+        validateRecordedIntegration(operation, integration);
       } else {
         const recovered = recoverRecordedIntegration(operation, task);
         if ((recovered as any).status === 'conflict') {

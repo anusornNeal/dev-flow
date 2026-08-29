@@ -30,6 +30,10 @@ const { finalizeTaskWorkspace, runTaskWorkspaceHappyPathTail, __setTaskFinalizat
 const { buildTaskCommitPlan, commitTaskOwnedChanges } = await import('../../src/server/services/taskCommitPlanService.js');
 const { getAgentTaskContext } = await import('../../src/server/services/taskService.js');
 const { getTaskFinalizationOperation } = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
+const {
+  __getRecordedIntegrationValidationMetricsForTests,
+  __resetRecordedIntegrationValidationMetricsForTests,
+} = await import('../../src/server/services/taskWorkspaceFinalizationOperationService.js');
 
 function git(root: string, args: string[], allowFailure = false) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -643,6 +647,7 @@ test('combined repository mapping pauses before terminalization until integrated
 
 test('post-integration evidence failure returns a resumable continuation and retry does not integrate twice', () => {
   const { root, task, workspace, state } = fixture('post-integration-evidence-retry');
+  __resetRecordedIntegrationValidationMetricsForTests();
   fs.writeFileSync(path.join(workspace.root, 'tracked.txt'), 'implemented\n');
   git(workspace.root, ['add', 'tracked.txt']);
   git(workspace.root, ['commit', '-m', taskCommitSubject(task, 'implement task')]);
@@ -666,12 +671,14 @@ test('post-integration evidence failure returns a resumable continuation and ret
   assert.equal(first.integration.baseHeadAfter, integratedHead);
   assert.equal(getTask(task.id)?.status, 'in-progress');
   assert.equal(fs.existsSync(workspace.root), true);
+  assert.deepEqual(__getRecordedIntegrationValidationMetricsForTests(), { durableHeadMatch: 0, reconstructed: 0 });
 
   const second = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
   assert.equal(second.status, 'completed', JSON.stringify(second));
   assert.equal(second.operation.id, first.operation.id);
   assert.equal(second.integration.baseHeadAfter, integratedHead);
   assert.equal(git(root, ['rev-parse', 'HEAD']).stdout, integratedHead);
+  assert.deepEqual(__getRecordedIntegrationValidationMetricsForTests(), { durableHeadMatch: 1, reconstructed: 0 });
   assert.equal(getTask(task.id)?.status, 'done');
   assert.equal(fs.existsSync(workspace.root), false);
 });
@@ -690,6 +697,7 @@ test('durable finalization operation resumes the same identity across injected p
 
   for (const boundary of boundaries) {
     const { root, task, workspace, state, execution } = preparedFinalizationFixture(`fault-${boundary}`);
+    __resetRecordedIntegrationValidationMetricsForTests();
     const baseHeadBefore = git(root, ['rev-parse', 'HEAD']).stdout;
     __setTaskFinalizationFaultBoundaryForTests(boundary);
     let first: any;
@@ -705,6 +713,11 @@ test('durable finalization operation resumes the same identity across injected p
     assert.equal(durable.taskId, task.id);
     assert.equal(durable.workspaceId, workspace.workspaceId);
 
+    if (boundary === 'after-integration') {
+      fs.writeFileSync(path.join(root, 'after-integration.txt'), 'base advanced after recorded integration\n');
+      git(root, ['add', 'after-integration.txt']);
+      git(root, ['commit', '-m', 'advance base after recorded integration']);
+    }
     const headAfterFirst = git(root, ['rev-parse', 'HEAD']).stdout;
     const retry = finalizeTaskWorkspace(state, {
       taskId: task.id,
@@ -715,6 +728,9 @@ test('durable finalization operation resumes the same identity across injected p
     assert.equal(retry.status, 'completed', `${boundary}: ${JSON.stringify(retry)}`);
     assert.equal(retry.operation.id, first.operation.id);
     assert.equal(retry.operation.status, 'completed');
+    if (boundary === 'after-integration') {
+      assert.deepEqual(__getRecordedIntegrationValidationMetricsForTests(), { durableHeadMatch: 0, reconstructed: 1 });
+    }
     assert.equal(getTaskFinalizationOperation(first.operation.id)?.status, 'completed');
     assert.equal(getTask(task.id)?.status, 'done');
     assert.equal(getExecutionSessionState(execution.id).session.status, 'completed');

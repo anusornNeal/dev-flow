@@ -13,6 +13,7 @@ import { createApiError } from './api.js';
 import { getExecutionSessionOwnershipEpoch } from './executionSessionService.js';
 import { evaluateExecutionContinuation } from './executionContinuationService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
+import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import {
@@ -21,6 +22,20 @@ import {
   type WorkspaceIntegrationSuccess,
 } from './workspaceIntegrationService.js';
 import type { TaskWorkspaceFinalizationCheck } from './taskWorkspaceFinalizationVerificationService.js';
+
+const recordedIntegrationValidationMetrics = {
+  durableHeadMatch: 0,
+  reconstructed: 0,
+};
+
+export function __resetRecordedIntegrationValidationMetricsForTests() {
+  recordedIntegrationValidationMetrics.durableHeadMatch = 0;
+  recordedIntegrationValidationMetrics.reconstructed = 0;
+}
+
+export function __getRecordedIntegrationValidationMetricsForTests() {
+  return { ...recordedIntegrationValidationMetrics };
+}
 
 export type DetachedIntegratedFinalizationEvidence = {
   sourceHead: string;
@@ -382,6 +397,36 @@ export function assertOperationStillBound(
       }
     }
   }
+}
+
+export function validateRecordedIntegration(
+  operation: TaskFinalizationOperationRecord,
+  integration: WorkspaceIntegrationSuccess,
+) {
+  const project = getProject(operation.projectId);
+  if (!project?.localPath) {
+    throw createApiError(
+      409,
+      'FINALIZATION_PROJECT_ROOT_REQUIRED',
+      'Project root is unavailable for recorded integration verification.',
+      { affectedId: operation.id },
+    );
+  }
+  const current = getRepoRevisionForRoot(project.localPath);
+  if (current.head === integration.baseHeadAfter) {
+    recordedIntegrationValidationMetrics.durableHeadMatch += 1;
+    return integration;
+  }
+  recordedIntegrationValidationMetrics.reconstructed += 1;
+  return reconstructRecordedWorkspaceIntegration({
+    workspaceId: operation.workspaceId,
+    projectRoot: project.localPath,
+    baseBranch: operation.baseBranch,
+    sourceBranch: getSessionWorkspaceMetadataForRecovery(operation.workspaceId)?.branch || 'removed-workspace',
+    baseRevision: operation.baseRevision,
+    sourceHead: operation.sourceHead,
+    strategy: integration.strategy,
+  });
 }
 
 export function recoverRecordedIntegration(operation: TaskFinalizationOperationRecord, task: any) {

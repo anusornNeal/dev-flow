@@ -94,11 +94,13 @@ test('commit plan revalidates focused verification coverage with its recorded ta
     workspaceId: workspace.workspaceId,
     command: 'focused-check',
     targets: ['src/owned.ts'],
-    affectedInputPaths: ['src/owned.ts'],
+    affectedInputPaths: ['src/owned.ts', 'src/unrelated.ts'],
   });
   const coverage = verificationBatch.buildVerificationCoverageIdentity(commandIdentity);
   assert.ok(commandIdentity);
   assert.ok(coverage);
+  assert.deepEqual(coverage?.targets, ['src/owned.ts']);
+  assert.deepEqual(coverage?.affectedInputPaths, ['src/owned.ts', 'src/unrelated.ts']);
   execution.recordExecutionVerificationEvidence(session.id, [{ name: 'focused-check', status: 'passed' }], {
     repoRoot: workspace.root,
     provenance: {

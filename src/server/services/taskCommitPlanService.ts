@@ -152,6 +152,7 @@ export function resolveTaskVerificationCoverage(
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       ...(input.localPath ? { localPath: input.localPath } : {}),
       command: stored.command,
+      ...(stored.targets?.length ? { targets: [...stored.targets] } : {}),
       affectedInputPaths: [...stored.affectedInputPaths],
     };
     let currentExecution = null;
@@ -159,8 +160,7 @@ export function resolveTaskVerificationCoverage(
       currentExecution = getProjectCommandExecutionIdentity(state, identityArgs);
     } catch (error: any) {
       const errorCode = String(error?.code || error?.payload?.code || '');
-      if (errorCode !== 'COMMAND_TARGETS_REQUIRED') throw error;
-      if (stored.affectedInputPaths.length > 0) {
+      if (errorCode === 'COMMAND_TARGETS_REQUIRED' && !stored.targets?.length && stored.affectedInputPaths.length > 0) {
         try {
           currentExecution = getProjectCommandExecutionIdentity(state, {
             ...identityArgs,
@@ -170,6 +170,8 @@ export function resolveTaskVerificationCoverage(
           const targetErrorCode = String(targetError?.code || targetError?.payload?.code || '');
           if (!targetErrorCode.startsWith('COMMAND_TARGET')) throw targetError;
         }
+      } else if (!errorCode.startsWith('COMMAND_TARGET')) {
+        throw error;
       }
     }
     const current = buildVerificationCoverageIdentity(currentExecution);

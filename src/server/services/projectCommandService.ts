@@ -1283,6 +1283,7 @@ export type ProjectCommandExecutionIdentity = {
   lineageToken: string;
   semanticKey: string;
   command: string;
+  targets?: string[];
   commandConfigFingerprint?: string;
   affectedInputFingerprint?: string;
   affectedInputPaths?: string[];
@@ -1380,6 +1381,7 @@ function buildProjectCommandExecutionIdentity(
     lineageToken,
     semanticKey,
     command: resolvedCommand.command,
+    ...(resolvedCommand.targets?.length ? { targets: [...resolvedCommand.targets] } : {}),
     ...(commandConfigFingerprint ? { commandConfigFingerprint } : {}),
     affectedInputFingerprint: affectedInputs.fingerprint,
     affectedInputPaths: affectedInputs.paths,
@@ -1433,6 +1435,7 @@ function readProjectCommandVerificationCandidate(value: unknown): ProjectCommand
     || typeof executionIdentity.lineageFingerprint !== 'string'
     || typeof executionIdentity.semanticKey !== 'string'
     || typeof executionIdentity.command !== 'string'
+    || (executionIdentity.targets !== undefined && (!Array.isArray(executionIdentity.targets) || executionIdentity.targets.some((entry) => typeof entry !== 'string')))
     || (executionIdentity.commandConfigFingerprint !== undefined && (typeof executionIdentity.commandConfigFingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(executionIdentity.commandConfigFingerprint)))
     || (executionIdentity.dependencyFingerprint !== undefined && (typeof executionIdentity.dependencyFingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(executionIdentity.dependencyFingerprint)))
     || (executionIdentity.affectedInputFingerprint !== undefined && typeof executionIdentity.affectedInputFingerprint !== 'string')
@@ -1506,6 +1509,7 @@ export function bindProjectCommandVerificationCandidate(
       lineageFingerprint: executionIdentity.lineageToken,
       semanticKey: executionIdentity.semanticKey,
       command: executionIdentity.command,
+      ...(executionIdentity.targets?.length ? { targets: [...executionIdentity.targets] } : {}),
       ...(executionIdentity.commandConfigFingerprint ? { commandConfigFingerprint: executionIdentity.commandConfigFingerprint } : {}),
       ...(executionIdentity.dependencyFingerprint ? { dependencyFingerprint: executionIdentity.dependencyFingerprint } : {}),
       ...(executionIdentity.affectedInputFingerprint ? { affectedInputFingerprint: executionIdentity.affectedInputFingerprint } : {}),

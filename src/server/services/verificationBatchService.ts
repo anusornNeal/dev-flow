@@ -7,6 +7,7 @@ export type VerificationCoverageIdentity = Readonly<{
   key: string;
   command: string;
   semanticKey: string;
+  targets?: readonly string[];
   commandConfigFingerprint?: string;
   affectedInputFingerprint?: string;
   affectedInputPaths: readonly string[];
@@ -22,6 +23,13 @@ export function buildVerificationCoverageIdentity(value: any): VerificationCover
   const command = typeof value.command === 'string' ? value.command.trim() : '';
   const semanticKey = typeof value.semanticKey === 'string' ? value.semanticKey.trim() : '';
   if (!command || !semanticKey) return null;
+  const targets: string[] = Array.isArray(value.targets)
+    ? Array.from(new Set<string>(
+        value.targets
+          .map((entry: unknown): string => String(entry || '').trim().replace(/\\/g, '/'))
+          .filter((entry: string) => entry.length > 0),
+      )).sort()
+    : [];
   const affectedInputPaths: string[] = Array.isArray(value.affectedInputPaths)
     ? Array.from(new Set<string>(
         value.affectedInputPaths
@@ -45,6 +53,7 @@ export function buildVerificationCoverageIdentity(value: any): VerificationCover
     key: crypto.createHash('sha256').update(JSON.stringify(comparable)).digest('hex'),
     command,
     semanticKey,
+    ...(targets.length > 0 ? { targets: Object.freeze([...targets]) } : {}),
     ...(comparable.commandConfigFingerprint ? { commandConfigFingerprint: comparable.commandConfigFingerprint } : {}),
     ...(comparable.affectedInputFingerprint ? { affectedInputFingerprint: comparable.affectedInputFingerprint } : {}),
     affectedInputPaths: Object.freeze([...affectedInputPaths]),

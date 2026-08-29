@@ -113,6 +113,34 @@ function currentVerificationResult(provenance: { repoRevision: string }, suffix:
   };
 }
 
+test('owned revision policy is extracted behind the execution-session facade', async () => {
+  const ownedRevisionPolicy = await import('../../src/server/services/executionOwnedRevisionService.js');
+  for (const name of [
+    'recordExecutionOwnedChanges',
+    'getExecutionOwnershipState',
+    'adoptExecutionOwnedChanges',
+  ] as const) {
+    assert.equal(sessions[name], ownedRevisionPolicy[name], `${name} must remain a direct facade export`);
+  }
+  assert.equal(typeof ownedRevisionPolicy.reconcileExecutionOwnedRevisionDrift, 'function');
+});
+
+test('verification authority core is extracted behind the execution-session facade', async () => {
+  const verificationPolicy = await import('../../src/server/services/executionVerificationAuthorityService.js');
+  for (const name of [
+    'captureExecutionVerificationProvenance',
+    'getExecutionVerificationBatchState',
+    'getExecutionVerificationBatchStateById',
+    'getExecutionVerificationBatchLiveOperations',
+    'recordExecutionVerificationBatchResult',
+    'recordExecutionVerificationEvidence',
+    'getExecutionVerificationCoverageEvidence',
+  ] as const) {
+    assert.equal(sessions[name], verificationPolicy[name], `${name} must remain a direct facade export`);
+  }
+  assert.equal(typeof verificationPolicy.invalidateExecutionVerificationAuthorityForOwnedRevisionReconciliation, 'function');
+});
+
 test('separates execution-owned changes from unrelated working-tree changes and reports scope drift', () => {
   resetRepo();
   const session = createSession();

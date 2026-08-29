@@ -78,6 +78,40 @@ test('ownership epoch evidence is durable, idempotent, and cannot be rebound to 
   assert.equal(sessions.getExecutionSessionOwnershipEpoch(created.id).ownershipEpochId, first.ownershipEpochId);
 });
 
+test('ownership epoch policy is extracted behind the execution-session facade', async () => {
+  const epochPolicy = await import('../../src/server/services/executionOwnershipEpochService.js');
+  assert.equal(sessions.getExecutionSessionOwnershipEpoch, epochPolicy.getExecutionSessionOwnershipEpoch);
+  assert.equal(sessions.bindExecutionSessionOwnershipEpoch, epochPolicy.bindExecutionSessionOwnershipEpoch);
+
+  const created = sessions.createExecutionSession({
+    projectId: 'project-session',
+    taskId: 'task-epoch-extraction',
+    workspaceId: 'ws_epoch_extraction',
+    repoRoot,
+    ownershipEpochId: 'claim-epoch-extracted-11111111',
+  });
+  assert.equal(epochPolicy.getExecutionSessionOwnershipEpoch(created.id).ownershipEpochId, 'claim-epoch-extracted-11111111');
+});
+
+test('session state and ordinary lifecycle policy are extracted behind the facade', async () => {
+  const statePolicy = await import('../../src/server/services/executionSessionStateService.js');
+  for (const name of [
+    'createExecutionSession',
+    'getExecutionSessionState',
+    'recordExecutionLifecycleTransition',
+    'updateExecutionSessionProgress',
+    'resumeExecutionSession',
+    'completeExecutionSession',
+    'recordExecutionReconciliationEvidence',
+    'expireExecutionSessionsForTaskWorkspace',
+    'cancelExecutionSession',
+    'expireExecutionSession',
+    'pruneExpiredExecutionSessions',
+  ] as const) {
+    assert.equal(sessions[name], statePolicy[name], `${name} must remain a direct facade export`);
+  }
+});
+
 test('survives a fresh Node process and resolves the same logical session from SQLite', () => {
   const created = sessions.createExecutionSession({
     projectId: 'project-session',

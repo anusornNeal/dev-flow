@@ -426,15 +426,16 @@ test('MCP inventory can retain backend compatibility while full advertises only 
 
 test('legacy ownership adoption stays explicit, revision-bound, scoped, and auditable without auto-adopting Git diff', () => {
   const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
-  const executionSource = fs.readFileSync('src/server/services/executionSessionService.ts', 'utf8');
+  const executionFacadeSource = fs.readFileSync('src/server/services/executionSessionService.ts', 'utf8');
+  const ownedRevisionSource = fs.readFileSync('src/server/services/executionOwnedRevisionService.ts', 'utf8');
   assert.match(routeSource, /\/api\/git\/task-commit\/adopt-owned-changes/);
   assert.match(routeSource, /adoptTaskExecutionOwnedChanges/);
-  assert.match(executionSource, /adoptExecutionOwnedChanges/);
-  assert.match(executionSource, /expectedRevision/);
-  assert.match(executionSource, /adoptionReason/);
-  assert.match(executionSource, /EXECUTION_ADOPTION_NOT_UNOWNED_DIRTY/);
-  assert.match(executionSource, /authorizeTaskExecutionMutationPaths/);
-  assert.doesNotMatch(executionSource, /adopt[^\n]{0,80}(?:getGitStatus|git status|changedPaths)/i);
+  assert.match(executionFacadeSource, /adoptExecutionOwnedChanges/);
+  assert.match(ownedRevisionSource, /expectedRevision/);
+  assert.match(ownedRevisionSource, /adoptionReason/);
+  assert.match(ownedRevisionSource, /EXECUTION_ADOPTION_NOT_UNOWNED_DIRTY/);
+  assert.match(executionFacadeSource, /authorizeTaskExecutionMutationPaths/);
+  assert.doesNotMatch(ownedRevisionSource, /adopt[^\n]{0,80}(?:getGitStatus|git status|changedPaths)/i);
 });
 
 test('task-bound repo mutation tools declare ownership strategy or explicit plan-only exemption', () => {

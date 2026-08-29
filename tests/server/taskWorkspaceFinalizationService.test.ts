@@ -722,6 +722,56 @@ test('durable finalization operation resumes the same identity across injected p
   }
 });
 
+test('autonomous tail resumes the same integrated operation after workspace runtime restart without duplicate terminal effects', async () => {
+  const prepared = preparedAutonomousTailFixture('autonomous-restart-after-integration');
+  const beforeCommitCount = Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout);
+  __setTaskFinalizationFaultBoundaryForTests('after-integration');
+  let first: any;
+  try {
+    first = await runTaskWorkspaceHappyPathTail(prepared.state, {
+      taskId: prepared.task.id,
+      workspaceId: prepared.workspace.workspaceId,
+      commitMessage: 'feat: autonomous restart proof',
+      triggerJobId: 'job-green-restart-proof',
+    });
+  } finally {
+    __setTaskFinalizationFaultBoundaryForTests(null);
+  }
+
+  assert.equal(first.status, 'attention', JSON.stringify(first));
+  assert.equal(first.code, 'POST_INTEGRATION_FINALIZATION_REQUIRED');
+  assert.ok(first.operationId);
+  const integratedHead = git(prepared.root, ['rev-parse', 'HEAD']).stdout;
+  assert.equal(Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout), beforeCommitCount + 1);
+
+  resetSessionWorkspaceRuntimeForTests();
+  const resumed = await runTaskWorkspaceHappyPathTail(prepared.state, {
+    taskId: prepared.task.id,
+    workspaceId: prepared.workspace.workspaceId,
+    commitMessage: 'feat: autonomous restart proof',
+    triggerJobId: 'job-green-restart-proof',
+  });
+
+  assert.equal(resumed.status, 'completed', JSON.stringify(resumed));
+  assert.equal(resumed.operationId, first.operationId);
+  assert.equal(git(prepared.root, ['rev-parse', 'HEAD']).stdout, integratedHead, 'restart recovery must not integrate twice');
+  assert.equal(Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout), beforeCommitCount + 1, 'restart recovery must not create a duplicate commit');
+  assert.equal((getTask(prepared.task.id)?.logs || []).filter((entry: any) => entry.id === `log-workspace-finalized-${first.operationId}`).length, 1);
+  assert.equal(getTask(prepared.task.id)?.status, 'done');
+  assert.equal(fs.existsSync(prepared.workspace.root), false);
+
+  const replay = await runTaskWorkspaceHappyPathTail(prepared.state, {
+    taskId: prepared.task.id,
+    workspaceId: prepared.workspace.workspaceId,
+    commitMessage: 'feat: autonomous restart proof',
+    triggerJobId: 'job-green-restart-proof',
+  });
+  assert.equal(replay.status, 'completed');
+  assert.equal(replay.idempotent, true);
+  assert.equal(Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout), beforeCommitCount + 1);
+  assert.equal((getTask(prepared.task.id)?.logs || []).filter((entry: any) => entry.id === `log-workspace-finalized-${first.operationId}`).length, 1);
+});
+
 test('task presentation drift after integration does not revoke a frozen finalization operation', () => {
   const { task, workspace, state, execution } = preparedFinalizationFixture('status-drift-resume');
   __setTaskFinalizationFaultBoundaryForTests('after-integration');

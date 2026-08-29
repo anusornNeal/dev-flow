@@ -663,6 +663,7 @@ export function getDevFlowDiagnostics(options?: {
     sourceFreshness: getRuntimeSourceFreshness(),
     contractVersion: DEVFLOW_CONTRACT_VERSION,
     toolSurfaceIdentity: capabilityCatalog.mcpProfile.toolSurfaceIdentity,
+    criticalToolSchemaIdentity: capabilityCatalog.mcpProfile.criticalToolSchemaIdentity,
   };
   const runtimeDiagnosis = classifyRuntimeIdentity(runtime, options?.clientState);
   const recoveryParity = classifyRecoveryCapabilityParity(runtime, capabilityCatalog.recovery, options?.clientState);

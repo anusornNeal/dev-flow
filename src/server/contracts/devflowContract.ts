@@ -1973,6 +1973,17 @@ export function getMcpToolSurfaceIdentity(tools: readonly any[]) {
   return createHash('sha256').update(stableToolSurfaceJson(surface), 'utf8').digest('hex');
 }
 
+const CRITICAL_CLIENT_TOOL_SCHEMA_NAMES = new Set([
+  'get_next_action',
+  'claim_next_task',
+  'get_recovery_handoff',
+  'devflow_health_check',
+]);
+
+export function getCriticalClientToolSchemaIdentity(tools: readonly any[]) {
+  return getMcpToolSurfaceIdentity(tools.filter((tool) => CRITICAL_CLIENT_TOOL_SCHEMA_NAMES.has(String(tool?.name || ''))));
+}
+
 function inputSchemaHasPath(schema: any, pathValue: string) {
   let current = schema;
   for (const segment of pathValue.split('.')) {
@@ -2033,8 +2044,10 @@ export function getToolProfileSummary() {
 export function getCapabilityCatalog() {
   const profileResolution = resolveDevFlowToolProfile();
   const activeTools = getMcpToolList(profileResolution.profile);
+
   const activeToolSurfaceIdentity = getMcpToolSurfaceIdentity(activeTools);
-  const cacheKey = `${DEVFLOW_CONTRACT_VERSION}|${profileResolution.profile}|${profileResolution.configured ?? ''}|${profileResolution.fallback ? '1' : '0'}|${activeToolSurfaceIdentity}`;
+  const criticalToolSchemaIdentity = getCriticalClientToolSchemaIdentity(activeTools);
+  const cacheKey = `${DEVFLOW_CONTRACT_VERSION}|${profileResolution.profile}|${profileResolution.configured ?? ''}|${profileResolution.fallback ? '1' : '0'}|${activeToolSurfaceIdentity}|${criticalToolSchemaIdentity}`;
   const cached = capabilityCatalogCache.get(cacheKey);
   if (cached) return cached;
 
@@ -2105,7 +2118,9 @@ export function getCapabilityCatalog() {
       toolCount: activeProfileSummary.toolCount,
       schemaBytes: activeProfileSummary.schemaBytes,
       toolSurfaceIdentity: activeToolSurfaceIdentity,
+      criticalToolSchemaIdentity,
       availableProfiles: [...DEVFLOW_TOOL_PROFILES],
+
     },
     matrix,
     workflow: {

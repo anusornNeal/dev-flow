@@ -373,12 +373,31 @@ test('recovery parity separates server readiness from client-observed MCP surfac
       contractVersion: current.runtime.contractVersion,
       runtimeInstanceId: current.runtime.runtimeInstanceId,
       toolSurfaceIdentity: current.runtime.toolSurfaceIdentity,
+      criticalToolSchemaIdentity: current.runtime.criticalToolSchemaIdentity,
       toolsVisible: true,
     },
   } as any) as any;
   assert.equal(matching.recoveryParity.clientObserved.state, 'ready');
+  assert.equal(matching.recoveryParity.clientObserved.criticalToolSchemaMatch, true);
   assert.equal(matching.recoveryParity.endToEnd.state, 'ready');
   assert.equal(matching.recoveryParity.endToEnd.ready, true);
+
+  const staleCriticalSchema = getDevFlowDiagnostics({
+    supervisorState: null,
+    clientState: {
+      contractVersion: current.runtime.contractVersion,
+      runtimeInstanceId: current.runtime.runtimeInstanceId,
+      toolSurfaceIdentity: current.runtime.toolSurfaceIdentity,
+      criticalToolSchemaIdentity: 'f'.repeat(64),
+      toolsVisible: true,
+    },
+  } as any) as any;
+  assert.equal(staleCriticalSchema.recoveryParity.clientObserved.state, 'schema-mismatch');
+  assert.equal(staleCriticalSchema.recoveryParity.clientObserved.criticalToolSchemaMatch, false);
+  assert.equal(staleCriticalSchema.recoveryParity.endToEnd.state, 'not-ready');
+  assert.equal(staleCriticalSchema.recoveryParity.endToEnd.ready, false);
+  assert.ok(staleCriticalSchema.recoveryParity.endToEnd.reasonCodes.includes('CLIENT_TOOL_SCHEMA_MISMATCH'));
+  assert.equal(staleCriticalSchema.recoveryParity.endToEnd.recoverySurface, 'get_recovery_handoff');
 
   const staleSurface = getDevFlowDiagnostics({
     supervisorState: null,

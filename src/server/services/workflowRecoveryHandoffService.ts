@@ -37,6 +37,7 @@ type RecoveryArgs = {
   previousContractVersion?: string;
   previousRuntimeInstanceId?: string;
   previousToolSurfaceIdentity?: string;
+  previousCriticalToolSchemaIdentity?: string;
   clientToolsVisible?: boolean | string;
   clientUnavailableToolNames?: string | string[];
 };
@@ -58,10 +59,11 @@ function clientStateFromArgs(args: RecoveryArgs): RuntimeClientState | undefined
     contractVersion: clean(args.previousContractVersion) || undefined,
     runtimeInstanceId: clean(args.previousRuntimeInstanceId) || undefined,
     toolSurfaceIdentity: clean(args.previousToolSurfaceIdentity) || undefined,
+    criticalToolSchemaIdentity: clean(args.previousCriticalToolSchemaIdentity) || undefined,
     toolsVisible,
     unavailableToolNames,
   };
-  return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.toolsVisible !== undefined || state.unavailableToolNames.length > 0 ? state : undefined;
+  return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.criticalToolSchemaIdentity || state.toolsVisible !== undefined || state.unavailableToolNames.length > 0 ? state : undefined;
 }
 
 function runtimeEvidence(args: RecoveryArgs) {
@@ -71,6 +73,7 @@ function runtimeEvidence(args: RecoveryArgs) {
     sourceFreshness: getRuntimeSourceFreshness(),
     contractVersion: DEVFLOW_CONTRACT_VERSION,
     toolSurfaceIdentity: capabilityCatalog.mcpProfile.toolSurfaceIdentity,
+    criticalToolSchemaIdentity: capabilityCatalog.mcpProfile.criticalToolSchemaIdentity,
   };
   const clientState = clientStateFromArgs(args);
   const recoveryParity = classifyRecoveryCapabilityParity(current, capabilityCatalog.recovery, clientState);

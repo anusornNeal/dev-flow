@@ -74,10 +74,11 @@ function workflowHealthClientState(args: Record<string, any>): RuntimeClientStat
     contractVersion: clean(args.previousContractVersion) || undefined,
     runtimeInstanceId: clean(args.previousRuntimeInstanceId) || undefined,
     toolSurfaceIdentity: clean(args.previousToolSurfaceIdentity) || undefined,
+    criticalToolSchemaIdentity: clean(args.previousCriticalToolSchemaIdentity) || undefined,
     toolsVisible,
     unavailableToolNames,
   };
-  return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.toolsVisible !== undefined || state.unavailableToolNames.length > 0
+  return state.contractVersion || state.runtimeInstanceId || state.toolSurfaceIdentity || state.criticalToolSchemaIdentity || state.toolsVisible !== undefined || state.unavailableToolNames.length > 0
     ? state
     : undefined;
 }
@@ -995,7 +996,8 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     missingCapabilityIds: ['capability-status-missing'],
     capabilities: [],
   };
-  const recoveryParity = classifyRecoveryCapabilityParity(diagnostics.runtime as any, closureRecovery as any, clientState);
+
+  const recoveryParity = classifyRecoveryCapabilityParity({ ...diagnostics.runtime, criticalToolSchemaIdentity: catalog.mcpProfile.criticalToolSchemaIdentity } as any, closureRecovery as any, clientState);
   if (!closureRecovery.ready) {
     const missing = Array.isArray(closureRecovery.missingCapabilityIds)
       ? closureRecovery.missingCapabilityIds.slice(0, 8).join(', ')

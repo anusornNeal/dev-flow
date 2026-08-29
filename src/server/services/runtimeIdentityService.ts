@@ -87,6 +87,7 @@ export interface RuntimeClientState {
   contractVersion?: string;
   runtimeInstanceId?: string;
   toolSurfaceIdentity?: string;
+  criticalToolSchemaIdentity?: string;
   toolsVisible?: boolean;
   unavailableToolNames?: readonly string[];
 }
@@ -94,6 +95,7 @@ export interface RuntimeClientState {
 export interface RuntimeIdentityWithContract extends RuntimeIdentity {
   contractVersion: string;
   toolSurfaceIdentity: string;
+  criticalToolSchemaIdentity?: string;
   sourceFreshness?: RuntimeSourceFreshness;
 }
 
@@ -119,10 +121,9 @@ export interface RuntimeDiagnosis {
   restartSafety?: RuntimeRestartSafety;
   contractImpact?: RuntimeContractImpact;
   runningToolSurfaceIdentity?: string;
-
 }
 
-export type RuntimeRecoveryClientObservationState = 'unknown' | 'ready' | 'stale' | 'missing-tools';
+export type RuntimeRecoveryClientObservationState = 'unknown' | 'ready' | 'stale' | 'missing-tools' | 'schema-mismatch';
 export type RuntimeRecoveryEndToEndState = 'unknown' | 'ready' | 'not-ready';
 
 export interface RuntimeServerRecoveryState {
@@ -154,6 +155,7 @@ export interface RuntimeRecoveryParity {
     contractMatch: boolean | null;
     runtimeMatch: boolean | null;
     toolSurfaceMatch: boolean | null;
+    criticalToolSchemaMatch: boolean | null;
     missingRequiredRecoveryToolNames: string[];
   };
   endToEnd: {
@@ -173,30 +175,32 @@ export function classifyRecoveryCapabilityParity(
   const previousContract = String(clientState?.contractVersion || '').trim();
   const previousRuntime = String(clientState?.runtimeInstanceId || '').trim();
   const previousToolSurface = String(clientState?.toolSurfaceIdentity || '').trim();
-  const observed = Boolean(
-    previousContract
-    || previousRuntime
-    || previousToolSurface
-    || clientState?.toolsVisible !== undefined
-  );
+  const previousCriticalToolSchema = String(clientState?.criticalToolSchemaIdentity || '').trim();
+  const currentCriticalToolSchema = String(current.criticalToolSchemaIdentity || '').trim();
+  const observed = Boolean(previousContract || previousRuntime || previousToolSurface || previousCriticalToolSchema || clientState?.toolsVisible !== undefined);
   const contractMatch = previousContract ? previousContract === current.contractVersion : null;
   const runtimeMatch = previousRuntime ? previousRuntime === current.runtimeInstanceId : null;
   const toolSurfaceMatch = previousToolSurface ? previousToolSurface === current.toolSurfaceIdentity : null;
+  const criticalToolSchemaMatch = currentCriticalToolSchema ? (previousCriticalToolSchema ? previousCriticalToolSchema === currentCriticalToolSchema : null) : null;
   const toolsVisible = clientState?.toolsVisible === undefined ? null : clientState.toolsVisible;
   const unavailableToolNames = new Set((clientState?.unavailableToolNames || []).map((name) => String(name || '').trim()).filter(Boolean));
   const missingRequiredRecoveryToolNames = (serverRecovery.capabilities || [])
     .map((capability) => String(capability?.toolName || '').trim())
     .filter((toolName) => toolName && unavailableToolNames.has(toolName));
   const identityMismatch = contractMatch === false || runtimeMatch === false || toolSurfaceMatch === false;
+  const schemaMismatch = criticalToolSchemaMatch === false;
+  const schemaParityProven = !currentCriticalToolSchema || criticalToolSchemaMatch === true;
   const clientObservationState: RuntimeRecoveryClientObservationState = !observed
     ? 'unknown'
     : toolsVisible === false || missingRequiredRecoveryToolNames.length > 0
       ? 'missing-tools'
-      : identityMismatch
-        ? 'stale'
-        : toolsVisible === true && contractMatch === true && runtimeMatch === true && toolSurfaceMatch === true
-          ? 'ready'
-          : 'unknown';
+      : schemaMismatch
+        ? 'schema-mismatch'
+        : identityMismatch
+          ? 'stale'
+          : toolsVisible === true && contractMatch === true && runtimeMatch === true && toolSurfaceMatch === true && schemaParityProven
+            ? 'ready'
+            : 'unknown';
   const serverReady = Boolean(serverRecovery.ready);
   const reasonCodes: string[] = [];
   if (!serverReady) reasonCodes.push('SERVER_RECOVERY_SURFACE_NOT_READY');
@@ -205,24 +209,26 @@ export function classifyRecoveryCapabilityParity(
   if (contractMatch === false) reasonCodes.push('CLIENT_CONTRACT_MISMATCH');
   if (runtimeMatch === false) reasonCodes.push('CLIENT_RUNTIME_MISMATCH');
   if (toolSurfaceMatch === false) reasonCodes.push('CLIENT_TOOL_SURFACE_MISMATCH');
+  if (criticalToolSchemaMatch === false) reasonCodes.push('CLIENT_TOOL_SCHEMA_MISMATCH');
+  if (currentCriticalToolSchema && criticalToolSchemaMatch === null) reasonCodes.push('CLIENT_TOOL_SCHEMA_PARITY_NOT_PROVEN');
   if (serverReady && clientObservationState === 'unknown') reasonCodes.push('CLIENT_RECOVERY_PARITY_NOT_PROVEN');
 
   const endToEndState: RuntimeRecoveryEndToEndState = !serverReady
     ? 'not-ready'
     : clientObservationState === 'ready'
       ? 'ready'
-      : clientObservationState === 'stale' || clientObservationState === 'missing-tools'
+      : clientObservationState === 'stale' || clientObservationState === 'missing-tools' || clientObservationState === 'schema-mismatch'
         ? 'not-ready'
         : 'unknown';
   const endToEndReady = endToEndState === 'ready' ? true : endToEndState === 'not-ready' ? false : null;
-  const clientNeedsRefresh = clientObservationState === 'stale' || clientObservationState === 'missing-tools';
+  const clientNeedsRefresh = clientObservationState === 'stale' || clientObservationState === 'missing-tools' || clientObservationState === 'schema-mismatch';
   const nextAction = endToEndState === 'ready'
     ? 'No recovery-surface refresh is required; server capability and client-observed registry evidence match.'
     : !serverReady
       ? 'Repair the server-advertised closure recovery capability surface before relying on recovery operations.'
       : clientNeedsRefresh
         ? 'Reconnect or refresh the ChatGPT MCP/plugin tool registry. After tools are visible and current again, call get_recovery_handoff to continue from DevFlow-owned durable state without replaying mutations.'
-        : 'Client recovery parity is not proven. Supply the client-observed contract version, runtime instance, tool-surface fingerprint, and tool visibility before claiming end-to-end recovery readiness.';
+        : 'Client recovery parity is not proven. Supply the client-observed contract version, runtime instance, tool-surface fingerprint, critical-tool schema fingerprint, and tool visibility before claiming end-to-end recovery readiness.';
 
   return {
     server: {
@@ -232,15 +238,7 @@ export function classifyRecoveryCapabilityParity(
       toolSurfaceIdentity: String(serverRecovery.toolSurfaceIdentity || current.toolSurfaceIdentity || ''),
       missingCapabilityIds: Array.isArray(serverRecovery.missingCapabilityIds) ? [...serverRecovery.missingCapabilityIds] : [],
     },
-    clientObserved: {
-      observed,
-      state: clientObservationState,
-      toolsVisible,
-      contractMatch,
-      runtimeMatch,
-      toolSurfaceMatch,
-      missingRequiredRecoveryToolNames,
-    },
+    clientObserved: { observed, state: clientObservationState, toolsVisible, contractMatch, runtimeMatch, toolSurfaceMatch, criticalToolSchemaMatch, missingRequiredRecoveryToolNames },
     endToEnd: {
       state: endToEndState,
       ready: endToEndReady,
@@ -250,6 +248,7 @@ export function classifyRecoveryCapabilityParity(
     },
   };
 }
+
 
 function runtimeSourceRoot() {
   return path.resolve(process.env.DEVFLOW_RUNTIME_SOURCE_ROOT || getDevFlowAppRoot());

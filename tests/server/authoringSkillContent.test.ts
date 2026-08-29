@@ -169,6 +169,11 @@ test('07 owns implementation, verification, task workspace lifecycle, and termin
   assert.match(executionSkill, /integrate_workspace.*fallback|fallback.*integrate_workspace/i);
   assert.match(executionSkill, /batch[\s\S]*checklist|checklist[\s\S]*batch/i);
   assert.match(executionSkill, /Do not push/i);
+  assert.match(executionSkill, /autonomousTail\.enabled=true/i);
+  assert.match(executionSkill, /commitMessage/i);
+  assert.match(executionSkill, /authoritative GREEN[\s\S]*DevFlow-owned|DevFlow-owned[\s\S]*authoritative GREEN/i);
+  assert.match(executionSkill, /verification-only[\s\S]*non-autonomous|non-autonomous[\s\S]*verification-only/i);
+  assert.match(executionSkill, /structured attention|structured[\s\S]*recovery/i);
 });
 
 test('08 owns only board orchestration and delegates implementation policy to 07', () => {
@@ -213,6 +218,11 @@ test('08 owns only board orchestration and delegates implementation policy to 07
   assert.match(boardLoopSkill, /requestedTaskId/i);
   assert.match(boardLoopSkill, /confirm-loop-stop/i);
   assert.match(boardLoopSkill, /do not reconstruct[\s\S]*(?:chat|prompt)|(?:chat|prompt)[\s\S]*memory/i);
+  assert.match(boardLoopSkill, /autonomousTail\.enabled=true/i);
+  assert.match(boardLoopSkill, /commitMessage/i);
+  assert.match(boardLoopSkill, /authoritative GREEN[\s\S]*DevFlow owns|DevFlow owns[\s\S]*authoritative GREEN/i);
+  assert.match(boardLoopSkill, /verification-only[\s\S]*non-autonomous|non-autonomous[\s\S]*verification-only/i);
+  assert.match(boardLoopSkill, /manual(?:ly)? orchestrate[\s\S]*(?:fallback|recovery)|(?:fallback|recovery)[\s\S]*manual/i);
   for (const delegatedDetail of [
     'RED-required',
     'RED-deferred',

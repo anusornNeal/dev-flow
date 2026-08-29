@@ -61,7 +61,13 @@ Use a conventional commit input and let DevFlow apply the authoritative task/tic
 Do not push unless the user explicitly requests publication.
 
 ## Preferred terminal path
-After the claimed workspace is clean, committed, and required checks pass, prefer `finalize_task_workspace` as the normal local terminal flow. It owns repository-policy integration, evidence synchronization, task completion, and safe workspace cleanup when eligible.
+For continue-until-terminal intent, the authoritative final verification is the handoff boundary. Before launching it, the reasoning agent must choose the conventional commit message and request `run_project_command` with `autonomousTail.enabled=true` plus that non-empty `commitMessage`. Do not ask DevFlow to invent semantic commit text while the reasoning agent is available.
+
+Once authoritative GREEN verification accepts that terminal handoff, deterministic closure is DevFlow-owned: task-owned commit, repository-policy integration/finalization, any required post-integration verification, safe cleanup, and DONE continue without another reasoning-agent mutation call. GREEN verification, a clean commit, pending finalization, or cleanup are not response boundaries after autonomous-tail admission. Resume reasoning only for structured attention or recovery.
+
+Ordinary verification-only, investigation, debugging, or evidence-gathering commands that do not carry terminal completion intent remain non-autonomous and must not unexpectedly commit or finalize work. Failed or stale verification, ownership ambiguity, conflicts, unsafe drift, and cleanup impossibility still stop in structured attention rather than forcing completion.
+
+If no autonomous tail was admitted, or continuation explicitly requires manual recovery, prefer `finalize_task_workspace` as the fallback local terminal flow after the claimed workspace is clean, committed, and required checks pass. It owns repository-policy integration, evidence synchronization, task completion, and safe workspace cleanup when eligible.
 
 If finalization reports `needs-recovery` or cannot prove a safe terminal state, preserve the workspace and inspect it with `inspect_workspace_recovery`. Do not force-clean ambiguous work.
 

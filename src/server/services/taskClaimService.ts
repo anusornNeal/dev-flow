@@ -62,6 +62,11 @@ export type ExpandTaskClaimScopeInput = {
   paths: string[];
 };
 
+export type RenewTaskClaimInput = {
+  sessionId: string;
+  ttlMs?: number;
+};
+
 export type ReleaseTaskClaimInput = {
   sessionId: string;
   nextStatus?: TaskStatus;
@@ -1484,6 +1489,62 @@ export function claimTaskForSession(taskId: string, input: ClaimTaskInput) {
   const project = getProject(initial.projectId);
   if (!project) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${initial.projectId}' was not found.`, { affectedId: initial.projectId });
   return withSyncLock(`task-claim:${initial.projectId}`, () => claimTaskForSessionLocked(taskId, input, cleanSessionId, project));
+}
+
+export function renewTaskClaim(taskId: string, input: RenewTaskClaimInput) {
+  const cleanSessionId = String(input?.sessionId || '').trim();
+  if (!cleanSessionId) throw createApiError(400, 'SESSION_ID_REQUIRED', 'sessionId is required to renew a task claim.');
+  const initial = getTaskByIdentifier(taskId, 'full');
+  if (!initial) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+  if (!initial.projectId) throw createApiError(400, 'TASK_PROJECT_REQUIRED', 'Task must belong to a project before its claim can be renewed.', { affectedId: initial.id });
+
+  return withSyncLock(`task-claim:${initial.projectId}`, () => {
+    const task = getTaskByIdentifier(taskId, 'full');
+    if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+    const nowMs = Date.now();
+    if (!task.claim || typeof task.claim !== 'object') {
+      throw createApiError(409, 'TASK_CLAIM_REQUIRED', `Task '${task.displayId || task.id}' does not have a task claim to renew.`, { affectedId: task.id });
+    }
+    if (!isActiveClaim(task.claim, nowMs)) {
+      throw createApiError(409, 'TASK_CLAIM_EXPIRED', `Task '${task.displayId || task.id}' claim is expired and cannot be renewed. Reclaim it through the normal claim flow.`, {
+        affectedId: task.id,
+        details: { expiresAt: task.claim.expiresAt || null },
+      });
+    }
+    const hash = sessionIdHash(cleanSessionId);
+    if (task.claim.sessionIdHash !== hash) {
+      throw createApiError(409, 'TASK_CLAIM_OWNER_MISMATCH', `Task '${task.displayId || task.id}' claim is owned by another session.`, {
+        affectedId: task.id,
+        details: { claim: task.claim },
+      });
+    }
+
+    const previousExpiresAt = task.claim.expiresAt;
+    const requestedExpiresAtMs = nowMs + boundedTtlMs(input.ttlMs);
+    const currentExpiresAtMs = Date.parse(previousExpiresAt);
+    const newExpiresAt = new Date(Math.max(currentExpiresAtMs, requestedExpiresAtMs)).toISOString();
+    const renewedAt = new Date(nowMs).toISOString();
+    const auditOwnerLabel = String(task.claim.ownerLabel || task.claim.ownerKind || 'current owner');
+    const updated = {
+      ...task,
+      claim: { ...task.claim, expiresAt: newExpiresAt },
+      updatedAt: renewedAt,
+      logs: [...(Array.isArray(task.logs) ? task.logs : []), {
+        id: `log-task-claim-renew-${nowMs}`,
+        timestamp: renewedAt,
+        message: `Task claim lease renewed for ${auditOwnerLabel}: ${previousExpiresAt} -> ${newExpiresAt} (epoch ${task.claim.ownershipEpochId || 'legacy'}).`,
+        type: 'update',
+      }],
+    };
+    saveTask(updated);
+    return {
+      task: getTaskByIdentifier(task.id, 'full') || updated,
+      claim: updated.claim,
+      renewed: true,
+      previousExpiresAt,
+      expiresAt: newExpiresAt,
+    };
+  });
 }
 
 export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskInput) {

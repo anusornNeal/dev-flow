@@ -191,6 +191,22 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
     buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/claim`, { responseMode: responseMode || 'summary' }), body }),
   },
   {
+    name: 'renew_task_claim',
+    description: 'Atomically renew one still-live task claim owned by this caller session. Renewal extends only the lease expiry from renewal time, preserves ownership epoch/workspace/execution authority, never shortens a live lease, and never resurrects an expired or foreign claim.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...taskIdentifierProperty,
+        sessionId: { type: 'string', description: 'Opaque caller session id that currently owns the active task claim.' },
+        ttlMs: { type: 'number', description: 'Optional requested lease duration from renewal time. The server clamps it to the existing task-claim TTL bounds and never shortens a still-live lease.' },
+        ...mutationResponseModeProperty,
+      },
+      required: ['taskId', 'sessionId'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: ({ taskId, responseMode, ...body }) => ({ method: 'POST', path: withQuery(`/api/tasks/${encodePathSegment(String(taskId))}/claim/renew`, { responseMode: responseMode || 'summary' }), body }),
+  },
+  {
     name: 'expand_task_scope',
     description: 'Explicitly extend the active claimed file scope for one task after runtime dependency discovery while keeping targetFiles as the initial declared scope. The caller must own the active claim; new paths are normalized, persisted on the claim, and rejected on overlap with other active claimed scopes.',
     inputSchema: {

@@ -16,6 +16,26 @@ test('claim_task and release_task_claim are canonical task tools with required c
 });
 
 
+test('renew_task_claim is an owner-guarded bounded lease-renewal write intent', () => {
+  const tool = taskToolDefinitions.find((entry) => entry.name === 'renew_task_claim');
+  assert.ok(tool);
+  assert.match(String(tool.description || ''), /never resurrects an expired or foreign claim/);
+  const schema = tool.inputSchema as any;
+  assert.equal(schema?.properties?.sessionId?.type, 'string');
+  assert.equal(schema?.properties?.ttlMs?.type, 'number');
+  assert.ok(schema?.required?.includes('taskId'));
+  assert.ok(schema?.required?.includes('sessionId'));
+  const request = tool.buildHttpRequest({ taskId: 'DVF-0786', sessionId: 'worker-a', ttlMs: 120_000 });
+  assert.equal(request.method, 'POST');
+  assert.equal(request.path, '/api/tasks/DVF-0786/claim/renew?responseMode=summary');
+  assert.equal((request.body as any)?.sessionId, 'worker-a');
+  assert.equal((request.body as any)?.ttlMs, 120_000);
+  assert.ok(devFlowToolDefinitions.some((entry) => entry.name === 'renew_task_claim'));
+  const inventory = buildMcpToolSurfaceInventory(taskToolDefinitions);
+  const classification = inventory.find((entry) => entry.name === 'renew_task_claim');
+  assert.equal(classification?.risk, 'write');
+});
+
 test('expand_task_scope is a bounded owner-guarded first-class write intent', () => {
   const tool = taskToolDefinitions.find((entry) => entry.name === 'expand_task_scope');
   assert.ok(tool);

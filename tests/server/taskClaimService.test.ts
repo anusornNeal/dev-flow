@@ -181,6 +181,78 @@ test('claim moves task to in-progress, binds opaque workspace, and is idempotent
   );
 });
 
+test('live owner can renew claim lease without changing ownership epoch, workspace, execution, or scope', () => {
+  seedTask('task-renew-live', ['src/RenewLive.ts'], undefined, 'DVF-0786');
+  const first = claims.claimTaskForSession('task-renew-live', { sessionId: 'renew-owner', ownerKind: 'agent', ownerLabel: 'Worker A', ttlMs: 60_000 });
+  const firstExecution = activeExecution('task-renew-live');
+  assert.ok(firstExecution);
+  const before = getTask('task-renew-live');
+  const beforeClaim = { ...before.claim };
+
+  const renewed = claims.renewTaskClaim('task-renew-live', { sessionId: 'renew-owner', ttlMs: 120_000 });
+  const after = getTask('task-renew-live');
+  const afterExecution = activeExecution('task-renew-live');
+
+  assert.equal(renewed.renewed, true);
+  assert.ok(Date.parse(renewed.expiresAt) > Date.parse(renewed.previousExpiresAt));
+  assert.equal(after.claim.sessionIdHash, beforeClaim.sessionIdHash);
+  assert.equal(after.claim.ownershipEpochId, beforeClaim.ownershipEpochId);
+  assert.equal(after.claim.workspaceId, beforeClaim.workspaceId);
+  assert.deepEqual(after.claim.reservedPaths, beforeClaim.reservedPaths);
+  assert.equal(after.status, before.status);
+  assert.equal(after.branch, before.branch);
+  assert.equal(afterExecution?.id, firstExecution.id);
+  assert.ok((after.logs || []).some((entry: any) => /claim lease renewed/i.test(entry.message)));
+  assert.ok((after.logs || []).some((entry: any) => /Worker A/.test(entry.message)));
+  assert.equal(JSON.stringify(after.logs).includes('renew-owner'), false);
+  assert.throws(
+    () => claims.claimTaskForSession('task-renew-live', { sessionId: 'renew-contender', ownerLabel: 'Contender' }),
+    (error: any) => error?.payload?.code === 'TASK_ALREADY_CLAIMED',
+  );
+});
+
+test('claim renewal rejects foreign and expired owners and cannot overwrite a rotated ownership epoch', () => {
+  seedTask('task-renew-guard', ['src/RenewGuard.ts'], undefined, 'DVF-0789');
+  const first = claims.claimTaskForSession('task-renew-guard', { sessionId: 'renew-old-owner', ownerLabel: 'Old Owner' });
+
+  assert.throws(
+    () => claims.renewTaskClaim('task-renew-guard', { sessionId: 'renew-foreign-owner' }),
+    (error: any) => error?.payload?.code === 'TASK_CLAIM_OWNER_MISMATCH',
+  );
+
+  const staleTask = getTask('task-renew-guard');
+  staleTask.claim = { ...staleTask.claim, expiresAt: new Date(Date.now() - 1_000).toISOString() };
+  staleTask.updatedAt = new Date().toISOString();
+  saveTask(staleTask);
+  assert.throws(
+    () => claims.renewTaskClaim('task-renew-guard', { sessionId: 'renew-old-owner' }),
+    (error: any) => error?.payload?.code === 'TASK_CLAIM_EXPIRED',
+  );
+
+  const reclaimed = claims.claimTaskForSession('task-renew-guard', { sessionId: 'renew-new-owner', ownerLabel: 'New Owner' });
+  assert.notEqual(reclaimed.claim.ownershipEpochId, first.claim.ownershipEpochId);
+  assert.throws(
+    () => claims.renewTaskClaim('task-renew-guard', { sessionId: 'renew-old-owner' }),
+    (error: any) => error?.payload?.code === 'TASK_CLAIM_OWNER_MISMATCH',
+  );
+  assert.equal(getTask('task-renew-guard').claim.ownershipEpochId, reclaimed.claim.ownershipEpochId);
+});
+
+test('claim renewal clamps requested TTL and never shortens an existing live lease', () => {
+  seedTask('task-renew-bounds', ['src/RenewBounds.ts'], undefined, 'DVF-0792');
+  const first = claims.claimTaskForSession('task-renew-bounds', { sessionId: 'renew-bounds-owner', ttlMs: 7 * 24 * 60 * 60 * 1000 });
+  const firstExpiry = Date.parse(first.claim.expiresAt);
+  const shortRequest = claims.renewTaskClaim('task-renew-bounds', { sessionId: 'renew-bounds-owner', ttlMs: 1 });
+  assert.equal(Date.parse(shortRequest.expiresAt), firstExpiry);
+
+  const stored = getTask('task-renew-bounds');
+  stored.claim = { ...stored.claim, expiresAt: new Date(Date.now() + 30_000).toISOString() };
+  saveTask(stored);
+  const minBound = claims.renewTaskClaim('task-renew-bounds', { sessionId: 'renew-bounds-owner', ttlMs: 1 });
+  const remainingMs = Date.parse(minBound.expiresAt) - Date.now();
+  assert.ok(remainingMs >= 59_000 && remainingMs <= 61_000, `expected ~60s minimum lease, got ${remainingMs}ms`);
+});
+
 test('task claims use the trailing card number for the visible worktree folder and Git branch', () => {
   seedTask('task-folder-dvf', ['src/DvfFolder.ts'], undefined, 'DVF-0469');
   seedTask('task-folder-bsa', ['src/BsaFolder.ts'], undefined, 'BSA-0057');

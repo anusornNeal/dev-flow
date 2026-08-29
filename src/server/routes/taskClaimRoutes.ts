@@ -1,7 +1,7 @@
 import type express from 'express';
 import type { ApiRouteDeps } from '../types.js';
 import { sendApiError } from '../services/api.js';
-import { claimNextTaskForSession, claimTaskForSession, expandTaskClaimScope, getNextActionForSession, releaseTaskClaim } from '../services/taskClaimService.js';
+import { claimNextTaskForSession, claimTaskForSession, expandTaskClaimScope, getNextActionForSession, releaseTaskClaim, renewTaskClaim } from '../services/taskClaimService.js';
 import { toMutationResponse } from './taskRouteSupport.js';
 
 export function registerTaskClaimRoutes(app: express.Express, _deps: ApiRouteDeps) {
@@ -28,6 +28,16 @@ export function registerTaskClaimRoutes(app: express.Express, _deps: ApiRouteDep
   app.post('/api/tasks/:id/claim', (req, res) => {
     try {
       const result = claimTaskForSession(req.params.id, req.body || {});
+      return res.json(toMutationResponse(req, result.task, result));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/tasks/:id/claim/renew', (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = renewTaskClaim(req.params.id, body);
       return res.json(toMutationResponse(req, result.task, result));
     } catch (error) {
       return sendApiError(res, error);

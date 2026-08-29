@@ -4,7 +4,7 @@ import { getDevFlowAppRoot } from '../../lib/devFlowPaths.js';
 import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { queryExecutionSessions } from '../repositories/executionSessionRepository.js';
 import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
-import { classifyLifecycleLiveWorkAuthority } from './lifecycleAuthorityService.js';
+import { classifyLifecycleLiveWorkAuthority, type LiveWorkAuthorityClassification } from './lifecycleAuthorityService.js';
 
 export type DevFlowMcpTransport = 'streamable-http' | 'legacy-sse';
 
@@ -38,20 +38,26 @@ export interface RuntimeSourceFreshness {
   nextAction: string;
 }
 
+export interface RuntimeRestartSafetyEntry {
+  taskId: string | null;
+  executionSessionId: string;
+  workspaceId: string | null;
+  stage: string;
+  classification: LiveWorkAuthorityClassification | 'durable-operation-without-task' | 'non-authoritative-execution';
+  reasonCodes: string[];
+  pendingOperationIds: string[];
+  changedFiles: string[];
+  nextAction?: string;
+}
+
 export interface RuntimeRestartSafety {
   blocked: boolean;
   truncated: boolean;
-  active: Array<{
-    taskId: string | null;
-    executionSessionId: string;
-    workspaceId: string | null;
-    stage: string;
-    reasonCodes: string[];
-    pendingOperationIds: string[];
-    changedFiles: string[];
-  }>;
+  active: RuntimeRestartSafetyEntry[];
+  cleanupDebt: RuntimeRestartSafetyEntry[];
 }
 const MAX_RUNTIME_RESTART_BLOCKERS = 10;
+const MAX_RUNTIME_RESTART_DEBT = 10;
 
 export interface RuntimeIdentity {
   runtimeInstanceId: string;
@@ -339,7 +345,16 @@ export function getRuntimeSourceFreshness(): RuntimeSourceFreshness {
 export function getRuntimeRestartSafety(): RuntimeRestartSafety {
   const query = queryExecutionSessions({ status: 'active', limit: 100 });
   const authorityByTask = new Map<string, ReturnType<typeof classifyLifecycleLiveWorkAuthority> | null>();
-  const active = query.sessions.flatMap((session) => {
+  const active: RuntimeRestartSafetyEntry[] = [];
+  const cleanupDebt: RuntimeRestartSafetyEntry[] = [];
+  let resultTruncated = query.truncated;
+
+  const appendBounded = (target: RuntimeRestartSafetyEntry[], entry: RuntimeRestartSafetyEntry, limit: number) => {
+    if (target.length < limit) target.push(entry);
+    else resultTruncated = true;
+  };
+
+  for (const session of query.sessions) {
     const checkpoint = getLatestExecutionCheckpoint(session.id);
     const pendingOperationIds = (checkpoint?.pendingOperations || [])
       .filter((entry) => entry.status === 'accepted' || entry.status === 'running')
@@ -347,17 +362,31 @@ export function getRuntimeRestartSafety(): RuntimeRestartSafety {
       .filter(Boolean);
     const changedFiles = Array.from(new Set(session.changedFiles || [])).slice(0, 50);
     const taskId = String(session.taskId || '').trim();
+    const baseEntry = {
+      taskId: session.taskId,
+      executionSessionId: session.id,
+      workspaceId: session.workspaceId,
+      stage: session.lifecycle.stage,
+      pendingOperationIds,
+      changedFiles,
+    };
+
     if (!taskId) {
-      if (pendingOperationIds.length === 0) return [];
-      return [{
-        taskId: session.taskId,
-        executionSessionId: session.id,
-        workspaceId: session.workspaceId,
-        stage: session.lifecycle.stage,
-        reasonCodes: ['PENDING_DURABLE_OPERATION'],
-        pendingOperationIds,
-        changedFiles,
-      }];
+      if (pendingOperationIds.length > 0) {
+        appendBounded(active, {
+          ...baseEntry,
+          classification: 'durable-operation-without-task',
+          reasonCodes: ['PENDING_DURABLE_OPERATION', 'TASK_ID_MISSING'],
+        }, MAX_RUNTIME_RESTART_BLOCKERS);
+      } else {
+        appendBounded(cleanupDebt, {
+          ...baseEntry,
+          classification: 'non-authoritative-execution',
+          reasonCodes: ['TASK_ID_MISSING', 'NON_AUTHORITATIVE_EXECUTION'],
+          nextAction: 'Inspect with cleanup_orphan_executions dry-run; this stale execution row is non-blocking unless durable work or recoverable WIP is discovered.',
+        }, MAX_RUNTIME_RESTART_DEBT);
+      }
+      continue;
     }
 
     let authority = authorityByTask.get(taskId);
@@ -365,39 +394,52 @@ export function getRuntimeRestartSafety(): RuntimeRestartSafety {
       try {
         authority = classifyLifecycleLiveWorkAuthority(taskId, {
           workspaceId: session.workspaceId || undefined,
-          deferWorkspaceInspection: true,
         });
       } catch {
         authority = null;
       }
       authorityByTask.set(taskId, authority);
     }
+
     if (!authority) {
-      return [{
-        taskId: session.taskId,
-        executionSessionId: session.id,
-        workspaceId: session.workspaceId,
-        stage: session.lifecycle.stage,
-        reasonCodes: ['TASK_AUTHORITY_UNAVAILABLE'],
-        pendingOperationIds,
-        changedFiles,
-      }];
+      if (pendingOperationIds.length > 0) {
+        appendBounded(active, {
+          ...baseEntry,
+          classification: 'durable-operation-without-task',
+          reasonCodes: ['PENDING_DURABLE_OPERATION', 'TASK_AUTHORITY_UNAVAILABLE'],
+        }, MAX_RUNTIME_RESTART_BLOCKERS);
+      } else {
+        appendBounded(cleanupDebt, {
+          ...baseEntry,
+          classification: 'non-authoritative-execution',
+          reasonCodes: ['TASK_AUTHORITY_UNAVAILABLE', 'NON_AUTHORITATIVE_EXECUTION'],
+          nextAction: 'Inspect with cleanup_orphan_executions dry-run; unresolved historical authority is surfaced as cleanup debt instead of permanently blocking restart.',
+        }, MAX_RUNTIME_RESTART_DEBT);
+      }
+      continue;
     }
-    if (!authority.operations.restart.hardBlocked) return [];
-    return [{
-      taskId: session.taskId,
-      executionSessionId: session.id,
-      workspaceId: session.workspaceId,
-      stage: session.lifecycle.stage,
-      reasonCodes: authority.operations.restart.reasonCodes,
-      pendingOperationIds,
-      changedFiles,
-    }];
-  }).slice(0, MAX_RUNTIME_RESTART_BLOCKERS);
+
+    const restartProjection = authority.operations.restart;
+    const entry: RuntimeRestartSafetyEntry = {
+      ...baseEntry,
+      classification: authority.classification,
+      reasonCodes: restartProjection.reasonCodes,
+    };
+    if (restartProjection.hardBlocked) {
+      appendBounded(active, entry, MAX_RUNTIME_RESTART_BLOCKERS);
+    } else if (restartProjection.debt) {
+      appendBounded(cleanupDebt, {
+        ...entry,
+        nextAction: 'Inspect with cleanup_orphan_executions dry-run and apply only when the canonical orphan-cleanup classifier confirms the execution is safe.',
+      }, MAX_RUNTIME_RESTART_DEBT);
+    }
+  }
+
   return {
     blocked: active.length > 0 || query.truncated,
-    truncated: query.truncated,
+    truncated: resultTruncated,
     active,
+    cleanupDebt,
   };
 }
 
@@ -504,9 +546,15 @@ export function classifyRuntimeIdentity(
       ? {
           ...sourceDiagnosis,
           restartSafety,
-          nextAction: `Restart is blocked by durable operation or active WIP risk (${blockerIdentities || 'bounded active-session scan is truncated'}). Resolve or preserve the reported pending operation/WIP safely, then restart; lifecycle stage labels alone do not authorize or block restart.`, 
+          nextAction: `Restart is blocked by durable operation or active WIP risk (${blockerIdentities || 'bounded active-session scan is truncated'}). Resolve or preserve the reported pending operation/WIP safely, then restart; lifecycle stage labels alone do not authorize or block restart.`,
         }
-      : { ...sourceDiagnosis, restartSafety };
+      : restartSafety.cleanupDebt.length > 0
+        ? {
+            ...sourceDiagnosis,
+            restartSafety,
+            nextAction: `${sourceDiagnosis.nextAction} ${restartSafety.cleanupDebt.length} bounded stale/non-authoritative execution record(s) remain as non-blocking cleanup debt; inspect cleanup_orphan_executions with dry-run after restart rather than cancelling or deleting them implicitly.`,
+          }
+        : { ...sourceDiagnosis, restartSafety };
     return clientDiagnosis
       ? { ...diagnosed, concurrentDiagnostics: [clientDiagnosis] }
       : diagnosed;

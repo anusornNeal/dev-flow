@@ -270,6 +270,52 @@ test('claim and execution ownership epoch mismatch is a hard identity conflict',
   assert.equal(listExecutionSessionsForTask(id).find((entry: any) => entry.id === replacement.id)?.status, 'active');
 });
 
+test('restart projection treats invalid orphan workspace authority as cleanup debt but still blocks live ownership', () => {
+  const orphanId = seedTask('invalid-orphan-restart-debt', 'src/J.ts');
+  const orphanClaimed = claim(orphanId, 'authority-invalid-orphan');
+  const orphanWorkspace = workspaces.resolveSessionWorkspace(orphanClaimed.claim.workspaceId)!;
+  const orphanTask = getTask(orphanId)!;
+  orphanTask.claim = undefined;
+  orphanTask.status = 'done';
+  orphanTask.updatedAt = new Date().toISOString();
+  saveTask(orphanTask);
+  fs.rmSync(orphanWorkspace.root, { recursive: true, force: true });
+
+  const orphanAuthority = authority.classifyLifecycleLiveWorkAuthority(orphanId, { workspaceId: orphanWorkspace.workspaceId });
+  assert.equal(orphanAuthority.classification, 'invalid-workspace-authority');
+  assert.equal(orphanAuthority.operations.restart.hardBlocked, false);
+  assert.equal(orphanAuthority.operations.restart.debt, true);
+  assert.equal(orphanAuthority.operations.restart.reasonCodes.includes('WORKSPACE_AUTHORITY_INVALID_RESTART_DEBT'), true);
+
+  const liveId = seedTask('invalid-live-restart-blocker', 'src/K.ts');
+  const liveClaimed = claim(liveId, 'authority-invalid-live');
+  const liveWorkspace = workspaces.resolveSessionWorkspace(liveClaimed.claim.workspaceId)!;
+  fs.rmSync(liveWorkspace.root, { recursive: true, force: true });
+
+  const liveAuthority = authority.classifyLifecycleLiveWorkAuthority(liveId, { workspaceId: liveWorkspace.workspaceId });
+  assert.equal(liveAuthority.classification, 'invalid-workspace-authority');
+  assert.equal(liveAuthority.operations.restart.hardBlocked, true);
+  assert.equal(liveAuthority.operations.restart.reasonCodes.includes('LIVE_AUTHORITATIVE_WORK'), true);
+});
+
+test('claimless recoverable workspace WIP is a canonical restart blocker', () => {
+  const id = seedTask('recoverable-restart-fence', 'src/L.ts');
+  const claimed = claim(id, 'authority-recoverable-restart');
+  const workspace = workspaces.resolveSessionWorkspace(claimed.claim.workspaceId)!;
+  const task = getTask(id)!;
+  task.claim = undefined;
+  task.status = 'done';
+  task.updatedAt = new Date().toISOString();
+  saveTask(task);
+  fs.writeFileSync(path.join(workspace.root, 'src', 'L.ts'), 'export const L = 99;\n', 'utf8');
+
+  const liveWork = authority.classifyLifecycleLiveWorkAuthority(id, { workspaceId: workspace.workspaceId });
+  assert.equal(liveWork.classification, 'recoverable-wip');
+  assert.equal(liveWork.operations.restart.hardBlocked, true);
+  assert.equal(liveWork.operations.restart.reasonCodes.includes('RECOVERABLE_WIP_RESTART_FENCE'), true);
+  assert.equal(liveWork.operations.cleanup.hardBlocked, true);
+});
+
 test('authority computation is read-only for task, execution evidence, workspace bytes and Git state', () => {
   const id = seedTask('readonly', 'src/G.ts');
   const claimed = claim(id, 'authority-readonly');

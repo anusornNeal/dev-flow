@@ -496,7 +496,7 @@ test('project-scoped health reports aggregate activity without fabricated execut
   assert.equal(health.execution, undefined);
 });
 
-test('project-scoped health treats truncation-only idle aggregate as debt instead of a hard blocker', () => {
+test('project-scoped health ignores large terminal history when active lifecycle authority is complete', () => {
   const projectId = 'project-health-truncated-idle';
   const repo = path.join(tempRoot, projectId);
   fs.mkdirSync(repo, { recursive: true });
@@ -540,14 +540,13 @@ test('project-scoped health treats truncation-only idle aggregate as debt instea
   assert.equal(health.aggregate.pendingOperationCount, 0);
   assert.equal(health.aggregate.actionableWorkspaceCount, 0);
   assert.equal(health.aggregate.canonicalLiveAuthorityCount, 0);
-  assert.equal(health.aggregate.truncated, true);
-  assert.ok(truncation);
-  assert.equal(truncation.severity, 'debt');
+  assert.equal(health.aggregate.truncated, false);
+  assert.equal(truncation, undefined);
   assert.equal(health.hardBlockers.includes('PROJECT_LIFECYCLE_SCAN_TRUNCATED'), false);
   assert.equal(health.status, 'idle');
 });
 
-test('project-scoped health resolves late claimed executions while surfacing missing workspace authority', () => {
+test('project-scoped health resolves active claims independently of unrelated task history while surfacing missing workspace authority', () => {
   const repo = createRepo('project-aggregate-late-claim-health');
   for (let index = 0; index < 105; index += 1) {
     seedHealthTask(`task-health-filler-${index}`, `DVF-HEALTH-FILLER-${index}`);
@@ -571,8 +570,8 @@ test('project-scoped health resolves late claimed executions while surfacing mis
 
   assert.ok(missingWorkspace);
   assert.equal(missingWorkspace.executionSessionIds?.includes('exec-health-late-claimed'), true);
-  assert.equal(health.aggregate.truncated, true);
-  assert.equal(health.drift.some((entry: any) => entry.code === 'PROJECT_LIFECYCLE_SCAN_TRUNCATED'), true);
+  assert.equal(health.aggregate.truncated, false);
+  assert.equal(health.drift.some((entry: any) => entry.code === 'PROJECT_LIFECYCLE_SCAN_TRUNCATED'), false);
 });
 
 test('project-scoped health keeps real orphan drift without fabricating a late-page claim mismatch', () => {
@@ -985,17 +984,33 @@ test('workflow health reports historical regressions separately from insufficien
   assert.match(result.recommendations.join('\n'), /Historical performance regression/);
 });
 
-test('workflow health surfaces stale loaded source even while runtime supervisor is otherwise healthy', () => {
+test('workflow health surfaces stale source with hard restart blockers separated from cleanup debt', () => {
   const repo = createRepo('runtime-source-stale-health');
-  const before = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' });
+  const task = seedHealthTask('task-health-restart-debt', 'DVF-HRD-1');
+  const workspace = createHealthWorkspace(repo, `health-restart-debt-${path.basename(tempRoot)}`, task.displayId);
+  const execution = seedHealthExecution('exec-health-restart-debt', task.id, workspace.workspaceId);
+  const before = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
   assert.equal(before.runtime.sourceFreshness.code, 'current');
   fs.writeFileSync(path.join(runtimeSourceRoot, 'runtime-source.txt'), 'runtime source v2\n');
   git(runtimeSourceRoot, ['add', 'runtime-source.txt']);
   git(runtimeSourceRoot, ['commit', '-m', 'runtime source v2']);
 
-  const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' });
-  assert.equal(result.runtime.sourceFreshness.code, 'stale');
-  assert.equal(result.runtime.diagnosis.code, 'runtime-source-stale');
-  assert.notEqual(result.runtime.sourceFreshness.loadedRevision, result.runtime.sourceFreshness.currentRevision);
-  assert.match(result.recommendations.join('\n'), /runtime source|restart/i);
+  try {
+    const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
+    const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+    assert.equal(compact.runtime.sourceFreshness.code, 'stale');
+    assert.equal(compact.runtime.diagnosis.code, 'runtime-source-stale');
+    assert.equal(compact.runtime.diagnosis.restartSafety.cleanupDebtCount >= 1, true);
+    assert.equal(compact.runtime.diagnosis.restartSafety.debtReasonCodes.includes('SAFE_ORPHAN_EXECUTION'), true);
+    assert.equal(full.diagnostics.runtimeSource.restartSafety.cleanupDebtCount >= 1, true);
+    assert.equal(full.diagnostics.runtimeSource.diagnosis.restartSafety.cleanupDebt.some((entry: any) =>
+      entry.executionSessionId === execution.id && entry.classification === 'safe-orphan'), true);
+    assert.equal(full.diagnostics.runtimeSource.diagnosis.restartSafety.active.some((entry: any) =>
+      entry.executionSessionId === execution.id), false);
+    assert.notEqual(compact.runtime.sourceFreshness.loadedRevision, compact.runtime.sourceFreshness.currentRevision);
+    assert.match(compact.recommendations.join('\n'), /runtime source|restart/i);
+    assert.match(compact.recommendations.join('\n'), /cleanup debt|cleanup_orphan_executions/i);
+  } finally {
+    retireHealthWorkspace(execution.id, workspace.workspaceId);
+  }
 });

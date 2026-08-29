@@ -142,7 +142,19 @@ test('restart safety ignores safe-orphan changedFiles, but blocks live durable a
     assert.equal(stale.runtime.sourceFreshness.currentRevision, currentHead);
     assert.equal(stale.runtimeDiagnosis.restartSafety.blocked, false, 'safe orphan metadata must not become live authority because changedFiles is non-empty');
     assert.equal(stale.runtimeDiagnosis.restartSafety.active.some((entry: any) => entry.executionSessionId === execution.id), false);
-    assert.equal(stale.runtimeDiagnosis.restartSafety.active.some((entry: any) => entry.executionSessionId === execution.id), false);
+    assert.equal(stale.runtimeDiagnosis.restartSafety.cleanupDebt.some((entry: any) =>
+      entry.executionSessionId === execution.id
+      && entry.classification === 'safe-orphan'
+      && entry.reasonCodes?.includes('SAFE_ORPHAN_EXECUTION')), true);
+
+    fs.writeFileSync(path.join(workspace.root, 'runtime-source.txt'), 'recoverable orphan wip\n', 'utf8');
+    const recoverableBlocked = getDevFlowDiagnostics({ supervisorState: null } as any) as any;
+    assert.equal(recoverableBlocked.runtimeDiagnosis.restartSafety.blocked, true, 'claimless dirty/unique workspace WIP must remain a restart blocker');
+    assert.equal(recoverableBlocked.runtimeDiagnosis.restartSafety.active.some((entry: any) =>
+      entry.executionSessionId === execution.id
+      && entry.classification === 'recoverable-wip'
+      && entry.reasonCodes?.includes('RECOVERABLE_WIP_RESTART_FENCE')), true);
+    spawnSync('git', ['restore', '--', 'runtime-source.txt'], { cwd: workspace.root, encoding: 'utf8', shell: false });
 
     const duplicate = executionSessions.createExecutionSession({
       projectId: 'project-runtime-source',

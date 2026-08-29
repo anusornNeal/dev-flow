@@ -889,6 +889,14 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   const runtimeSupervisor = diagnostics?.runtimeSupervisor;
   const runtimeSourceFreshness = diagnostics?.runtime?.sourceFreshness || null;
   const runtimeDiagnosis = diagnostics?.runtimeDiagnosis || null;
+  const restartSafetySummary = runtimeDiagnosis?.restartSafety ? {
+    blocked: runtimeDiagnosis.restartSafety.blocked === true,
+    hardBlockerCount: Array.isArray(runtimeDiagnosis.restartSafety.active) ? runtimeDiagnosis.restartSafety.active.length : 0,
+    cleanupDebtCount: Array.isArray(runtimeDiagnosis.restartSafety.cleanupDebt) ? runtimeDiagnosis.restartSafety.cleanupDebt.length : 0,
+    truncated: runtimeDiagnosis.restartSafety.truncated === true,
+    hardReasonCodes: [...new Set((runtimeDiagnosis.restartSafety.active || []).flatMap((entry: any) => entry.reasonCodes || []))].slice(0, 8),
+    debtReasonCodes: [...new Set((runtimeDiagnosis.restartSafety.cleanupDebt || []).flatMap((entry: any) => entry.reasonCodes || []))].slice(0, 8),
+  } : null;
   const isolation = diagnostics?.isolation || {
     waits: { workspaceLockWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, capacityWait: { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 }, blockerReasons: {} },
     phases: {
@@ -950,6 +958,9 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   }
   if (runtimeSourceFreshness && runtimeSourceFreshness.code !== 'current') {
     recommendations.push(`DevFlow runtime source is ${runtimeSourceFreshness.code}; ${runtimeDiagnosis?.nextAction || runtimeSourceFreshness.nextAction || 'inspect runtime source freshness before treating this process as current.'}`);
+  }
+  if (restartSafetySummary && restartSafetySummary.cleanupDebtCount > 0) {
+    recommendations.push(`Restart safety found ${restartSafetySummary.cleanupDebtCount} bounded non-blocking execution cleanup debt record(s); inspect cleanup_orphan_executions with dry-run before applying cleanup.`);
   }
   if (queueDepth > 0) recommendations.push('MCP tool jobs are queued; inspect job status/log before starting conflicting repo work.');
   if (Number(durableJobs.staleRunning || 0) > 0) recommendations.push('A stale MCP tool job lease was detected in durable state; inspect recovery classification before retrying the job.');
@@ -1074,6 +1085,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       runtimeSource: {
         identity: diagnostics?.runtime || null,
         diagnosis: runtimeDiagnosis,
+        restartSafety: restartSafetySummary,
       },
       harness,
     },
@@ -1141,6 +1153,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       diagnosis: runtimeDiagnosis ? {
         code: runtimeDiagnosis.code,
         restartBlocked: runtimeDiagnosis.restartSafety?.blocked === true,
+        restartSafety: restartSafetySummary,
       } : null,
       repoCaches: compactRepoCaches,
       search: {

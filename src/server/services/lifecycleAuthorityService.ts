@@ -257,9 +257,14 @@ export function classifyLifecycleLiveWorkAuthority(
       try { inspection = inspectWorkspaceRecovery(workspaceId); } catch { inspection = null; }
     }
     if (!metadata || (!inspectionDeferred && (!inspection || inspection.disposition === 'stale-registry'))) {
-      issues.push(liveWorkIssue('WORKSPACE_AUTHORITY_INVALID', 'hard', 'Managed workspace authority cannot be proven from durable metadata and Git identity.', LIVE_WORK_OPERATIONS, {
+      const reason = inspection?.reason || (inspectionDeferred ? 'inspection-deferred' : 'metadata-or-inspection-unavailable');
+      issues.push(liveWorkIssue('WORKSPACE_AUTHORITY_INVALID', 'hard', 'Managed workspace authority cannot be proven from durable metadata and Git identity.', LIVE_WORK_OPERATIONS.filter((operation) => operation !== 'restart'), {
         workspaceId,
-        reason: inspection?.reason || (inspectionDeferred ? 'inspection-deferred' : 'metadata-or-inspection-unavailable'),
+        reason,
+      }));
+      issues.push(liveWorkIssue('WORKSPACE_AUTHORITY_INVALID_RESTART_DEBT', 'debt', 'Invalid/non-authoritative workspace history is restart cleanup debt unless independent live-work authority proves interruption risk.', ['restart'], {
+        workspaceId,
+        reason,
       }));
     } else {
       if (inspectionDeferred) {
@@ -367,17 +372,23 @@ export function classifyLifecycleLiveWorkAuthority(
   else if (activeExecutions.length > 0) classification = 'safe-orphan';
   else classification = 'terminal-history';
 
-  if (classification === 'live-authoritative') {
+  if (liveClaimExecution) {
     issues.push(liveWorkIssue('LIVE_AUTHORITATIVE_WORK', 'hard', 'A live claim and execution share one authoritative workspace and ownership epoch.', ['restart', 'cleanup'], {
       executionSessionId: uniqueActive?.id,
       workspaceId: claim.workspaceId,
     }));
-  } else if (classification === 'safe-orphan') {
+  }
+  if (classification === 'safe-orphan') {
     issues.push(liveWorkIssue('SAFE_ORPHAN_EXECUTION', 'debt', 'An active execution row remains without live claim or durable operation authority.', ['status', 'restart', 'cleanup'], {
       executionSessionIds: activeExecutions.map((entry) => entry.id).slice(0, 20),
     }));
   } else if (classification === 'recoverable-wip') {
     issues.push(liveWorkIssue('RECOVERABLE_WIP_REQUIRES_RECOVERY', 'debt', 'Task-compatible workspace WIP remains without live claim authority and must be preserved for recovery.', ['mutation', 'commit', 'integration', 'finalization', 'status'], {
+      workspaceId: recoverableWorkspace?.workspaceId,
+      disposition: recoverableWorkspace?.disposition,
+      dirtyFiles: recoverableWorkspace?.dirtyFiles,
+    }));
+    issues.push(liveWorkIssue('RECOVERABLE_WIP_RESTART_FENCE', 'hard', 'Recoverable workspace WIP must be preserved before restarting the API runtime.', ['restart'], {
       workspaceId: recoverableWorkspace?.workspaceId,
       disposition: recoverableWorkspace?.disposition,
       dirtyFiles: recoverableWorkspace?.dirtyFiles,

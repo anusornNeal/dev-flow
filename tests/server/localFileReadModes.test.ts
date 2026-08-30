@@ -76,6 +76,26 @@ test('readLocalFile accepts Windows-style separators and returns slash-normalize
 });
 
 
+test('readLocalFile content mode hashes the same bytes it returns without a duplicate full-file read', () => {
+  const targetPath = path.join(tempDir, 'sample.txt');
+  const originalReadFileSync = fs.readFileSync;
+  let targetReads = 0;
+  (fs as any).readFileSync = (...args: any[]) => {
+    if (path.resolve(String(args[0])) === path.resolve(targetPath)) targetReads += 1;
+    return (originalReadFileSync as any)(...args);
+  };
+  try {
+    const result = readLocalFile(state, {
+      projectId: 'project-read-1',
+      filePath: 'sample.txt',
+    });
+    assert.equal(result.content, 'one\ntwo\nthree\nfour');
+    assert.equal(targetReads, 1);
+  } finally {
+    (fs as any).readFileSync = originalReadFileSync;
+  }
+});
+
 test('readLocalFile returns revision metadata with content and metadata modes', () => {
   const contentResult = readLocalFile(state, {
     projectId: 'project-read-1',

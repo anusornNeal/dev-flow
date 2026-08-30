@@ -54,9 +54,7 @@ export type LocalFileReadResult = {
   omittedBytes?: number;
 };
 
-function buildFileRevision(filePath: string, stat: fs.Stats): FileRevision {
-  const content = fs.readFileSync(filePath);
-  const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+function buildFileRevisionFromSha256(stat: fs.Stats, sha256: string): FileRevision {
   return {
     token: `${stat.size}:${Math.trunc(stat.mtimeMs)}:${sha256.slice(0, 16)}`,
     sha256,
@@ -64,6 +62,15 @@ function buildFileRevision(filePath: string, stat: fs.Stats): FileRevision {
     mtimeMs: stat.mtimeMs,
     modifiedAt: stat.mtime.toISOString(),
   };
+}
+
+function buildFileRevisionFromContent(stat: fs.Stats, content: Buffer): FileRevision {
+  const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+  return buildFileRevisionFromSha256(stat, sha256);
+}
+
+function buildFileRevision(filePath: string, stat: fs.Stats): FileRevision {
+  return buildFileRevisionFromContent(stat, fs.readFileSync(filePath));
 }
 
 export function getFileRevision(filePath: string): FileRevision {
@@ -120,6 +127,7 @@ function shouldSkipEntry(entryName: string, args: Record<string, any>) {
 function readLineWindowSync(filePath: string, startLine: number, endLine: number, maxBytes: number) {
   const fd = fs.openSync(filePath, 'r');
   const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+  const hash = crypto.createHash('sha256');
   const selectedLines: string[] = [];
   let pending = '';
   let currentLine = 1;
@@ -138,7 +146,9 @@ function readLineWindowSync(filePath: string, startLine: number, endLine: number
     while (true) {
       const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
       if (bytesRead === 0) break;
-      pending += buffer.subarray(0, bytesRead).toString('utf8');
+      const chunk = buffer.subarray(0, bytesRead);
+      hash.update(chunk);
+      pending += chunk.toString('utf8');
       const parts = pending.split('\n');
       pending = parts.pop() ?? '';
       for (const part of parts) {
@@ -165,6 +175,7 @@ function readLineWindowSync(filePath: string, startLine: number, endLine: number
     totalLines: Math.max(1, currentLine - 1),
     byteLength,
     truncatedByBytes,
+    sha256: hash.digest('hex'),
   };
 }
 
@@ -331,12 +342,16 @@ export function readResolvedLocalFile(state: AppState, args: Record<string, any>
   }
 
   const targetPath = resolveSafePath(root, filePath);
-  if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(targetPath);
+  } catch {
+    throw createApiError(404, 'FILE_NOT_FOUND', `File '${filePath}' was not found.`, { affectedId: filePath });
+  }
+  if (!stat.isFile()) {
     throw createApiError(404, 'FILE_NOT_FOUND', `File '${filePath}' was not found.`, { affectedId: filePath });
   }
 
-  const stat = fs.statSync(targetPath);
-  const revision = buildFileRevision(targetPath, stat);
   const mode = String(args.mode || 'content').toLowerCase();
   const responseMode = args.responseMode === 'compact' || args.responseMode === 'debug' ? args.responseMode : 'standard';
   const defaultMaxBytes = responseMode === 'compact' ? 4_000 : responseMode === 'debug' ? 100_000 : 40_000;
@@ -345,11 +360,15 @@ export function readResolvedLocalFile(state: AppState, args: Record<string, any>
   const hasLineWindow = args.startLine !== undefined || args.endLine !== undefined;
 
   if (mode === 'metadata') {
+    const raw = fs.readFileSync(targetPath);
+    const revision = buildFileRevisionFromContent(stat, raw);
+    let totalLines = 1;
+    for (const byte of raw) if (byte === 10) totalLines += 1;
     return {
       root,
       path: toToolRelativePath(root, targetPath),
       bytes: stat.size,
-      totalLines: countLinesSync(targetPath),
+      totalLines,
       modifiedAt: stat.mtime.toISOString(),
       revision: revision.token,
       fileRevision: revision,
@@ -362,18 +381,22 @@ export function readResolvedLocalFile(state: AppState, args: Record<string, any>
   let content: string;
   let totalLines: number;
   let byteLength: number;
+  let revision: FileRevision;
   let truncatedByBytes = false;
   const startLine = Number.isFinite(Number(args.startLine)) ? Math.max(1, Number(args.startLine)) : 1;
 
   if (hasLineWindow) {
     const provisionalEndLine = Number.isFinite(Number(args.endLine)) ? Math.max(startLine, Number(args.endLine)) : Number.MAX_SAFE_INTEGER;
     const window = readLineWindowSync(targetPath, startLine, provisionalEndLine, maxBytes);
+    revision = buildFileRevisionFromSha256(stat, window.sha256);
     content = window.content;
     totalLines = window.totalLines;
     byteLength = window.byteLength;
     truncatedByBytes = window.truncatedByBytes;
   } else {
-    const raw = fs.readFileSync(targetPath, 'utf8');
+    const rawBuffer = fs.readFileSync(targetPath);
+    revision = buildFileRevisionFromContent(stat, rawBuffer);
+    const raw = rawBuffer.toString('utf8');
     totalLines = raw.split(/\r?\n/).length;
     content = raw;
     byteLength = Buffer.byteLength(content, 'utf8');

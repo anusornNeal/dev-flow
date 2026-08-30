@@ -185,6 +185,81 @@ test('tool jobs are rejected while a restart ticket is pending', () => {
   );
 });
 
+test('restart service consumes canonical lifecycle restart safety before writing a ticket', () => {
+  resetRestartState();
+  const idleQueue = { queueLength: 0, activeJobs: 0, active: [], queue: [] } as any;
+  const idleMcp = { inFlightMeaningfulOperations: 0, recentQuiescenceBusy: false, quiescenceWindowMs: 5_000 } as any;
+  const blockedSafety = {
+    blocked: true,
+    truncated: false,
+    active: [{
+      taskId: 'task-live',
+      executionSessionId: 'exec-live',
+      workspaceId: 'ws-live',
+      stage: 'implementing',
+      classification: 'live-authoritative',
+      reasonCodes: ['LIVE_AUTHORITATIVE_WORK'],
+      pendingOperationIds: [],
+      changedFiles: ['src/live.ts'],
+    }],
+    cleanupDebt: [],
+  } as any;
+
+  assert.throws(
+    () => requestDevFlowRestart({}, {
+      env: {
+        DEVFLOW_RESTART_SUPERVISOR: 'start-all',
+        DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'restart-lifecycle-safety-token',
+      },
+      getQueueMetrics: () => idleQueue,
+      getMcpRestartActivitySnapshot: () => idleMcp,
+      getRuntimeRestartSafety: () => blockedSafety,
+      now: () => new Date(10_000),
+      uuid: () => 'lifecycle-safety-test',
+    }),
+    (error: any) => {
+      assert.equal(error?.payload?.code, 'RESTART_BUSY');
+      assert.equal(error?.payload?.details?.blockers?.lifecycleAuthority, true);
+      assert.deepEqual(error?.payload?.details?.restartSafety?.active, blockedSafety.active);
+      assert.match(error?.payload?.details?.nextAction || '', /canonical live-work/i);
+      return true;
+    },
+  );
+  assert.equal(fs.existsSync(restartStatePath), false, 'lifecycle-blocked restart must not write a ticket');
+});
+
+test('restart service permits cleanup debt when canonical lifecycle safety is not blocked', () => {
+  resetRestartState();
+  const accepted = requestDevFlowRestart({}, {
+    env: {
+      DEVFLOW_RESTART_SUPERVISOR: 'start-all',
+      DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'restart-cleanup-debt-token',
+    },
+    getQueueMetrics: () => ({ queueLength: 0, activeJobs: 0, active: [], queue: [] } as any),
+    getMcpRestartActivitySnapshot: () => ({ inFlightMeaningfulOperations: 0, recentQuiescenceBusy: false, quiescenceWindowMs: 5_000 } as any),
+    getRuntimeRestartSafety: () => ({
+      blocked: false,
+      truncated: false,
+      active: [],
+      cleanupDebt: [{
+        taskId: 'task-history',
+        executionSessionId: 'exec-history',
+        workspaceId: 'ws-missing',
+        stage: 'repairing',
+        classification: 'invalid-workspace-authority',
+        reasonCodes: ['WORKSPACE_AUTHORITY_INVALID_RESTART_DEBT'],
+        pendingOperationIds: [],
+        changedFiles: ['src/preserved.ts'],
+      }],
+    } as any),
+    now: () => new Date(20_000),
+    uuid: () => 'cleanup-debt-test',
+  });
+
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.duplicate, false);
+});
+
 test('restart route rejects while an MCP tool job is active', async () => {
   resetRestartState();
   enableSupervisor();

@@ -42,6 +42,7 @@ createProject({
 } as any);
 const { DEVFLOW_CONTRACT_VERSION } = await import('../../src/server/contracts/devflowContract.js');
 const { getDevFlowDiagnostics } = await import('../../src/server/services/mcpToolMonitor.js');
+const { getRuntimeRestartSafety } = await import('../../src/server/services/runtimeIdentityService.js');
 const { registerDevFlowRoutes } = await import('../../src/server/routes/devflow.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const taskClaims = await import('../../src/server/services/taskClaimService.js');
@@ -158,6 +159,40 @@ test('stale runtime classifies only authoritative contract revision gaps as tool
     assert.equal(restarted.diagnosis, null);
   } finally {
     runtimeGit(['reset', '--hard', originalHead]);
+  }
+});
+
+test('restart safety demotes terminal invalid workspace ambiguity to cleanup debt without weakening valid-workspace ambiguity', () => {
+  const task = seedRuntimeTask('task-runtime-terminal-invalid', 'RT-0099', 'done');
+  const first = executionSessions.createExecutionSession({
+    projectId: 'project-runtime-source',
+    taskId: task.id,
+    workspaceId: 'ws-terminal-invalid-a',
+    repoRoot: runtimeSourceRoot,
+    branch: 'develop',
+  });
+  const second = executionSessions.createExecutionSession({
+    projectId: 'project-runtime-source',
+    taskId: task.id,
+    workspaceId: 'ws-terminal-invalid-b',
+    repoRoot: runtimeSourceRoot,
+    branch: 'develop',
+  });
+
+  try {
+    const safety = getRuntimeRestartSafety();
+    assert.equal(safety.blocked, false, 'terminal claimless invalid workspace history without durable operations is cleanup debt');
+    assert.equal(safety.active.some((entry: any) => entry.executionSessionId === first.id || entry.executionSessionId === second.id), false);
+    for (const execution of [first, second]) {
+      const debt = safety.cleanupDebt.find((entry: any) => entry.executionSessionId === execution.id);
+      assert.ok(debt, `expected cleanup debt for ${execution.id}`);
+      assert.equal(debt.classification, 'invalid-workspace-authority');
+      assert.ok(debt.reasonCodes?.includes('WORKSPACE_AUTHORITY_INVALID_RESTART_DEBT'));
+      assert.ok(debt.reasonCodes?.includes('MULTIPLE_ACTIVE_EXECUTIONS'));
+    }
+  } finally {
+    executionSessions.completeExecutionSession(first.id);
+    executionSessions.completeExecutionSession(second.id);
   }
 });
 

@@ -15,6 +15,7 @@ import {
 import { createApiError } from './api';
 import { getQueueMetrics } from './mcpToolJobService';
 import { getMcpRestartActivitySnapshot } from './mcpTransportMonitor';
+import { getRuntimeRestartSafety } from './runtimeIdentityService';
 
 const PENDING_RESTART_TTL_MS = 2 * 60 * 1000;
 
@@ -25,6 +26,7 @@ type RestartServiceDeps = {
   uuid?: () => string;
   getQueueMetrics?: typeof getQueueMetrics;
   getMcpRestartActivitySnapshot?: typeof getMcpRestartActivitySnapshot;
+  getRuntimeRestartSafety?: typeof getRuntimeRestartSafety;
 };
 
 function normalizeReason(value: unknown) {
@@ -90,10 +92,12 @@ export function requestDevFlowRestart(
   const nowMs = now.getTime();
   const metrics = (deps.getQueueMetrics || getQueueMetrics)();
   const mcpActivity = (deps.getMcpRestartActivitySnapshot || getMcpRestartActivitySnapshot)({ now: nowMs });
+  const restartSafety = (deps.getRuntimeRestartSafety || getRuntimeRestartSafety)();
   const toolJobsBusy = metrics.queueLength > 0 || metrics.activeJobs > 0;
   const inFlightMcpBusy = mcpActivity.inFlightMeaningfulOperations > 0;
   const recentMcpBusy = mcpActivity.recentQuiescenceBusy;
-  if (toolJobsBusy || inFlightMcpBusy || recentMcpBusy) {
+  const lifecycleBusy = restartSafety.blocked;
+  if (toolJobsBusy || inFlightMcpBusy || recentMcpBusy || lifecycleBusy) {
     throw createApiError(
       409,
       'RESTART_BUSY',
@@ -105,13 +109,17 @@ export function requestDevFlowRestart(
             toolJobs: toolJobsBusy,
             inFlightMcp: inFlightMcpBusy,
             recentMcpActivity: recentMcpBusy,
+            lifecycleAuthority: lifecycleBusy,
           },
           queueLength: metrics.queueLength,
           activeJobs: metrics.activeJobs,
           active: metrics.active,
           queue: metrics.queue,
           mcpActivity,
-          nextAction: `Wait for active work to finish and for ${mcpActivity.quiescenceWindowMs}ms of meaningful MCP quiescence, then retry restart_devflow.`,
+          restartSafety,
+          nextAction: lifecycleBusy
+            ? 'Preserve or resolve the reported canonical live-work restart blockers, then retry restart_devflow. Cleanup debt may be recovered later and does not block restart by itself.'
+            : `Wait for active work to finish and for ${mcpActivity.quiescenceWindowMs}ms of meaningful MCP quiescence, then retry restart_devflow.`,
         },
       },
     );

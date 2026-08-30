@@ -528,17 +528,23 @@ export function getRuntimeRestartSafety(): RuntimeRestartSafety {
     }
 
     const restartProjection = authority.operations.restart;
+    const terminalInvalidWorkspaceHistory = authority.classification === 'invalid-workspace-authority'
+      && authority.task.status === 'done'
+      && !authority.claim.active
+      && authority.durableOperations.count === 0;
     const entry: RuntimeRestartSafetyEntry = {
       ...baseEntry,
       classification: authority.classification,
       reasonCodes: restartProjection.reasonCodes,
     };
-    if (restartProjection.hardBlocked) {
+    if (restartProjection.hardBlocked && !terminalInvalidWorkspaceHistory) {
       appendBounded(active, entry, MAX_RUNTIME_RESTART_BLOCKERS);
-    } else if (restartProjection.debt) {
+    } else if (restartProjection.debt || terminalInvalidWorkspaceHistory) {
       appendBounded(cleanupDebt, {
         ...entry,
-        nextAction: 'Inspect with cleanup_orphan_executions dry-run and apply only when the canonical orphan-cleanup classifier confirms the execution is safe.',
+        nextAction: terminalInvalidWorkspaceHistory
+          ? 'Preserve this terminal task history for audited recovery; invalid workspace authority without a live claim or durable operation is cleanup debt and does not block API restart.'
+          : 'Inspect with cleanup_orphan_executions dry-run and apply only when the canonical orphan-cleanup classifier confirms the execution is safe.',
       }, MAX_RUNTIME_RESTART_DEBT);
     }
   }

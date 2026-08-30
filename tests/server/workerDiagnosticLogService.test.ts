@@ -55,7 +55,7 @@ test('worker log identity rejects traversal and arbitrary path-shaped ids', () =
 });
 
 test('worker log tools remain outside task mutation ownership and harness mutation classification', () => {
-  for (const toolName of ['append_worker_log']) {
+  for (const toolName of ['append_worker_log', 'read_worker_log', 'list_worker_logs']) {
     assert.equal(getTaskMutationOwnershipStrategy(toolName), null);
     assert.deepEqual(getHarnessExecutionEffects(toolName), []);
   }

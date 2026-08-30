@@ -41,9 +41,14 @@ test('worker diagnostic log contracts are explicit operational metadata tools', 
   assert.ok(append);
   assert.deepEqual((append?.inputSchema as any)?.required, ['projectId', 'workerId', 'entry']);
   assert.equal(append?.buildHttpRequest({ projectId: 'p', workerId: 'worker-c', entry: 'x' }).path, '/api/worker-logs/append');
-  for (const name of ['append_worker_log']) {
+  const codingNames = new Set(getMcpToolList('coding').map((entry: any) => entry.name));
+  for (const name of ['append_worker_log', 'read_worker_log', 'list_worker_logs']) {
+    assert.ok(getToolDefinitionByName(name), `${name} should have a contract definition`);
     assert.equal(isToolAllowedInProfile(name, 'coding'), true, `${name} should be callable by scheduled coding workers`);
+    assert.equal(codingNames.has(name), true, `${name} should be advertised in the coding MCP surface`);
   }
+  assert.equal(getToolDefinitionByName('read_worker_log')?.buildHttpRequest({ projectId: 'p', workerId: 'worker-c', maxBytes: 64 }).path, '/api/worker-logs/read?projectId=p&workerId=worker-c&maxBytes=64');
+  assert.equal(getToolDefinitionByName('list_worker_logs')?.buildHttpRequest({ projectId: 'p' }).path, '/api/worker-logs?projectId=p');
   const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
   assert.match(routeSource, /\/api\/worker-logs\/append/);
   assert.match(routeSource, /\/api\/worker-logs\/read/);

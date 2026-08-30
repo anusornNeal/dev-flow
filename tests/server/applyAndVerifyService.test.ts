@@ -74,7 +74,7 @@ test('applyAndVerify delegates reuse to repository policy and preserves forceFre
   ].join('\n'), 'utf8');
   fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
     'commands:',
-    '  test:',
+    '  policy-test:',
     '    executable: node',
     '    args:',
     '      - scripts/test.mjs',
@@ -86,12 +86,12 @@ test('applyAndVerify delegates reuse to repository policy and preserves forceFre
   const first = applyAndVerify(stateFor(root), {
     projectId: 'project-apply-verify',
     files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 2' }] }],
-    requestedCommands: ['test'],
+    requestedCommands: ['policy-test'],
   });
   const reused = applyAndVerify(stateFor(root), {
     projectId: 'project-apply-verify',
     files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 2', replaceWith: 'value = 2' }] }],
-    requestedCommands: ['test'],
+    requestedCommands: ['policy-test'],
     forceVerification: true,
   });
   assert.equal(first.ok, true);
@@ -104,7 +104,7 @@ test('applyAndVerify delegates reuse to repository policy and preserves forceFre
   const fresh = applyAndVerify(stateFor(root), {
     projectId: 'project-apply-verify',
     files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 2', replaceWith: 'value = 2' }] }],
-    requestedCommands: ['test'],
+    requestedCommands: ['policy-test'],
     forceVerification: true,
     forceFresh: true,
   });
@@ -172,27 +172,44 @@ test('applyAndVerifyAsync runs resource-safe targeted verification commands conc
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'parallel fixtures']);
 
-  const startedAt = Date.now();
-  const result = await applyAndVerifyAsync(stateFor(root), {
-    projectId: 'project-apply-verify',
-    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 3' }] }],
-    requestedCommands: ['target-a', 'target-b'],
-  });
-  const elapsedMs = Date.now() - startedAt;
+  let permitEntrants = 0;
+  let activePermitRuns = 0;
+  let maxActivePermitRuns = 0;
+  let releaseParallelStart!: () => void;
+  const parallelStart = new Promise<void>((resolve) => { releaseParallelStart = resolve; });
+  const result = await applyAndVerifyAsync(
+    stateFor(root),
+    {
+      projectId: 'project-apply-verify',
+      files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 3' }] }],
+      requestedCommands: ['target-a', 'target-b'],
+    },
+    { stdout: () => {}, stderr: () => {} },
+    () => {},
+    async () => ({
+      runWithPermit: async (_request: any, run: () => Promise<any>) => {
+        permitEntrants += 1;
+        if (permitEntrants === 2) releaseParallelStart();
+        await parallelStart;
+        activePermitRuns += 1;
+        maxActivePermitRuns = Math.max(maxActivePermitRuns, activePermitRuns);
+        try {
+          return await run();
+        } finally {
+          activePermitRuns -= 1;
+        }
+      },
+      dispose: () => {},
+    }),
+  );
 
   assert.equal(result.ok, true);
   assert.equal(result.parallelVerification, true);
+  assert.equal(permitEntrants, 2, 'both resource-safe verification branches must reach the execution permit before either is released');
+  assert.equal(maxActivePermitRuns, 2, 'resource-safe verification branches must execute concurrently when the permit allows it');
   assert.equal(result.verification.length, 2);
   assert.equal(result.verification.every((entry: any) => entry.status === 'succeeded'), true);
-  const summedVerificationMs = result.verification.reduce((sum: number, entry: any) => sum + Number(entry.durationMs || 0), 0);
-  const verificationWallMs = Number(result.verificationPerformance?.wallMs || 0);
-  assert.equal(
-    verificationWallMs < summedVerificationMs * 0.8,
-    true,
-    `expected concurrent verification wall time ${verificationWallMs}ms to be materially below summed verification time ${summedVerificationMs}ms`,
-  );
   assert.equal(typeof result.verificationPerformance?.candidatePreparationMs, 'number');
-  assert.equal(elapsedMs >= verificationWallMs, true, 'end-to-end elapsed time should include candidate preparation');
   assert.equal(result.verificationPerformance?.processSpawns, 2);
   assert.equal(result.verificationBatch?.canComplete, true);
   assert.equal(result.verificationBatch?.requiredChecks.length, 2);

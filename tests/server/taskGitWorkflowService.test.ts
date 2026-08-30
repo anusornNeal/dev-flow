@@ -532,5 +532,87 @@ test('DONE warnings preserve quality debt without presenting status as GREEN or 
   assert.ok(codes.has('DONE_GIT_EVIDENCE_MISSING'));
   assert.ok(warnings.some((warning: any) => /does not imply GREEN verification/.test(warning.message)));
   assert.ok(warnings.some((warning: any) => /does not imply review approval/.test(warning.message)));
+  for (const warning of warnings.filter((warning: any) => warning.code.startsWith('DONE_'))) {
+    assert.equal((warning as any).details?.debtState, 'active');
+    assert.equal((warning as any).details?.actionable, true);
+  }
+});
+
+test('DONE warnings mark explicit superseded or metadata-drift debt non-actionable without deleting evidence', () => {
+  const fixture = setup('done-superseded-debt');
+  const baseTask = createTask(fixture.projectId, {
+    status: 'done',
+    checklist: [{ id: 'one', text: 'Historical item', completed: false }],
+    verificationEvidence: [{ name: 'legacy', command: 'npm test', status: 'failed' }],
+    gitEvidence: undefined,
+    bugs: [{ id: 'bug-legacy', title: 'Old defect', status: 'fixed' }],
+  });
+
+  for (const [classification, expectedState] of [['superseded', 'superseded'], ['implemented-metadata-drift', 'historical']] as const) {
+    const task = {
+      ...baseTask,
+      logs: [{
+        id: `recovery-${classification}`,
+        timestamp: '2026-08-30T10:00:00.000Z',
+        type: 'move',
+        message: `[recovery-disposition] ${JSON.stringify({ classification, summary: 'Explicit durable recovery evidence.' })}`,
+      }],
+    };
+    const warnings = buildTaskGitWarnings(task);
+    const doneWarnings = warnings.filter((warning: any) => warning.code.startsWith('DONE_'));
+
+    assert.ok(doneWarnings.some((warning: any) => warning.code === 'DONE_CHECKLIST_DEBT'));
+    assert.ok(doneWarnings.some((warning: any) => warning.code === 'DONE_UNRESOLVED_BUGS'));
+    assert.ok(doneWarnings.some((warning: any) => warning.code === 'DONE_VERIFICATION_NOT_GREEN'));
+    assert.ok(doneWarnings.some((warning: any) => warning.code === 'DONE_GIT_EVIDENCE_MISSING'));
+    for (const warning of doneWarnings) {
+      assert.equal((warning as any).details?.debtState, expectedState);
+      assert.equal((warning as any).details?.actionable, false);
+      assert.equal((warning as any).details?.resolutionProvenance?.classification, classification);
+      assert.match(warning.message, /non-actionable/);
+    }
+  }
+});
+
+test('follow-up debt is resolved only when an explicit referenced task exists and is DONE', () => {
+  const fixture = setup('done-follow-up-debt');
+  const followUp = createTask(fixture.projectId, {
+    id: 'follow-up-task',
+    displayId: 'TST-9001',
+    status: 'done',
+  });
+  saveTask(followUp);
+
+  const original = createTask(fixture.projectId, {
+    id: 'original-task',
+    status: 'done',
+    checklist: [{ id: 'one', text: 'Delegated item', completed: false }],
+    verificationEvidence: [],
+    gitEvidence: undefined,
+    logs: [{
+      id: 'recovery-follow-up',
+      timestamp: '2026-08-30T10:00:00.000Z',
+      type: 'move',
+      message: `[recovery-disposition] ${JSON.stringify({ classification: 'follow-up', summary: 'Resolved by follow-up.', followUpTaskId: 'TST-9001' })}`,
+    }],
+  });
+
+  const resolved = buildTaskGitWarnings(original).find((warning: any) => warning.code === 'DONE_CHECKLIST_DEBT');
+  assert.equal((resolved as any)?.details?.debtState, 'follow-up-resolved');
+  assert.equal((resolved as any)?.details?.actionable, false);
+  assert.equal((resolved as any)?.details?.resolutionProvenance?.followUpTask?.status, 'done');
+
+  const unresolved = buildTaskGitWarnings({
+    ...original,
+    logs: [{
+      id: 'recovery-follow-up-missing',
+      timestamp: '2026-08-30T10:00:00.000Z',
+      type: 'move',
+      message: `[recovery-disposition] ${JSON.stringify({ classification: 'follow-up', summary: 'Reference is required.', followUpTaskId: 'TST-DOES-NOT-EXIST' })}`,
+    }],
+  }).find((warning: any) => warning.code === 'DONE_CHECKLIST_DEBT');
+  assert.equal((unresolved as any)?.details?.debtState, 'active');
+  assert.equal((unresolved as any)?.details?.actionable, true);
+  assert.equal((unresolved as any)?.details?.resolutionProvenance?.resolutionState, 'follow-up-not-found');
 });
 

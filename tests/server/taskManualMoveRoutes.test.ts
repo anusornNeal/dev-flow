@@ -176,6 +176,27 @@ test('manual DONE accepts quality debt without confirmation, override, or recove
   assert.ok(warningCodes.has('DONE_GIT_EVIDENCE_MISSING'));
 });
 
+test('standard task read exposes explicit DONE debt projection provenance', async () => {
+  const id = 'manual-warning-provenance';
+  const value = task(id);
+  value.status = 'done';
+  value.logs = [{
+    id: 'recovery-superseded',
+    timestamp: '2026-08-30T10:00:00.000Z',
+    type: 'move',
+    message: `[recovery-disposition] ${JSON.stringify({ classification: 'superseded', summary: 'Superseded by explicit durable recovery evidence.' })}`,
+  }];
+  saveTask(value);
+
+  const result = await jsonRequest(`/api/tasks/${id}?mode=standard`, { method: 'GET' });
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  const warning = result.body?.workflowWarnings?.find((entry: any) => entry.code === 'DONE_CHECKLIST_DEBT');
+  assert.equal(warning?.details?.debtState, 'superseded');
+  assert.equal(warning?.details?.actionable, false);
+  assert.equal(warning?.details?.resolutionProvenance?.source, 'recovery-disposition-log');
+  assert.equal(warning?.details?.resolutionProvenance?.classification, 'superseded');
+});
+
 test('manual DONE does not promote free-form verification or Git logs into structured evidence', async () => {
   const before = getTask('manual-log-evidence')!;
   before.logs = [

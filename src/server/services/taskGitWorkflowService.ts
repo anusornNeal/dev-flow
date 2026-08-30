@@ -11,7 +11,7 @@ import { getTaskPrerequisiteBlockers } from './taskDependencyService.js';
 
 const VALID_VERIFICATION_STATUSES = new Set<VerificationEvidenceStatus>(['passed', 'failed', 'not-run']);
 const VALID_VERIFICATION_SCOPES = new Set(['targeted', 'broad', 'full']);
-const UNRESOLVED_BUG_STATUSES = new Set(['open', 'fixing', 'reopened']);
+const UNRESOLVED_BUG_STATUSES = new Set(['open', 'fixing', 'fixed', 'reopened']);
 
 export interface ReviewBlocker {
   code: string;
@@ -508,7 +508,21 @@ function addWarning(warnings: TaskWorkflowWarning[], code: string, message: stri
   warnings.push({ code, message, severity, ...(details === undefined ? {} : { details }) });
 }
 
-function readRecoveryDispositionFromLogs(task: any) {
+type DoneDebtState = 'active' | 'historical' | 'superseded' | 'follow-up-resolved';
+
+interface RecoveryDispositionRecord {
+  disposition: Record<string, any>;
+  logId: string | null;
+  recordedAt: string | null;
+}
+
+interface DoneDebtProjection {
+  state: DoneDebtState;
+  actionable: boolean;
+  provenance: Record<string, any> | null;
+}
+
+function readRecoveryDispositionFromLogs(task: any): RecoveryDispositionRecord | null {
   const logs = Array.isArray(task?.logs) ? [...task.logs].reverse() : [];
   for (const entry of logs) {
     const message = String(entry?.message || '');
@@ -517,12 +531,98 @@ function readRecoveryDispositionFromLogs(task: any) {
     if (index < 0) continue;
     try {
       const parsed = JSON.parse(message.slice(index + marker.length));
-      if (parsed?.classification && parsed?.summary) return parsed;
+      if (parsed?.classification && parsed?.summary) {
+        return {
+          disposition: parsed,
+          logId: entry?.id ? String(entry.id) : null,
+          recordedAt: entry?.timestamp ? String(entry.timestamp) : null,
+        };
+      }
     } catch {
       // Ignore malformed historical log entries; they must not break task reads.
     }
   }
   return null;
+}
+
+function resolveDoneDebtProjection(task: any, recoveryRecord: RecoveryDispositionRecord | null): DoneDebtProjection {
+  if (!recoveryRecord) return { state: 'active', actionable: true, provenance: null };
+
+  const disposition = recoveryRecord.disposition;
+  const classification = String(disposition.classification || '');
+  const baseProvenance: Record<string, any> = {
+    source: 'recovery-disposition-log',
+    logId: recoveryRecord.logId,
+    recordedAt: recoveryRecord.recordedAt,
+    classification,
+    summary: String(disposition.summary || ''),
+    ...(disposition.followUpTaskId ? { followUpTaskId: String(disposition.followUpTaskId) } : {}),
+    ...(disposition.workspaceId ? { workspaceId: String(disposition.workspaceId) } : {}),
+  };
+
+  if (classification === 'implemented-metadata-drift') {
+    return { state: 'historical', actionable: false, provenance: baseProvenance };
+  }
+  if (classification === 'superseded') {
+    return { state: 'superseded', actionable: false, provenance: baseProvenance };
+  }
+  if (classification === 'follow-up') {
+    const followUpTaskId = String(disposition.followUpTaskId || '').trim();
+    if (!followUpTaskId) {
+      return {
+        state: 'active',
+        actionable: true,
+        provenance: { ...baseProvenance, resolutionState: 'follow-up-reference-missing' },
+      };
+    }
+    const followUpTask = getTasks().find((entry: any) =>
+      entry?.projectId === task.projectId
+      && entry?.id !== task.id
+      && (entry?.id === followUpTaskId || entry?.displayId === followUpTaskId));
+    if (!followUpTask) {
+      return {
+        state: 'active',
+        actionable: true,
+        provenance: { ...baseProvenance, resolutionState: 'follow-up-not-found' },
+      };
+    }
+    if (followUpTask.status !== 'done') {
+      return {
+        state: 'active',
+        actionable: true,
+        provenance: {
+          ...baseProvenance,
+          resolutionState: 'follow-up-not-done',
+          followUpTask: { id: followUpTask.id, displayId: followUpTask.displayId, status: followUpTask.status },
+        },
+      };
+    }
+    return {
+      state: 'follow-up-resolved',
+      actionable: false,
+      provenance: {
+        ...baseProvenance,
+        resolutionState: 'follow-up-done',
+        followUpTask: { id: followUpTask.id, displayId: followUpTask.displayId, status: followUpTask.status },
+      },
+    };
+  }
+
+  return { state: 'active', actionable: true, provenance: baseProvenance };
+}
+
+function doneDebtDetails(projection: DoneDebtProjection, details: Record<string, any> = {}) {
+  return {
+    ...details,
+    debtState: projection.state,
+    actionable: projection.actionable,
+    resolutionProvenance: projection.provenance,
+  };
+}
+
+function doneDebtMessage(projection: DoneDebtProjection, activeMessage: string, debtLabel: string) {
+  if (projection.actionable) return activeMessage;
+  return `Task is DONE with ${debtLabel} retained as ${projection.state} evidence; explicit durable recovery provenance marks this debt as non-actionable.`;
 }
 
 export function buildTaskGitWarnings(task: any): TaskWorkflowWarning[] {
@@ -623,44 +723,90 @@ export function buildTaskGitWarnings(task: any): TaskWorkflowWarning[] {
     }
   }
 
+  const recoveryRecord = readRecoveryDispositionFromLogs(task);
+  const doneDebtProjection = resolveDoneDebtProjection(task, recoveryRecord);
+
   if (task.status === 'done') {
     const incomplete = Array.isArray(task.checklist) ? task.checklist.filter((item: any) => !item?.completed) : [];
     if (incomplete.length > 0) {
-      addWarning(warnings, 'DONE_CHECKLIST_DEBT', `Task is DONE with ${incomplete.length} incomplete checklist item(s); DONE records lifecycle completion and does not imply review approval.`, 'warning', {
+      addWarning(warnings, 'DONE_CHECKLIST_DEBT', doneDebtMessage(
+        doneDebtProjection,
+        `Task is DONE with ${incomplete.length} incomplete checklist item(s); DONE records lifecycle completion and does not imply review approval.`,
+        `${incomplete.length} incomplete checklist item(s)`,
+      ), 'warning', doneDebtDetails(doneDebtProjection, {
         items: incomplete.map((item: any) => ({ id: item.id, text: item.text })),
-      });
+      }));
     }
+
+    const unresolvedBugs = Array.isArray(task.bugs)
+      ? task.bugs.filter((bug: any) => UNRESOLVED_BUG_STATUSES.has(String(bug?.status || '').toLowerCase()))
+      : [];
+    if (unresolvedBugs.length > 0) {
+      addWarning(warnings, 'DONE_UNRESOLVED_BUGS', doneDebtMessage(
+        doneDebtProjection,
+        `Task is DONE with ${unresolvedBugs.length} unresolved bug thread(s); DONE records lifecycle completion and does not imply defect resolution.`,
+        `${unresolvedBugs.length} unresolved bug thread(s)`,
+      ), 'warning', doneDebtDetails(doneDebtProjection, {
+        bugs: unresolvedBugs.map((bug: any) => ({ id: bug.id, title: bug.title, status: bug.status })),
+      }));
+    }
+
     const verificationEvidence = Array.isArray(task.verificationEvidence) ? task.verificationEvidence : [];
     if (verificationEvidence.length === 0) {
-      addWarning(warnings, 'DONE_VERIFICATION_MISSING', 'Task is DONE without structured verification evidence; DONE does not imply GREEN verification.');
+      addWarning(warnings, 'DONE_VERIFICATION_MISSING', doneDebtMessage(
+        doneDebtProjection,
+        'Task is DONE without structured verification evidence; DONE does not imply GREEN verification.',
+        'missing structured verification evidence',
+      ), 'warning', doneDebtDetails(doneDebtProjection));
     } else {
       const nonPassing = verificationEvidence.filter((check: any) => check?.status !== 'passed');
       if (nonPassing.length > 0) {
-        addWarning(warnings, 'DONE_VERIFICATION_NOT_GREEN', `Task is DONE with ${nonPassing.length} non-passing verification check(s); DONE does not imply GREEN verification.`, 'warning', {
+        addWarning(warnings, 'DONE_VERIFICATION_NOT_GREEN', doneDebtMessage(
+          doneDebtProjection,
+          `Task is DONE with ${nonPassing.length} non-passing verification check(s); DONE does not imply GREEN verification.`,
+          `${nonPassing.length} non-passing verification check(s)`,
+        ), 'warning', doneDebtDetails(doneDebtProjection, {
           checks: nonPassing.map((check: any) => ({ name: check?.name, command: check?.command, status: check?.status })),
-        });
+        }));
       }
       if (evidence?.commit) {
         const staleRevision = verificationEvidence.filter((check: any) => check?.repoRevision && String(check.repoRevision) !== String(evidence.commit));
         if (staleRevision.length > 0) {
-          addWarning(warnings, 'DONE_VERIFICATION_REVISION_MISMATCH', `Task is DONE with ${staleRevision.length} verification check(s) recorded for a different Git revision.`, 'warning', {
+          addWarning(warnings, 'DONE_VERIFICATION_REVISION_MISMATCH', doneDebtMessage(
+            doneDebtProjection,
+            `Task is DONE with ${staleRevision.length} verification check(s) recorded for a different Git revision.`,
+            `${staleRevision.length} verification check(s) recorded for a different Git revision`,
+          ), 'warning', doneDebtDetails(doneDebtProjection, {
             commit: evidence.commit,
             checks: staleRevision.map((check: any) => ({ name: check?.name, command: check?.command, repoRevision: check?.repoRevision })),
-          });
+          }));
         }
       }
     }
     if (!evidence) {
-      addWarning(warnings, 'DONE_GIT_EVIDENCE_MISSING', 'Task is DONE without recorded Git evidence; DONE does not imply review approval.');
+      addWarning(warnings, 'DONE_GIT_EVIDENCE_MISSING', doneDebtMessage(
+        doneDebtProjection,
+        'Task is DONE without recorded Git evidence; DONE does not imply review approval.',
+        'missing recorded Git evidence',
+      ), 'warning', doneDebtDetails(doneDebtProjection));
     } else if (!evidence.pushed) {
-      addWarning(warnings, 'DONE_HEAD_NOT_PUSHED', 'Task is DONE while the recorded HEAD is not published; DONE does not imply review approval.');
+      addWarning(warnings, 'DONE_HEAD_NOT_PUSHED', doneDebtMessage(
+        doneDebtProjection,
+        'Task is DONE while the recorded HEAD is not published; DONE does not imply review approval.',
+        'an unpublished recorded HEAD',
+      ), 'warning', doneDebtDetails(doneDebtProjection));
     }
   }
 
-  const recoveryDisposition = readRecoveryDispositionFromLogs(task);
-  if (recoveryDisposition) {
-    addWarning(warnings, 'RECOVERY_DISPOSITION_RECORDED', `Task closure records recovery disposition '${recoveryDisposition.classification}'.`, 'warning', {
-      recoveryDisposition,
+  if (recoveryRecord) {
+    addWarning(warnings, 'RECOVERY_DISPOSITION_RECORDED', `Task closure records recovery disposition '${recoveryRecord.disposition.classification}'.`, 'warning', {
+      recoveryDisposition: recoveryRecord.disposition,
+      provenance: {
+        source: 'recovery-disposition-log',
+        logId: recoveryRecord.logId,
+        recordedAt: recoveryRecord.recordedAt,
+      },
+      debtProjection: doneDebtProjection,
     });
   }
 

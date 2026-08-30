@@ -386,7 +386,14 @@ test('compact project health does not Git-inspect active claimed workspaces', ()
     assert.equal(inspectionCount, 0);
     assert.equal(compact.harness.aggregate.activeClaimCount, 1);
     assert.equal(compact.harness.aggregate.activeExecutionCount, 1);
-    assert.equal(compact.harness.hardBlockers.includes('PROJECT_RECOVERY_SCAN_DEFERRED'), true);
+    assert.equal(compact.harness.status, 'active');
+    assert.equal(compact.harness.hardBlockers.includes('PROJECT_RECOVERY_SCAN_DEFERRED'), false);
+    const deferred = compact.harness.drift.find((entry: any) => entry.code === 'PROJECT_RECOVERY_SCAN_DEFERRED');
+    assert.equal(deferred?.severity, 'info');
+    assert.equal(compact.harness.recovery.inspection.state, 'deferred');
+    assert.equal(compact.harness.recovery.inspection.authoritative, false);
+    assert.equal(compact.harness.recovery.inspection.lifecycleClear, false);
+    assert.match(deferred?.nextAction || '', /full\/debug/);
   } finally {
     if (typeof setRecoveryInspector === 'function') setRecoveryInspector(null);
     saveTask({
@@ -398,21 +405,63 @@ test('compact project health does not Git-inspect active claimed workspaces', ()
   }
 });
 
-test('compact project health defers unrelated registry recovery scans but fails closed', () => {
+test('compact project health represents deferred recovery inspection as unknown authority, not a hard blocker', () => {
   const repo = createRepo('compact-deferred-recovery-scan');
   const workspace = createHealthWorkspace(repo, `compact-deferred-recovery-session-${path.basename(tempRoot)}`, 'DVF-HEALTH-DEFER-1');
 
   const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
   const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
 
-  assert.equal(compact.harness.hardBlockers.includes('PROJECT_RECOVERY_SCAN_DEFERRED'), true);
+  assert.equal(compact.harness.hardBlockers.includes('PROJECT_RECOVERY_SCAN_DEFERRED'), false);
+  const deferred = compact.harness.drift.find((entry: any) => entry.code === 'PROJECT_RECOVERY_SCAN_DEFERRED');
+  assert.equal(deferred?.severity, 'info');
+  assert.match(deferred?.nextAction || '', /full\/debug/);
+  assert.equal(compact.harness.recovery.inspection.state, 'deferred');
+  assert.equal(compact.harness.recovery.inspection.authoritative, false);
+  assert.equal(compact.harness.recovery.inspection.lifecycleClear, false);
   assert.equal(compact.harness.aggregate.workspaceIds.includes(workspace.workspaceId), false);
+
   assert.equal(full.diagnostics.harness.hardBlockers.includes('PROJECT_RECOVERY_SCAN_DEFERRED'), false);
+  assert.equal(full.diagnostics.harness.recovery.inspection.state, 'clear');
+  assert.equal(full.diagnostics.harness.recovery.inspection.authoritative, true);
+  assert.equal(full.diagnostics.harness.recovery.inspection.lifecycleClear, true);
   assert.equal(typeof full.performance.phases.sloMs, 'number');
   assert.equal(typeof full.performance.phases.recoveryMs, 'number');
   assert.equal(typeof full.performance.phases.harnessMs, 'number');
 
   sessionWorkspaces.cleanupSessionWorkspace(workspace.workspaceId, { force: true });
+});
+
+test('full and debug project health keep proven workspace recovery identity failures as hard blockers', () => {
+  const repo = createRepo('deep-recovery-real-blocker');
+  const workspace = createHealthWorkspace(repo, `deep-recovery-real-blocker-${path.basename(tempRoot)}`, 'DVF-HEALTH-DEEP-BLOCK-1');
+  const task = seedHealthTask('task-health-deep-blocker', 'DVF-HEALTH-DEEP-BLOCK-1', {
+    workspaceId: workspace.workspaceId,
+    ownershipEpochId: null,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  const execution = seedHealthExecution('exec-health-deep-blocker', task.id, workspace.workspaceId);
+  const setRecoveryInspector = (workflowHealthModule as any).__setWorkflowHealthWorkspaceRecoveryInspectorForTests;
+
+  try {
+    setRecoveryInspector(() => ({ disposition: 'stale-registry' } as any));
+    for (const responseMode of ['full', 'debug']) {
+      const result = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode }) as any;
+      assert.equal(result.diagnostics.harness.status, 'blocked');
+      assert.equal(result.diagnostics.harness.hardBlockers.includes('WORKSPACE_ROOT_OR_IDENTITY_INVALID'), true);
+      assert.equal(result.diagnostics.harness.recovery.inspection.state, 'blocked');
+      assert.equal(result.diagnostics.harness.recovery.inspection.authoritative, true);
+      assert.equal(result.diagnostics.harness.recovery.inspection.lifecycleClear, false);
+    }
+  } finally {
+    setRecoveryInspector(null);
+    saveTask({
+      ...task,
+      claim: { ...task.claim, expiresAt: new Date(0).toISOString() },
+      updatedAt: new Date().toISOString(),
+    });
+    retireHealthWorkspace(execution.id, workspace.workspaceId);
+  }
 });
 
 test('full and debug health modes preserve the detailed diagnostic shape', () => {

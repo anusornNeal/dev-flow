@@ -793,8 +793,10 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
     }
     registryOffset = nextOffset;
   }
-  if (!deepRecoveryScan && (registryOutsideActiveAuthorityCount > 0 || authoritativeWorkspaceContexts.size > 0)) drift.push({
+  const recoveryScanDeferred = !deepRecoveryScan && (registryOutsideActiveAuthorityCount > 0 || authoritativeWorkspaceContexts.size > 0);
+  if (recoveryScanDeferred) drift.push({
     code: 'PROJECT_RECOVERY_SCAN_DEFERRED',
+    severity: 'info',
     message: 'Compact project health deferred Git-backed recovery inspection; use exact scoped or full/debug health before treating workspace recovery as clear.',
     workspaceIds: [...new Set([...authoritativeWorkspaceContexts.keys(), ...deferredWorkspaceIds])].slice(0, 20),
     nextAction: 'Use full/debug project health before treating the project as lifecycle-clear or performing recovery cleanup.',
@@ -836,6 +838,31 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
   const projectHardBlockers = hardHealthDriftCodes(drift);
   const canonicalLiveAuthorityCount = [...authorityByTask.values()].filter((authority) =>
     authority.classification === 'live-authoritative' || authority.classification === 'live-durable-operation').length;
+  const recoveryIdentityBlocked = projectHardBlockers.some((code) =>
+    code === 'WORKSPACE_METADATA_MISSING' || code === 'WORKSPACE_ROOT_OR_IDENTITY_INVALID');
+  const recoveryInspectionState = recoveryScanDeferred
+    ? 'deferred'
+    : !registryScanComplete || recoveryInspectionUnknownCount > 0
+      ? 'unknown'
+      : recoveryIdentityBlocked
+        ? 'blocked'
+        : actionableRecoveryWorkspaceCount > 0
+          ? 'actionable'
+          : 'clear';
+  const recoveryInspectionAuthoritative = recoveryInspectionState === 'clear'
+    || recoveryInspectionState === 'blocked'
+    || recoveryInspectionState === 'actionable';
+  const lifecycleClear = recoveryInspectionState === 'clear'
+    && projectHardBlockers.length === 0
+    && canonicalLiveAuthorityCount === 0
+    && activeClaims.length === 0
+    && executions.total === 0
+    && pendingOperationCount === 0;
+  const recoveryInspection = {
+    state: recoveryInspectionState,
+    authoritative: recoveryInspectionAuthoritative,
+    lifecycleClear,
+  };
   return {
     version: CHATGPT_HARNESS_HEALTH_VERSION,
     scope: 'project-aggregate',
@@ -859,7 +886,10 @@ function projectHarnessHealth(state: AppState, args: Record<string, any>, option
       taskIds: [...new Set([...activeClaims.map((entry) => entry.task.id), ...executions.sessions.map((entry) => entry.taskId).filter(Boolean) as string[]])].slice(0, 20),
       workspaceIds: [...new Set([...activeClaims.map((entry) => entry.claim!.workspaceId), ...executions.sessions.map((entry) => entry.workspaceId).filter(Boolean) as string[], ...actionableRecoveryWorkspaceIds])].slice(0, 20),
     },
-    recovery: { pendingOperationCount },
+    recovery: {
+      pendingOperationCount,
+      ...(deepRecoveryScan || recoveryInspectionState !== 'clear' ? { inspection: recoveryInspection } : {}),
+    },
     drift: drift.slice(0, 20),
     hardBlockers: projectHardBlockers,
   };

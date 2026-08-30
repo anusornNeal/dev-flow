@@ -34,7 +34,7 @@ const {
 } = await import('../../src/server/services/verificationCandidateService.js');
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
-const { invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
+const { getRepoCacheDiagnostics, invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
 const { clearVerificationResourceProfilesForTests, getVerificationResourceProfileDiagnostics, recordVerificationResourceSample } = await import('../../src/server/services/verificationResourceProfileService.js');
 
 function createProject(name: string, scripts: Record<string, string>) {
@@ -1486,6 +1486,126 @@ test('repository npm and npx presets use platform-safe package-manager invocatio
     assert.equal(result.ok, true, result.stderr || result.stdout);
     assert.doesNotMatch(result.stderr, /ENOENT/i);
   }
+});
+
+test('repository reuse policy shares safe GREEN evidence across physical worktrees and fails closed otherwise', () => {
+  const counterPath = path.join(tempRoot, 'cross-worktree-reuse-counter.txt');
+  const config = [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/cached.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '    reusePolicy: effective-input',
+    '  exact:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/cached.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '    reusePolicy: exact-revision',
+    '  external:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/cached.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '    reusePolicy: disabled',
+    '',
+  ].join('\n');
+  const setup = (name: string, commitMessage: string) => {
+    const root = createConfigProject(name, config);
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'value.ts'), 'export const value = 1;\n', 'utf8');
+    fs.writeFileSync(path.join(root, 'scripts', 'cached.mjs'), [
+      "import fs from 'node:fs';",
+      `const counterPath = ${JSON.stringify(counterPath)};`,
+      "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+      "fs.writeFileSync(counterPath, String(next), 'utf8');",
+      "process.stdout.write(`run:${next}\\n`);",
+    ].join('\n'), 'utf8');
+    const git = (args: string[]) => {
+      const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+      assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+    };
+    git(['init']);
+    git(['config', 'user.name', 'DevFlow Test']);
+    git(['config', 'user.email', 'devflow@example.com']);
+    git(['add', '.']);
+    git(['commit', '-m', commitMessage]);
+    return root;
+  };
+
+  const rootA = setup('cross-worktree-a', 'candidate a');
+  const rootB = setup('cross-worktree-b', 'candidate b');
+  const before = getRepoCacheDiagnostics({ domains: ['verification-results'] }).domains[0] as any;
+
+  const first = runProjectCommand(stateFor(rootA), {
+    projectId: 'project-command', command: 'focused', targets: ['src/value.ts'], evidenceConsumerId: 'workspace-a',
+  });
+  const reused = runProjectCommand(stateFor(rootB), {
+    projectId: 'project-command', command: 'focused', targets: ['src/value.ts'], evidenceConsumerId: 'workspace-b',
+  });
+  assert.equal(first.cache?.hit, false);
+  assert.equal(reused.cache?.hit, true);
+  assert.equal(reused.processSpawns, 0);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
+  assert.deepEqual(reused.cache?.consumers?.sort(), ['workspace-a', 'workspace-b']);
+
+  const exactA = runProjectCommand(stateFor(rootA), { projectId: 'project-command', command: 'exact', targets: ['src/value.ts'] });
+  const exactB = runProjectCommand(stateFor(rootB), { projectId: 'project-command', command: 'exact', targets: ['src/value.ts'] });
+  assert.equal(exactA.cache?.hit, false);
+  assert.equal(exactB.cache?.hit, false, 'exact-revision policy must not reuse across distinct candidate revisions');
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '3');
+
+  const externalA = runProjectCommand(stateFor(rootA), { projectId: 'project-command', command: 'external', targets: ['src/value.ts'], cacheResult: true });
+  const externalB = runProjectCommand(stateFor(rootA), { projectId: 'project-command', command: 'external', targets: ['src/value.ts'], cacheResult: true });
+  assert.equal(externalA.processSpawns, 1);
+  assert.equal(externalB.processSpawns, 1);
+  assert.equal(externalA.cache, undefined);
+  assert.equal(externalB.cache, undefined);
+
+  const forced = runProjectCommand(stateFor(rootB), {
+    projectId: 'project-command', command: 'focused', targets: ['src/value.ts'], forceFresh: true,
+  });
+  assert.equal(forced.cache?.hit, false);
+  assert.equal(forced.processSpawns, 1);
+
+  upsertProject({ id: 'project-other', name: 'Other Project', repoUrl: 'https://example.com/other', localPath: rootB });
+  const isolated = runProjectCommand({
+    projectsCache: [{ id: 'project-other', name: 'Other Project', repoUrl: 'https://example.com/other', localPath: rootB }],
+  } as any, { projectId: 'project-other', command: 'focused', targets: ['src/value.ts'] });
+  assert.equal(isolated.cache?.hit, false, 'identical content must not leak evidence across project authority boundaries');
+
+  const after = getRepoCacheDiagnostics({ domains: ['verification-results'] }).domains[0] as any;
+  const reasons = Object.fromEntries((after.reasons || []).map((entry: any) => [entry.reason, entry.count]));
+  const beforeReasons = Object.fromEntries((before.reasons || []).map((entry: any) => [entry.reason, entry.count]));
+  assert.ok(after.hits >= before.hits + 1);
+  assert.ok(after.bypasses >= before.bypasses + 3);
+  assert.ok((reasons.EXPLICIT_FORCE_FRESH || 0) >= (beforeReasons.EXPLICIT_FORCE_FRESH || 0) + 1);
+  assert.ok((reasons.CACHE_DISABLED_BY_POLICY || 0) >= (beforeReasons.CACHE_DISABLED_BY_POLICY || 0) + 2);
+  assert.ok(after.avoidedProcessExecutions >= before.avoidedProcessExecutions + 1);
+  assert.ok(after.avoidedWallClockMs >= before.avoidedWallClockMs);
+});
+
+test('invalid repository verification reuse policy fails closed', () => {
+  const root = createConfigProject('invalid-reuse-policy', [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    category: test',
+    '    reusePolicy: unsafe-global',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n', 'utf8');
+  assert.throws(
+    () => describeProjectCommand(stateFor(root), { projectId: 'project-command', command: 'focused' }),
+    (error: any) => error?.payload?.code === 'COMMAND_CONFIG_INVALID_REUSE_POLICY',
+  );
 });
 
 test('low-confidence or retried PASS is not promoted to reusable evidence by default', () => {

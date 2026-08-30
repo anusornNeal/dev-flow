@@ -55,6 +55,15 @@ test('run_project_command exposes bounded sequential verification batch identity
   assert.equal(batch.properties.checkId.maxLength, 200);
 });
 
+test('run_project_command exposes server-owned verification reuse with an unconditional forceFresh override', () => {
+  const canonical = getToolDefinitionByName('run_project_command');
+  assert.ok(canonical);
+  const properties = canonical.inputSchema.properties;
+  assert.equal(properties.forceFresh?.type, 'boolean');
+  assert.match(String(properties.forceFresh?.description || ''), /bypass reusable verification evidence/i);
+  assert.match(String(properties.cacheResult?.description || ''), /omitted[\s\S]*server policy[\s\S]*reuse/i);
+});
+
 test('transport normalization preserves nested objects, arrays, enums, descriptions, required fields, and optional fields without redundant parent properties', () => {
   const fixture = {
     type: 'object',

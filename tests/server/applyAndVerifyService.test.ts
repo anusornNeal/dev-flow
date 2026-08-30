@@ -61,6 +61,59 @@ test('applyAndVerify applies a batch, returns diff, and runs targeted verificati
   assert.equal(result.plan.lane, 'fast');
 });
 
+test('applyAndVerify delegates reuse to repository policy and preserves forceFresh override', () => {
+  const root = fixture('policy-reuse');
+  const counterPath = path.join(tempRoot, 'apply-verify-policy-counter.txt');
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'test.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+    "process.stdout.write(`verified:${next}\\n`);",
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  test:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/test.mjs',
+    '    category: test',
+    '    reusePolicy: effective-input',
+    '',
+  ].join('\n'), 'utf8');
+
+  const first = applyAndVerify(stateFor(root), {
+    projectId: 'project-apply-verify',
+    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 1', replaceWith: 'value = 2' }] }],
+    requestedCommands: ['test'],
+  });
+  const reused = applyAndVerify(stateFor(root), {
+    projectId: 'project-apply-verify',
+    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 2', replaceWith: 'value = 2' }] }],
+    requestedCommands: ['test'],
+    forceVerification: true,
+  });
+  assert.equal(first.ok, true);
+  assert.equal(reused.ok, true);
+  assert.equal(first.verification[0].cache?.hit, false);
+  assert.equal(reused.verification[0].cache?.hit, true);
+  assert.equal(reused.verification[0].processSpawns, 0);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '1');
+
+  const fresh = applyAndVerify(stateFor(root), {
+    projectId: 'project-apply-verify',
+    files: [{ filePath: 'src/value.ts', edits: [{ type: 'replace', find: 'value = 2', replaceWith: 'value = 2' }] }],
+    requestedCommands: ['test'],
+    forceVerification: true,
+    forceFresh: true,
+  });
+  assert.equal(fresh.ok, true);
+  assert.equal(fresh.verification[0].cache?.hit, false);
+  assert.equal(fresh.verification[0].processSpawns, 1);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});
+
 test('applyAndVerify short-circuits verification for a proven no-op unless forced', () => {
   const root = fixture('noop');
   const result = applyAndVerify(stateFor(root), {

@@ -52,8 +52,10 @@ const MAX_SHARED_RESOURCE_LENGTH = 200;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_BYTES = 100_000;
 const ALLOWED_CATEGORIES = new Set(['verification', 'validate', 'test', 'lint', 'build']);
-const ALLOWED_KEYS = new Set(['executable', 'args', 'cwd', 'timeoutMs', 'maxOutputBytes', 'category', 'sharedResources', 'acceptsTargets']);
+const ALLOWED_KEYS = new Set(['executable', 'args', 'cwd', 'timeoutMs', 'maxOutputBytes', 'category', 'sharedResources', 'acceptsTargets', 'reusePolicy']);
 const parsedConfigCache = new Map<string, { size: number; mtimeMs: number; parsed: any; configPath: string }>();
+
+export type VerificationReusePolicy = 'disabled' | 'exact-revision' | 'effective-input';
 
 export interface ProjectCommandPreset {
   name: string;
@@ -66,6 +68,7 @@ export interface ProjectCommandPreset {
   sharedResources?: string[];
   configPath: string;
   acceptsTargets: boolean;
+  reusePolicy?: VerificationReusePolicy;
 }
 
 function parseScalar(rawValue: string, lineNumber: number): unknown {
@@ -283,6 +286,15 @@ function validateAcceptsTargets(value: unknown, name: string) {
   return value;
 }
 
+function validateVerificationReusePolicy(value: unknown, name: string): VerificationReusePolicy | undefined {
+  if (value === undefined) return undefined;
+  const policy = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (policy !== 'disabled' && policy !== 'exact-revision' && policy !== 'effective-input') {
+    throw createApiError(400, 'COMMAND_CONFIG_INVALID_REUSE_POLICY', `Preset '${name}' reusePolicy must be disabled, exact-revision, or effective-input.`);
+  }
+  return policy;
+}
+
 function validateBoundedInteger(value: unknown, field: string, name: string, max: number) {
   if (value === undefined) return undefined;
   const numeric = Number(value);
@@ -342,6 +354,7 @@ export function loadProjectCommandPreset(root: string, commandName: string): Pro
     sharedResources: validateSharedResources(rawPreset.sharedResources, commandName),
     configPath: config.configPath,
     acceptsTargets: validateAcceptsTargets(rawPreset.acceptsTargets, commandName),
+    reusePolicy: validateVerificationReusePolicy(rawPreset.reusePolicy, commandName),
   };
 }
 

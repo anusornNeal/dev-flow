@@ -45,6 +45,16 @@ test('runner registry owns the complete built-in async dispatch surface', () => 
   assert.deepEqual(getBuiltinToolRunnerNames(), EXPECTED_RUNNERS);
 });
 
+test('autonomous tail post-integration verification delegates cache eligibility to canonical server policy', () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), 'src/server/services/mcpToolJobRunnerRegistry.ts'), 'utf8');
+  const start = source.indexOf("if (toolName === 'continue_task_execution_tail')");
+  const end = source.indexOf("if (toolName === 'run_project_command')", start + 1);
+  assert.ok(start >= 0 && end > start, 'autonomous-tail runner source block must be discoverable');
+  const tailBlock = source.slice(start, end);
+  assert.match(tailBlock, /runProjectCommandAsync/);
+  assert.doesNotMatch(tailBlock, /cacheResult\s*:\s*false/, 'tail must not blanket-disable reusable verification evidence');
+});
+
 test('direct run_project_command retries proven infrastructure failure through a recovery capacity lease', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runner-infra-retry-'));
   fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });

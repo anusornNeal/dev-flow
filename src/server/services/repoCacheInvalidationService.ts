@@ -25,7 +25,11 @@ type RegisteredInvalidator = { invalidator: RepoCacheInvalidator; dependencies: 
 type CacheDomainMetrics = {
   hits: number;
   misses: number;
+  bypasses: number;
   invalidations: number;
+  avoidedProcessExecutions: number;
+  avoidedWallClockMs: number;
+  reasons: Record<string, number>;
   lastInvalidationReason?: string;
   lastInvalidatedAt?: string;
 };
@@ -104,7 +108,15 @@ function bumpDependencyGeneration(root: string | undefined, dependency: RepoCach
 function metricsFor(name: string) {
   const existing = domainMetrics.get(name);
   if (existing) return existing;
-  const created: CacheDomainMetrics = { hits: 0, misses: 0, invalidations: 0 };
+  const created: CacheDomainMetrics = {
+    hits: 0,
+    misses: 0,
+    bypasses: 0,
+    invalidations: 0,
+    avoidedProcessExecutions: 0,
+    avoidedWallClockMs: 0,
+    reasons: {},
+  };
   domainMetrics.set(name, created);
   return created;
 }
@@ -124,10 +136,30 @@ export function registerRepoCacheInvalidator(name: string, invalidator: RepoCach
   metricsFor(name);
 }
 
-export function recordRepoCacheAccess(name: string, hit: boolean, _root?: string) {
+export function recordRepoCacheDecision(name: string, input: {
+  outcome: 'hit' | 'miss' | 'bypass';
+  reason?: string;
+  avoidedProcessExecutions?: number;
+  avoidedWallClockMs?: number;
+}) {
   const metrics = metricsFor(name);
-  if (hit) metrics.hits += 1;
-  else metrics.misses += 1;
+  if (input.outcome === 'hit') metrics.hits += 1;
+  else if (input.outcome === 'miss') metrics.misses += 1;
+  else metrics.bypasses += 1;
+  const normalizedReason = String(input.reason || '').trim().toUpperCase().replace(/[^A-Z0-9_:-]/g, '_').slice(0, 80);
+  if (normalizedReason) {
+    const keys = Object.keys(metrics.reasons);
+    const key = Object.prototype.hasOwnProperty.call(metrics.reasons, normalizedReason) || keys.length < 32
+      ? normalizedReason
+      : 'OTHER';
+    metrics.reasons[key] = (metrics.reasons[key] || 0) + 1;
+  }
+  metrics.avoidedProcessExecutions += Math.max(0, Math.floor(Number(input.avoidedProcessExecutions) || 0));
+  metrics.avoidedWallClockMs += Math.max(0, Math.floor(Number(input.avoidedWallClockMs) || 0));
+}
+
+export function recordRepoCacheAccess(name: string, hit: boolean, _root?: string) {
+  recordRepoCacheDecision(name, { outcome: hit ? 'hit' : 'miss' });
 }
 
 export function getRepoCacheDiagnostics(input: { root?: string; scope?: string; domains?: string[] } = {}) {
@@ -141,10 +173,18 @@ export function getRepoCacheDiagnostics(input: { root?: string; scope?: string; 
         dependencies: registration.dependencies,
         hits: metrics.hits,
         misses: metrics.misses,
+        lookups: metrics.hits + metrics.misses,
+        bypasses: metrics.bypasses,
         hitRate: metrics.hits + metrics.misses > 0
           ? Math.round((metrics.hits / (metrics.hits + metrics.misses)) * 10_000) / 10_000
           : 0,
         invalidations: metrics.invalidations,
+        reasons: Object.entries(metrics.reasons)
+          .map(([reason, count]) => ({ reason, count }))
+          .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason))
+          .slice(0, 32),
+        avoidedProcessExecutions: metrics.avoidedProcessExecutions,
+        avoidedWallClockMs: metrics.avoidedWallClockMs,
         lastInvalidationReason: metrics.lastInvalidationReason,
         lastInvalidatedAt: metrics.lastInvalidatedAt,
         lineageToken: getRepoCacheLineage(input.root, registration.dependencies, input.scope).token,

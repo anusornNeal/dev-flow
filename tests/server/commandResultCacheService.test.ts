@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const cacheService = await import('../../src/server/services/commandResultCacheService.js');
-const { clearCommandResultCache, getCachedCommandResult, rememberCommandResult } = cacheService;
+const { classifyCommandResultCacheMiss, clearCommandResultCache, getCachedCommandResult, rememberCommandResult } = cacheService;
 
 test('bounded reusable evidence is not invalidated by wall-clock TTL', () => {
   clearCommandResultCache();
@@ -25,6 +25,34 @@ test('bounded reusable evidence is not invalidated by wall-clock TTL', () => {
     Date.now = originalNow;
     clearCommandResultCache();
   }
+});
+
+test('cache miss diagnostics classify semantic evidence drift without exposing raw identity values', () => {
+  clearCommandResultCache();
+  const baseIdentity = {
+    repositoryScope: 'project:diagnostics',
+    reusePolicy: 'effective-input' as const,
+    semanticKey: 'semantic-a',
+    commandConfigFingerprint: 'config-a',
+    affectedInputFingerprint: 'input-a',
+    dependencyFingerprint: 'dependency-a',
+    environmentFingerprint: 'environment-a',
+    cwd: '.',
+    timeoutMs: 120_000,
+    maxOutputBytes: 12_000,
+    responseMode: 'standard' as const,
+    evidenceLineageToken: 'project-rules:0',
+  };
+  rememberCommandResult('diagnostic-source', { ok: true }, undefined, {
+    reusable: true,
+    retention: 'bounded',
+    reuseIdentity: baseIdentity,
+  });
+
+  assert.equal(classifyCommandResultCacheMiss({ ...baseIdentity, affectedInputFingerprint: 'input-b' }), 'AFFECTED_INPUT_CHANGED');
+  assert.equal(classifyCommandResultCacheMiss({ ...baseIdentity, dependencyFingerprint: 'dependency-b' }), 'DEPENDENCY_CHANGED');
+  assert.equal(classifyCommandResultCacheMiss({ ...baseIdentity, environmentFingerprint: 'environment-b' }), 'ENVIRONMENT_CHANGED');
+  clearCommandResultCache();
 });
 
 test('ordinary command results retain TTL expiry semantics', () => {

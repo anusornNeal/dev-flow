@@ -22,6 +22,7 @@ import {
   PROJECT_COMMAND_CONFIG_RELATIVE_PATHS,
   PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH,
   type ProjectCommandPreset,
+  type VerificationReusePolicy,
 } from './projectCommandConfigService';
 import { buildRepoAffectedInputIdentity, getRepoDependencyFingerprint, getRepoRevisionForRoot } from './repoRevisionService';
 import {
@@ -35,9 +36,14 @@ import {
   resolveVerificationCandidate,
   type VerificationCandidateIdentity,
 } from './verificationCandidateService';
-import { getCachedCommandResult, rememberCommandResult } from './commandResultCacheService';
+import {
+  classifyCommandResultCacheMiss,
+  getCachedCommandResult,
+  rememberCommandResult,
+  type CommandResultReuseIdentity,
+} from './commandResultCacheService';
 import { readWorkspaceMetadataFile } from './workspaceMetadataCacheService';
-import { getRepoCacheLineage, recordRepoCacheAccess, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
+import { getRepoCacheLineage, recordRepoCacheDecision, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 import {
   predictVerificationResourceCost,
   recordVerificationResourceSample,
@@ -153,6 +159,7 @@ type ResolvedCommand = {
   configuredExecutable?: string;
   configuredArgs?: string[];
   targets?: string[];
+  reusePolicy?: VerificationReusePolicy;
 };
 
 export type ProjectCommandScope = 'targeted' | 'broad' | 'full';
@@ -577,6 +584,7 @@ function resolveAllowedCommand(
       configuredExecutable: configured.executable,
       configuredArgs,
       targets,
+      reusePolicy: configured.reusePolicy,
     };
   }
 
@@ -1645,6 +1653,52 @@ function withVerificationCandidate(
   };
 }
 
+function isLowConfidenceEvidence(args: Record<string, any>) {
+  return String(args.verificationConfidence || '').toLowerCase() === 'low'
+    || (Number.isFinite(Number(args.retryAttempt)) && Number(args.retryAttempt) > 0)
+    || args.flaky === true;
+}
+
+function verificationReusePolicy(resolvedCommand: ResolvedCommand, args: Record<string, any>): VerificationReusePolicy {
+  const explicitCache = args.cacheResult === true || String(args.cacheResult).toLowerCase() === 'true';
+  const explicitlyDisabled = args.cacheResult === false || String(args.cacheResult).toLowerCase() === 'false';
+  if (accessForResolvedCommand(resolvedCommand) !== 'verify' || explicitlyDisabled) return 'disabled';
+  const hasScopedInputs = Array.isArray(args.affectedInputPaths) && args.affectedInputPaths.length > 0;
+  if (resolvedCommand.source === 'repository-config') {
+    if (resolvedCommand.reusePolicy !== undefined) return resolvedCommand.reusePolicy;
+    return explicitCache ? (hasScopedInputs ? 'effective-input' : 'exact-revision') : 'disabled';
+  }
+  if (resolvedCommand.command === 'typecheck' || resolvedCommand.command === 'lint') return 'effective-input';
+  return explicitCache ? (hasScopedInputs ? 'effective-input' : 'exact-revision') : 'disabled';
+}
+
+function verificationReuseBypassReason(
+  resolvedCommand: ResolvedCommand,
+  args: Record<string, any>,
+  cacheContext: ReturnType<typeof commandCacheContext>,
+): string | null {
+  if (accessForResolvedCommand(resolvedCommand) !== 'verify') return null;
+  if (args.forceFresh === true) return 'EXPLICIT_FORCE_FRESH';
+  if (isLowConfidenceEvidence(args) && args.allowLowConfidenceEvidenceReuse !== true) return 'LOW_CONFIDENCE_EVIDENCE';
+  if (cacheContext) return null;
+  if (args.cacheResult === false || String(args.cacheResult).toLowerCase() === 'false') return 'CACHE_DISABLED_BY_POLICY';
+  if (resolvedCommand.source === 'repository-config' && resolvedCommand.reusePolicy === 'disabled') return 'CACHE_DISABLED_BY_POLICY';
+  if (resolvedCommand.source === 'repository-config' && resolvedCommand.reusePolicy === undefined) return 'EXTERNAL_STATE_UNMODELED';
+  if (resolvedCommand.command !== 'typecheck' && resolvedCommand.command !== 'lint') return 'EXTERNAL_STATE_UNMODELED';
+  return 'CANDIDATE_AUTHORITY_CHANGED';
+}
+
+function logicalEvidenceRepositoryScope(root: string, args: Record<string, any>) {
+  const projectId = typeof args.projectId === 'string' ? args.projectId.trim() : '';
+  if (projectId) return `project:${projectId}`;
+  const repoIdentity = typeof args.repoUrl === 'string' && args.repoUrl.trim()
+    ? args.repoUrl.trim()
+    : typeof args.repo === 'string' && args.repo.trim()
+      ? args.repo.trim()
+      : '';
+  return repoIdentity ? `repo:${repoIdentity}` : `root:${normalizeLocalPathIdentity(root)}`;
+}
+
 function commandCacheContext(
   root: string,
   resolvedCommand: ResolvedCommand,
@@ -1656,16 +1710,17 @@ function commandCacheContext(
   identityOverride?: ProjectCommandExecutionIdentity | null,
   evidenceScopeRoot?: string,
 ) {
-  const explicitCache = args.cacheResult === true || String(args.cacheResult).toLowerCase() === 'true';
-  const explicitlyDisabled = args.cacheResult === false || String(args.cacheResult).toLowerCase() === 'false';
-  const automaticStaticCache = resolvedCommand.command === 'typecheck' || resolvedCommand.command === 'lint';
-  if (explicitlyDisabled || (!explicitCache && !automaticStaticCache)) return null;
+  const reusePolicy = verificationReusePolicy(resolvedCommand, args);
+  if (reusePolicy === 'disabled') return null;
   const executionIdentity = identityOverride ?? buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, {}, args);
   if (!executionIdentity) return null;
-  const evidenceRepositoryScope = normalizeLocalPathIdentity(evidenceScopeRoot ?? root);
+  if (reusePolicy === 'effective-input' && !executionIdentity.affectedInputFingerprint) return null;
+  const evidenceRepositoryScope = logicalEvidenceRepositoryScope(evidenceScopeRoot ?? root, args);
   const evidenceLineageToken = getRepoCacheLineage(evidenceScopeRoot ?? root, [...PROJECT_COMMAND_EVIDENCE_LINEAGE_DEPENDENCIES]).token;
-  const cacheKey = crypto.createHash('sha256').update(JSON.stringify({
+  const reuseIdentity: CommandResultReuseIdentity = {
     repositoryScope: evidenceRepositoryScope,
+    reusePolicy,
+    ...(reusePolicy === 'exact-revision' ? { repoRevision: executionIdentity.repoRevision } : {}),
     semanticKey: executionIdentity.semanticKey,
     commandConfigFingerprint: executionIdentity.commandConfigFingerprint || '',
     affectedInputFingerprint: executionIdentity.affectedInputFingerprint || '',
@@ -1676,8 +1731,9 @@ function commandCacheContext(
     maxOutputBytes,
     responseMode,
     evidenceLineageToken,
-  })).digest('hex');
-  return { ...executionIdentity, key: cacheKey, evidenceLineageToken };
+  };
+  const cacheKey = crypto.createHash('sha256').update(JSON.stringify(reuseIdentity)).digest('hex');
+  return { ...executionIdentity, key: cacheKey, evidenceLineageToken, reusePolicy, reuseIdentity };
 }
 
 function cachedCommandResult(
@@ -1690,8 +1746,19 @@ function cachedCommandResult(
   if (!cacheContext) return null;
   const consumerId = typeof args.evidenceConsumerId === 'string' ? args.evidenceConsumerId : undefined;
   const cached = getCachedCommandResult<RunProjectCommandResult>(cacheContext.key, consumerId);
-  recordRepoCacheAccess('verification-results', Boolean(cached));
-  if (!cached) return null;
+  if (!cached) {
+    recordRepoCacheDecision('verification-results', {
+      outcome: 'miss',
+      reason: classifyCommandResultCacheMiss(cacheContext.reuseIdentity),
+    });
+    return null;
+  }
+  recordRepoCacheDecision('verification-results', {
+    outcome: 'hit',
+    reason: 'REUSED_GREEN',
+    avoidedProcessExecutions: 1,
+    avoidedWallClockMs: cached.value.durationMs,
+  });
   return {
     ...cached.value,
     command,
@@ -1738,7 +1805,9 @@ export function getProjectCommandAdmissionPreflight(
   const resolutionMs = Date.now() - totalStartedAt;
   const cacheLookupStartedAt = Date.now();
   const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args, executionIdentity);
-  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
+  const bypassReason = verificationReuseBypassReason(resolvedCommand, args, cacheContext);
+  if (bypassReason) recordRepoCacheDecision('verification-results', { outcome: 'bypass', reason: bypassReason });
+  const cached = bypassReason ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
   const cacheLookupMs = Date.now() - cacheLookupStartedAt;
   return {
     executionIdentity,
@@ -1757,12 +1826,16 @@ function rememberSuccessfulCommandResult(
   args: Record<string, any>,
 ) {
   if (!cacheContext) return result;
-  const retryAttempt = Number.isFinite(Number(args.retryAttempt)) ? Math.max(0, Math.floor(Number(args.retryAttempt))) : 0;
-  const lowConfidence = String(args.verificationConfidence || '').toLowerCase() === 'low' || retryAttempt > 0 || args.flaky === true;
+  const lowConfidence = isLowConfidenceEvidence(args);
   const reusable = !lowConfidence || args.allowLowConfidenceEvidenceReuse === true;
   const sourceConsumerId = typeof args.evidenceConsumerId === 'string' ? args.evidenceConsumerId : undefined;
   const remembered = result.ok && reusable
-    ? rememberCommandResult(cacheContext.key, result, args.cacheTtlMs, { sourceConsumerId, reusable: true, retention: 'bounded' })
+    ? rememberCommandResult(cacheContext.key, result, args.cacheTtlMs, {
+        sourceConsumerId,
+        reusable: true,
+        retention: 'bounded',
+        reuseIdentity: cacheContext.reuseIdentity,
+      })
     : null;
   return {
     ...result,
@@ -1800,7 +1873,9 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
 
   const cacheLookupStartedAt = Date.now();
   const cacheContext = commandCacheContext(root, resolvedCommand, cwdPath, timeoutMs, maxOutputBytes, responseMode, args);
-  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
+  const bypassReason = verificationReuseBypassReason(resolvedCommand, args, cacheContext);
+  if (bypassReason) recordRepoCacheDecision('verification-results', { outcome: 'bypass', reason: bypassReason });
+  const cached = bypassReason ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
   const cacheLookupMs = Date.now() - cacheLookupStartedAt;
   if (cached) {
     return withPerformancePhases(cached, {
@@ -1983,7 +2058,9 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     executionIdentity,
     sourceRoot,
   );
-  const cached = args.forceFresh === true ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
+  const bypassReason = verificationReuseBypassReason(resolvedCommand, args, cacheContext);
+  if (bypassReason) recordRepoCacheDecision('verification-results', { outcome: 'bypass', reason: bypassReason });
+  const cached = bypassReason ? null : cachedCommandResult(cacheContext, command, resolutionMs, responseMode, args);
   const cacheLookupMs = Date.now() - cacheLookupStartedAt;
   if (cached) {
     return withVerificationCandidate(withPerformancePhases(cached, {

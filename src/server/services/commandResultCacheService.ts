@@ -4,12 +4,29 @@ const DEFAULT_TTL_MS = 2 * 60_000;
 const MAX_TTL_MS = 10 * 60_000;
 const MAX_ENTRIES = 128;
 
+export type CommandResultReuseIdentity = {
+  repositoryScope: string;
+  reusePolicy: 'exact-revision' | 'effective-input';
+  repoRevision?: string;
+  semanticKey: string;
+  commandConfigFingerprint: string;
+  affectedInputFingerprint: string;
+  dependencyFingerprint: string;
+  environmentFingerprint: string;
+  cwd: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+  responseMode: 'compact' | 'standard' | 'debug';
+  evidenceLineageToken: string;
+};
+
 export type CommandResultEvidenceMetadata = {
   evidenceId: string;
   sourceConsumerId?: string;
   consumers: string[];
   reusable: boolean;
   retention?: 'ttl' | 'bounded';
+  reuseIdentity?: CommandResultReuseIdentity;
 };
 
 type CommandResultCacheEntry<T> = {
@@ -20,6 +37,7 @@ type CommandResultCacheEntry<T> = {
 };
 
 const cache = new Map<string, CommandResultCacheEntry<unknown>>();
+let evictionCount = 0;
 
 function prune(now = Date.now()) {
   for (const [key, entry] of cache) {
@@ -29,6 +47,7 @@ function prune(now = Date.now()) {
     const oldest = cache.keys().next().value;
     if (!oldest) break;
     cache.delete(oldest);
+    evictionCount += 1;
   }
 }
 
@@ -53,7 +72,12 @@ export function rememberCommandResult<T>(
   key: string,
   value: T,
   ttlMs?: number,
-  evidenceInput?: { sourceConsumerId?: string; reusable?: boolean; retention?: 'ttl' | 'bounded' },
+  evidenceInput?: {
+    sourceConsumerId?: string;
+    reusable?: boolean;
+    retention?: 'ttl' | 'bounded';
+    reuseIdentity?: CommandResultReuseIdentity;
+  },
 ) {
   const now = Date.now();
   prune(now);
@@ -70,18 +94,57 @@ export function rememberCommandResult<T>(
     consumers: sourceConsumerId ? [sourceConsumerId] : [],
     reusable: evidenceInput.reusable !== false,
     retention,
+    ...(evidenceInput?.reuseIdentity ? { reuseIdentity: { ...evidenceInput.reuseIdentity } } : {}),
   } satisfies CommandResultEvidenceMetadata : undefined;
   cache.set(key, { createdAt: now, expiresAt, value, ...(evidence ? { evidence } : {}) });
   return { createdAt: now, expiresAt, ...(evidence ? { evidence: { ...evidence, consumers: [...evidence.consumers] } } : {}) };
 }
 
+export function classifyCommandResultCacheMiss(identity: CommandResultReuseIdentity) {
+  const candidates = Array.from(cache.values())
+    .map((entry) => entry.evidence?.reuseIdentity)
+    .filter((entry): entry is CommandResultReuseIdentity => Boolean(
+      entry
+      && entry.repositoryScope === identity.repositoryScope
+      && entry.reusePolicy === identity.reusePolicy,
+    ));
+  if (candidates.length === 0) return 'NO_REUSABLE_ENTRY';
+  const dimensions: Array<[keyof CommandResultReuseIdentity, string]> = [
+    ['semanticKey', 'SEMANTIC_KEY_CHANGED'],
+    ['cwd', 'SEMANTIC_KEY_CHANGED'],
+    ['commandConfigFingerprint', 'COMMAND_CONFIG_CHANGED'],
+    ['affectedInputFingerprint', 'AFFECTED_INPUT_CHANGED'],
+    ['dependencyFingerprint', 'DEPENDENCY_CHANGED'],
+    ['environmentFingerprint', 'ENVIRONMENT_CHANGED'],
+    ['evidenceLineageToken', 'PROJECT_RULES_CHANGED'],
+    ['repoRevision', 'CANDIDATE_AUTHORITY_CHANGED'],
+    ['timeoutMs', 'EXECUTION_BUDGET_CHANGED'],
+    ['maxOutputBytes', 'RESPONSE_SHAPING_CHANGED'],
+    ['responseMode', 'RESPONSE_SHAPING_CHANGED'],
+  ];
+  let best = candidates[0];
+  let bestMismatchCount = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const mismatchCount = dimensions.reduce((count, [key]) => count + (candidate[key] === identity[key] ? 0 : 1), 0);
+    if (mismatchCount < bestMismatchCount) {
+      best = candidate;
+      bestMismatchCount = mismatchCount;
+    }
+  }
+  for (const [key, reason] of dimensions) {
+    if (best[key] !== identity[key]) return reason;
+  }
+  return evictionCount > 0 ? 'ENTRY_EVICTED' : 'NO_REUSABLE_ENTRY';
+}
+
 export function clearCommandResultCache() {
   const count = cache.size;
   cache.clear();
+  evictionCount = 0;
   return count;
 }
 
 export function getCommandResultCacheStats() {
   prune();
-  return { entries: cache.size, maxEntries: MAX_ENTRIES, defaultTtlMs: DEFAULT_TTL_MS };
+  return { entries: cache.size, maxEntries: MAX_ENTRIES, defaultTtlMs: DEFAULT_TTL_MS, evictions: evictionCount };
 }

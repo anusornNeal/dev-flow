@@ -249,7 +249,6 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
         return await runProjectCommandAsync(state, {
           projectId: request.projectId,
           command: request.command,
-          cacheResult: false,
           singleFlight: false,
           infrastructureRetryPolicy: 'resource-safe-once',
           responseMode: 'compact',

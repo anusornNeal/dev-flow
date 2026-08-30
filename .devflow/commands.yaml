@@ -6,6 +6,7 @@ commands:
       - --test
     acceptsTargets: true
     category: test
+    reusePolicy: effective-input
   test-command-service:
     executable: node
     args:
@@ -14,9 +15,11 @@ commands:
       - tests/server/projectCommandService.test.ts
       - tests/server/projectCommandVerificationCandidate.test.ts
     category: test
+    reusePolicy: exact-revision
   test-start-all:
     executable: node
     args:
       - ../../../../../node_modules/tsx/dist/cli.mjs
       - scripts/verify-start-all.ts
     category: test
+    reusePolicy: disabled

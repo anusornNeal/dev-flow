@@ -215,6 +215,28 @@ test('workspace metadata can be rediscovered after runtime reset without duplica
   assert.equal(worktreeList.split(`branch refs/heads/${created.branch}`).length - 1, 1);
 });
 
+test('normal cleanup purges stale registry metadata when both worktree and managed branch are already gone', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-stale-registry-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const workspace = createOrReuseSessionWorkspace(project(repo), 'stale-registry-chat');
+
+  git(repo, ['worktree', 'remove', workspace.root]);
+  git(repo, ['branch', '-D', workspace.branch]);
+  assert.equal(fs.existsSync(workspace.root), false);
+  assert.notEqual(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
+  assert.equal(listSessionWorkspaceMetadataForRecovery(workspace.projectId, 100, 0).workspaces.some((entry) => entry.workspaceId === workspace.workspaceId), true);
+
+  const result = cleanupSessionWorkspace(workspace.workspaceId);
+  assert.equal(result.removed, true);
+  assert.equal(result.branchRemoved, false);
+  assert.equal(result.branchDisposition, 'stale-registry');
+  assert.equal(listSessionWorkspaceMetadataForRecovery(workspace.projectId, 100, 0).workspaces.some((entry) => entry.workspaceId === workspace.workspaceId), false);
+  assert.deepEqual(cleanupSessionWorkspace(workspace.workspaceId), { removed: false, reason: 'not-found' });
+});
+
+
 test('normal cleanup refuses dirty workspace and clean cleanup removes worktree', () => {
   const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-cleanup-'));
   process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
@@ -230,6 +252,28 @@ test('normal cleanup refuses dirty workspace and clean cleanup removes worktree'
   assert.equal(fs.existsSync(workspace.root), false);
   assert.notEqual(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
   assert.deepEqual(cleanupSessionWorkspace(workspace.workspaceId), { removed: false, reason: 'not-found' });
+});
+
+test('normal cleanup preserves a stale-root registry when its managed branch still has unique commits', () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-workspace-stale-unique-'));
+  process.env.DEVFLOW_RUNTIME_DIR = runtimeRoot;
+  resetSessionWorkspaceRuntimeForTests();
+  const repo = createRepo();
+  const workspace = createOrReuseSessionWorkspace(project(repo), 'stale-unique-chat');
+  fs.writeFileSync(path.join(workspace.root, 'unique.txt'), 'unique\n');
+  git(workspace.root, ['add', 'unique.txt']);
+  git(workspace.root, ['commit', '-m', 'unique stale workspace commit']);
+  git(repo, ['worktree', 'remove', workspace.root]);
+
+  assert.equal(fs.existsSync(workspace.root), false);
+  assert.equal(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
+  assert.throws(
+    () => cleanupSessionWorkspace(workspace.workspaceId),
+    (error: any) => error?.payload?.code === 'WORKSPACE_UNINTEGRATED_COMMITS'
+      && error?.payload?.details?.disposition === 'unique-commits',
+  );
+  assert.equal(listSessionWorkspaceMetadataForRecovery(workspace.projectId, 100, 0).workspaces.some((entry) => entry.workspaceId === workspace.workspaceId), true);
+  assert.equal(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${workspace.branch}`], { cwd: repo, shell: false }).status, 0);
 });
 
 test('normal cleanup rejects an active durable claim even after in-memory workspace refs are reset', () => {

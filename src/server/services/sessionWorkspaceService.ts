@@ -353,6 +353,14 @@ function getManagedBranchDisposition(
   return { safe: false as const, reason: 'unique-commits' as const, sourceHead, baseHead };
 }
 
+function isStaleRegistryMetadataOnly(workspace: SessionWorkspace, root: string) {
+  if (fs.existsSync(root)) return false;
+  if (!isManagedBranchForWorkspace(workspace.projectId, workspace.branch, workspace.taskRootLeaf)) return false;
+  const projectTopLevel = runGit(workspace.projectRoot, ['rev-parse', '--show-toplevel'], true);
+  if (projectTopLevel.status !== 0 || path.resolve((projectTopLevel.stdout || '').trim()) !== path.resolve(workspace.projectRoot)) return false;
+  return !branchExists(workspace.projectRoot, workspace.branch);
+}
+
 function removeManagedBranchIfSafe(workspace: SessionWorkspace) {
   const disposition = getManagedBranchDisposition(workspace.projectRoot, workspace.projectId, workspace.branch, workspace.baseBranch, { taskRootLeaf: workspace.taskRootLeaf });
   if (!disposition.safe) return { removed: false, disposition: disposition.reason };
@@ -775,6 +783,7 @@ function cleanupSessionWorkspaceLocked(workspaceId: string, options: { force?: b
     throw createApiError(409, 'WORKSPACE_ACTIVE', 'Workspace is active and cannot be removed by normal cleanup.', { affectedId: workspaceId });
   }
   const root = canonicalContainment(workspace.root);
+  let staleRegistryMetadataOnly = !options.force && isStaleRegistryMetadataOnly(workspace, root);
   if (fs.existsSync(root) && !options.force) {
     const dirty = (runGit(root, ['status', '--porcelain', '--untracked-files=all']).stdout || '').trim();
     if (dirty) {
@@ -786,7 +795,7 @@ function cleanupSessionWorkspaceLocked(workspaceId: string, options: { force?: b
       throw createApiError(409, 'WORKSPACE_INTEGRATION_REQUIRED', 'Workspace still requires integration before cleanup.', { affectedId: workspaceId });
     }
   }
-  if (!options.force) {
+  if (!options.force && !staleRegistryMetadataOnly) {
     const branchDisposition = getManagedBranchDisposition(workspace.projectRoot, workspace.projectId, workspace.branch, workspace.baseBranch, {
       allowCheckedOut: true,
       taskRootLeaf: workspace.taskRootLeaf,
@@ -802,6 +811,13 @@ function cleanupSessionWorkspaceLocked(workspaceId: string, options: { force?: b
 
   cleanupBeforeRemovalHookForTests?.({ ...workspace });
   assertWorkspaceLifecycleAuthorityReleasedForCleanup(workspace);
+  if (staleRegistryMetadataOnly) {
+    staleRegistryMetadataOnly = isStaleRegistryMetadataOnly(workspace, root);
+    if (!staleRegistryMetadataOnly) {
+      workspaceLifecycleCounters.cleanupBlocked += 1;
+      throw createApiError(409, 'WORKSPACE_STALE_REGISTRY_CHANGED', 'Workspace root or managed branch reappeared while stale registry cleanup was in progress.', { affectedId: workspaceId });
+    }
+  }
 
   if (fs.existsSync(root)) {
     const result = runGit(workspace.projectRoot, ['worktree', 'remove', ...(options.force ? ['--force'] : []), root], true);
@@ -810,7 +826,9 @@ function cleanupSessionWorkspaceLocked(workspaceId: string, options: { force?: b
       throw createApiError(409, 'WORKSPACE_REMOVE_FAILED', 'Git refused to remove the workspace.', { affectedId: workspaceId, details: result.stderr?.trim() });
     }
   }
-  const branchCleanup = removeManagedBranchIfSafe(workspace);
+  const branchCleanup = staleRegistryMetadataOnly
+    ? { removed: false, disposition: 'stale-registry' as const }
+    : removeManagedBranchIfSafe(workspace);
   fs.rmSync(metadataPath(workspaceId), { force: true });
   memoryRegistry.delete(workspaceId);
   activeWorkspaceRefs.delete(workspaceId);

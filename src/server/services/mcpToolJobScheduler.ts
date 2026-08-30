@@ -2,11 +2,12 @@ import type { AppState } from '../types';
 import { describeProjectCommandResourceProfile, type ProjectCommandVerificationClass } from './projectCommandService';
 import os from 'node:os';
 import { captureSystemResourceSnapshot, diffSystemResourceSnapshots, type SystemResourceSnapshot } from '../../lib/platformRuntime';
+import { getResidualVerificationResourceSnapshot } from './residualVerificationProcessService';
 
 export type JobKind = 'repo-command' | 'repo-write' | 'repo-read' | 'skill-read';
 export type ResourceAccessMode = 'read' | 'verify' | 'write';
 export type JobCostClass = 'light-read' | 'search' | 'verify' | 'write';
-export type SchedulerBlockReason = 'active_write' | 'active_resource' | 'cost_pool_saturated' | 'writer_barrier' | 'capacity_saturated' | 'shared_resource_conflict' | 'resource_budget_saturated' | 'live_pressure_saturated' | 'interference_risk';
+export type SchedulerBlockReason = 'active_write' | 'active_resource' | 'cost_pool_saturated' | 'writer_barrier' | 'capacity_saturated' | 'shared_resource_conflict' | 'resource_budget_saturated' | 'live_pressure_saturated' | 'interference_risk' | 'residual_resource_debt';
 export type SchedulerWaitType = 'workspace_lock' | 'capacity';
 
 export interface SchedulerQueueEntry {
@@ -180,7 +181,15 @@ let verificationMachinePressureOverride: VerificationMachinePressure | null | un
 let previousSystemResourceSnapshot: SystemResourceSnapshot | undefined;
 let lastObservedMachinePressure: VerificationMachinePressure | null = null;
 let lastVerificationAdmissionMode: 'adaptive' | 'fallback' = 'fallback';
-const verificationInterferenceByPair = new Map<string, number[]>();
+const verificationInterferenceByPair = new Map<string, number[]>();let residualVerificationSnapshotProvider: () => ReturnType<typeof getResidualVerificationResourceSnapshot> = getResidualVerificationResourceSnapshot;
+
+const emptyResidualVerificationSnapshot = () => ({
+  count: 0,
+  oldestAgeMs: 0,
+  attempts: 0,
+  states: {} as Record<string, number>,
+  resourceEstimate: { cpuRatio: 0, memoryBytes: 0, processCount: 0 },
+});
 
 function clampRatio(value: unknown, fallback: number) {
   const numeric = Number(value);
@@ -451,6 +460,10 @@ export function getVerificationProcessPermitBlocker(request: VerificationProcess
   if (interferencePermit) {
     return { blockedByJobId: interferencePermit.jobId, blockedByAccessMode: 'verify', blockReason: 'interference_risk', waitType: 'capacity' };
   }
+  const residualDebt = residualVerificationSnapshotProvider();
+  if (verificationClassForRequest(request) === 'heavy' && residualDebt.count > 0) {
+    return { blockReason: 'residual_resource_debt', waitType: 'capacity' };
+  }
   if (verificationClassForRequest(request) === 'heavy' && activeHeavyVerify >= HEAVY_VERIFY_CAPACITY) {
     return { blockReason: 'capacity_saturated', waitType: 'capacity' };
   }
@@ -676,8 +689,13 @@ export function getSchedulerCapacitySnapshot() {
       },
       livePressure: lastObservedMachinePressure,
       interference: { pairs: verificationInterferenceByPair.size, riskyPairs },
+      residual: residualVerificationSnapshotProvider(),
     },
   };
+}
+
+export function setResidualVerificationSnapshotProviderForTests(provider?: (() => ReturnType<typeof getResidualVerificationResourceSnapshot>) | null) {
+  residualVerificationSnapshotProvider = provider || emptyResidualVerificationSnapshot;
 }
 
 export function setGlobalVerifyCapacityForTests(value: number) {
@@ -748,6 +766,7 @@ export function resetSchedulerResourceStateForTests() {
   verificationPermitSequence = 0;
   activeVerificationPermits.clear();
   activeSharedVerificationResources.clear();
+  residualVerificationSnapshotProvider = emptyResidualVerificationSnapshot;
   verificationInterferenceByPair.clear();
   verificationResourceBudget = readVerificationResourceBudgetConfig();
   verificationMachinePressureOverride = undefined;

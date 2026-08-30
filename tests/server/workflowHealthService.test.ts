@@ -25,7 +25,10 @@ const { createProject } = await import('../../src/server/repositories/projectRep
 const emergencyOps = await import('../../src/server/repositories/lifecycleEmergencyOperationRepository.js');
 
 const workflowHealthModule = await import('../../src/server/services/workflowHealthService.js');
-const { getWorkflowHealth, getChatGptHarnessHealthSnapshot } = workflowHealthModule;
+const { getWorkflowHealth, getChatGptHarnessHealthSnapshot } = workflowHealthModule;const {
+  clearResidualVerificationProcessStateForTests,
+  registerResidualVerificationProcess,
+} = await import('../../src/server/services/residualVerificationProcessService.js');
 const { getToolDefinitionByName, getCapabilityCatalog } = await import('../../src/server/contracts/devflowContract.js');
 const serverEvents = await import('../../src/server/services/serverEventService.js');
 const { clearToolCallRecords, recordToolCall, flushPerformanceTelemetry } = await import('../../src/server/services/mcpToolMonitor.js');
@@ -1002,6 +1005,30 @@ test('compact workflow health warm p95 remains below the 750ms SLO with a popula
   const p95 = samples[Math.ceil(samples.length * 0.95) - 1];
   console.log(`[health-benchmark] warm samples=${samples.length} p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms scanCount=${getRecentJobCacheStats().diskScanCount}`);
   assert.equal(p95 <= 750, true, `expected warm p95 <= 750ms, got ${p95.toFixed(1)}ms`);
+});
+
+test('workflow health exposes bounded residual verification process debt without raw process details', () => {
+  const repo = createRepo('residual-process-health');
+  clearResidualVerificationProcessStateForTests();
+  try {
+    registerResidualVerificationProcess({
+      pid: 4321,
+      platform: 'win32',
+      identityHash: 'health-residual-identity',
+      trigger: 'timeout',
+      now: Date.now() + 60_000,
+      resourceEstimate: { cpuRatio: 0.4, memoryBytes: 384 * 1024 ** 2, processCount: 2 },
+    });
+    const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
+    const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
+    assert.equal(compact.queue.residualProcessDebt.count, 1);
+    assert.equal(compact.queue.residualProcessDebt.resourceEstimate.processCount, 2);
+    assert.equal(full.diagnostics.residualProcessDebt.count, 1);
+    assert.equal(JSON.stringify(compact.queue.residualProcessDebt).includes('4321'), false, 'health output must stay bounded and omit raw PIDs');
+    assert.match(compact.recommendations.join('\n'), /Residual verification process debt/);
+  } finally {
+    clearResidualVerificationProcessStateForTests();
+  }
 });
 
 test('workflow health distinguishes durable lease, recovery, cancellation, and fencing states', () => {

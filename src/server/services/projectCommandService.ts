@@ -52,6 +52,7 @@ import {
   type VerificationResourceProfileDescriptor,
 } from './verificationResourceProfileService';
 import { planVerification, type ExecutionLane } from './verificationPlannerService';
+import { registerResidualVerificationProcess, type ResidualVerificationTrigger } from './residualVerificationProcessService';
 
 const ALLOWED_COMMANDS = ['typecheck', 'test', 'lint', 'build', 'verify'] as const;
 const SAFE_BENCHMARK_PACKAGE_SCRIPT = /^benchmark:[A-Za-z0-9][A-Za-z0-9:_-]*$/;
@@ -191,6 +192,12 @@ export type CommandTerminationResult = {
   attempted: boolean;
   treeTermination: boolean;
   terminated: boolean;
+  confirmedDead: boolean;
+  pid?: number;
+  processIdentityHash?: string;
+  remainingProcesses?: Array<{ pid: number; identityHash: string }>;
+  residualProcessId?: string;
+  residualProcessIds?: string[];
   reason?: string;
   terminationError?: string;
 };
@@ -1996,10 +2003,21 @@ export function terminateCommandProcess(
 ): CommandTerminationResult {
   const platform = options.platform ?? process.platform;
   let terminationError = '';
+  let processIdentityHash: string | undefined;
+  let remainingProcesses: Array<{ pid: number; identityHash: string }> | undefined;
   if (platform === 'win32' && child.pid) {
     try {
       const treeResult = (options.treeTerminator ?? terminateProcessTree)(child.pid, { platform: 'win32' });
-      if (treeResult.terminated) return { mode: 'process-tree', ...treeResult };
+      processIdentityHash = treeResult.identityHash;      remainingProcesses = treeResult.remainingProcesses;
+      if (treeResult.terminated && treeResult.confirmed !== false) {
+        return {
+          mode: 'process-tree',
+          ...treeResult,
+          confirmedDead: true,
+          pid: child.pid,
+          ...(processIdentityHash ? { processIdentityHash } : {}),
+        };
+      }
       if (treeResult.reason) terminationError = treeResult.reason;
     } catch (error) {
       terminationError = error instanceof Error ? error.message : String(error);
@@ -2012,6 +2030,10 @@ export function terminateCommandProcess(
       attempted: true,
       treeTermination: false,
       terminated,
+      confirmedDead: false,
+      ...(child.pid ? { pid: child.pid } : {}),
+      ...(processIdentityHash ? { processIdentityHash } : {}),
+      ...(remainingProcesses?.length ? { remainingProcesses } : {}),
       ...(terminationError ? { terminationError } : {}),
     };
   } catch (error) {
@@ -2021,6 +2043,10 @@ export function terminateCommandProcess(
       attempted: true,
       treeTermination: false,
       terminated: false,
+      confirmedDead: false,
+      ...(child.pid ? { pid: child.pid } : {}),
+      ...(processIdentityHash ? { processIdentityHash } : {}),
+      ...(remainingProcesses?.length ? { remainingProcesses } : {}),
       terminationError: [terminationError, rootError].filter(Boolean).join('; '),
     };
   }
@@ -2162,6 +2188,28 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     let terminationGraceId: NodeJS.Timeout | undefined;
     let timeoutId: NodeJS.Timeout;
     let terminationResult: CommandTerminationResult | undefined;
+    const trackResidualTermination = (termination: CommandTerminationResult, trigger: ResidualVerificationTrigger) => {
+      if (termination.confirmedDead || !child.pid || process.platform !== 'win32') return termination;
+      const tracked = termination.remainingProcesses?.length
+        ? termination.remainingProcesses
+        : [{ pid: child.pid, ...(termination.processIdentityHash ? { identityHash: termination.processIdentityHash } : {}) }];
+      const divisor = Math.max(1, tracked.length);
+      const residualProcessIds = tracked.map((trackedProcess) => registerResidualVerificationProcess({
+        pid: trackedProcess.pid,
+        platform: 'win32',
+        identityHash: trackedProcess.identityHash,
+        trigger,
+        reason: termination.reason || termination.terminationError || 'process-tree-death-unconfirmed',
+        resourceEstimate: {
+          cpuRatio: resourcePrediction.upperBound.cpuRatio / divisor,
+          memoryBytes: resourcePrediction.upperBound.memoryBytes / divisor,
+          processCount: 1,
+        },
+      })?.id).filter((id): id is string => Boolean(id));
+      return residualProcessIds.length
+        ? { ...termination, residualProcessId: residualProcessIds[0], residualProcessIds }
+        : termination;
+    };
 
     const settleCommandResult = (
       code: number | null,
@@ -2229,14 +2277,14 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
     timeoutId = setTimeout(() => {
       if (settled) return;
       timedOut = true;
-      terminationResult = terminateCommandProcess(child);
+      terminationResult = trackResidualTermination(terminateCommandProcess(child), 'timeout');
       terminationGraceId = setTimeout(() => settleCommandResult(null, null, 'termination-grace'), PROCESS_TERMINATION_GRACE_MS);
       terminationGraceId.unref?.();
     }, timeoutMs);
 
     setCancelFn(() => {
       if (settled) return undefined;
-      const cancellationTermination = terminateCommandProcess(child);
+      const cancellationTermination = trackResidualTermination(terminateCommandProcess(child), 'cancel');
       settled = true;
       clearTimeout(timeoutId);
       if (terminationGraceId) clearTimeout(terminationGraceId);

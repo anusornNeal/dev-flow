@@ -21,7 +21,7 @@ import {
   releaseVerificationProcessPermit,
   recordVerificationInterferenceSampleForTests,
   setVerificationMachinePressureForTests,
-  setVerificationResourceBudgetForTests,
+  setVerificationResourceBudgetForTests,  setResidualVerificationSnapshotProviderForTests,
   type SchedulerQueueEntry,
 } from '../../src/server/services/mcpToolJobScheduler.js';
 
@@ -157,6 +157,39 @@ test('verify saturation does not block interactive reads or independent workspac
 
   decrementScheduledResource(activeA);
   decrementScheduledResource(activeB);
+});
+
+test('residual process debt blocks heavy verification while fast verification and lightweight work remain admissible', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(2);
+  setResidualVerificationSnapshotProviderForTests(() => ({
+    count: 2,
+    oldestAgeMs: 5_000,
+    attempts: 3,
+    states: { 'termination-unconfirmed': 2 },
+    resourceEstimate: { cpuRatio: 0.5, memoryBytes: 512 * 1024 ** 2, processCount: 2 },
+  }));
+
+  const heavy = tryAcquireVerificationProcessPermit({
+    jobId: 'heavy-under-residual-debt',
+    verificationClass: 'heavy',
+    sharedResources: ['project:a:gradle'],
+  });
+  assert.equal(heavy.permit, null);
+  assert.equal(heavy.blocker?.blockReason, 'residual_resource_debt');
+
+  const fast = tryAcquireVerificationProcessPermit({
+    jobId: 'fast-under-residual-debt',
+    verificationClass: 'fast',
+    sharedResources: ['project:b:typescript'],
+  });
+  assert.ok(fast.permit, 'safe fast verification should remain available while heavy work is quarantined');
+  assert.equal(getSchedulerCapacitySnapshot().verify.residual.count, 2);
+  assert.equal(releaseVerificationProcessPermit(fast.permit), true);
+
+  const interactiveRead = entry({ jobId: 'read-under-residual-debt', resourceKey: 'workspace:c' });
+  assert.equal(getBlockerForQueueEntry(interactiveRead, 0, [interactiveRead], []), null);
+  resetSchedulerResourceStateForTests();
 });
 
 test('write to verify transition requires a reserved process permit and never overbooks capacity', () => {

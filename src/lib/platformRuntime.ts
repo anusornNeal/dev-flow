@@ -32,11 +32,22 @@ export type ProcessTreeResourceSample = {
   partialReason?: 'descendant-enumeration-failed';
 };
 
+export type ProcessIdentityProbe = {
+  supported: boolean;
+  exists: boolean;
+  pid: number;
+  identityHash?: string;
+  reason?: 'invalid-pid' | 'unsupported-platform' | 'probe-failed' | 'process-not-found';
+};
+
 export type ProcessTreeTerminationResult = {
   attempted: boolean;
   treeTermination: boolean;
   terminated: boolean;
-  reason?: 'invalid-pid' | 'unsupported-platform' | 'terminator-failed';
+  confirmed?: boolean;
+  identityHash?: string;
+  remainingProcesses?: Array<{ pid: number; identityHash: string }>;
+  reason?: 'invalid-pid' | 'unsupported-platform' | 'terminator-failed' | 'identity-unavailable' | 'pid-reused' | 'termination-unconfirmed';
 };
 
 type ResourceCommandResult = {
@@ -253,19 +264,153 @@ function parseWindowsProcessRows(stdout: string) {
   }
   return { rows, complete };
 }
+type WindowsProcessIdentityRow = { pid: number; ppid: number; creationDate: string; identityHash: string };
+
+function processIdentityHash(pid: number, creationDate: string) {
+  return crypto.createHash('sha256').update(`${pid}|${creationDate}`).digest('hex');
+}
+
+function parseWindowsIdentityRows(stdout: string) {
+  const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return { rows: [] as WindowsProcessIdentityRow[], complete: lines.length <= 1 };
+  const headers = parseCsvFields(lines[0]).map((field) => field.replace(/^\uFEFF/, '').toLowerCase());
+  const pidIndex = headers.indexOf('processid');
+  const ppidIndex = headers.indexOf('parentprocessid');
+  const creationIndex = headers.indexOf('creationdate');
+  if (pidIndex < 0 || ppidIndex < 0 || creationIndex < 0) return { rows: [], complete: false };
+  const rows: WindowsProcessIdentityRow[] = [];
+  let complete = true;
+  for (const line of lines.slice(1)) {
+    const fields = parseCsvFields(line);
+    const pid = Number(fields[pidIndex]);
+    const ppid = Number(fields[ppidIndex]);
+    const creationDate = String(fields[creationIndex] || '').trim();
+    if (!Number.isFinite(pid) || !Number.isFinite(ppid) || !creationDate) {
+      complete = false;
+      continue;
+    }
+    rows.push({ pid, ppid, creationDate, identityHash: processIdentityHash(pid, creationDate) });
+  }
+  return { rows, complete };
+}
+
+function captureWindowsIdentityTable(run: ResourceCommandRunner) {
+  const result = run('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Csv -NoTypeInformation',
+  ]);
+  if (result.status !== 0) return { supported: false as const, processes: [] as WindowsProcessIdentityRow[] };
+  const parsed = parseWindowsIdentityRows(result.stdout);
+  return parsed.complete
+    ? { supported: true as const, processes: parsed.rows }
+    : { supported: false as const, processes: [] as WindowsProcessIdentityRow[] };
+}
+
+function captureWindowsProcessTreeIdentities(rootPid: number, run: ResourceCommandRunner) {
+  const table = captureWindowsIdentityTable(run);
+  if (!table.supported) return { supported: false as const, exists: false, processes: [] as WindowsProcessIdentityRow[] };
+  if (!table.processes.some((row) => row.pid === rootPid)) return { supported: true as const, exists: false, processes: [] as WindowsProcessIdentityRow[] };
+  const included = collectDescendantPids(rootPid, table.processes);
+  return { supported: true as const, exists: true, processes: table.processes.filter((row) => included.has(row.pid)) };
+}
+
+export function captureProcessIdentity(pid: number, options: {
+  platform?: SupportedPlatform;
+  run?: ResourceCommandRunner;
+} = {}): ProcessIdentityProbe {
+  const rootPid = Math.floor(Number(pid));
+  if (!Number.isFinite(rootPid) || rootPid <= 0) return { supported: false, exists: false, pid: rootPid, reason: 'invalid-pid' };
+  const platform = options.platform ?? process.platform;
+  const run = options.run ?? defaultResourceCommandRunner;
+
+  if (platform === 'win32') {
+    const result = run('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Get-CimInstance Win32_Process -Filter "ProcessId = ${rootPid}" | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Csv -NoTypeInformation`,
+    ]);
+    if (result.status !== 0) return { supported: false, exists: false, pid: rootPid, reason: 'probe-failed' };
+    const parsed = parseWindowsIdentityRows(result.stdout);
+    if (!parsed.complete) return { supported: false, exists: false, pid: rootPid, reason: 'probe-failed' };
+    const row = parsed.rows.find((candidate) => candidate.pid === rootPid);
+    if (!row) return { supported: true, exists: false, pid: rootPid, reason: 'process-not-found' };
+    return { supported: true, exists: true, pid: rootPid, identityHash: row.identityHash };
+  }
+
+  if (platform === 'darwin' || platform === 'linux' || platform === 'freebsd' || platform === 'openbsd') {
+    const result = run('ps', ['-p', String(rootPid), '-o', 'pid=,ppid=,lstart=']);
+    if (result.status !== 0) return { supported: false, exists: false, pid: rootPid, reason: 'probe-failed' };
+    const normalized = String(result.stdout || '').trim();
+    if (!normalized) return { supported: true, exists: false, pid: rootPid, reason: 'process-not-found' };
+    return {
+      supported: true,
+      exists: true,
+      pid: rootPid,
+      identityHash: crypto.createHash('sha256').update(normalized).digest('hex'),
+    };
+  }
+
+  return { supported: false, exists: false, pid: rootPid, reason: 'unsupported-platform' };
+}
 
 export function terminateProcessTree(pid: number, options: {
   platform?: SupportedPlatform;
   run?: ResourceCommandRunner;
+  expectedIdentityHash?: string;
 } = {}): ProcessTreeTerminationResult {
   const rootPid = Math.floor(Number(pid));
-  if (!Number.isFinite(rootPid) || rootPid <= 0) return { attempted: false, treeTermination: false, terminated: false, reason: 'invalid-pid' };
+  if (!Number.isFinite(rootPid) || rootPid <= 0) return { attempted: false, treeTermination: false, terminated: false, confirmed: false, reason: 'invalid-pid' };
   const platform = options.platform ?? process.platform;
-  if (platform !== 'win32') return { attempted: false, treeTermination: false, terminated: false, reason: 'unsupported-platform' };
-  const result = (options.run ?? defaultResourceCommandRunner)('taskkill', ['/PID', String(rootPid), '/T', '/F']);
-  return result.status === 0
-    ? { attempted: true, treeTermination: true, terminated: true }
-    : { attempted: true, treeTermination: true, terminated: false, reason: 'terminator-failed' };
+  if (platform !== 'win32') return { attempted: false, treeTermination: false, terminated: false, confirmed: false, reason: 'unsupported-platform' };
+  const run = options.run ?? defaultResourceCommandRunner;
+  const beforeTree = captureWindowsProcessTreeIdentities(rootPid, run);
+  if (beforeTree.supported && !beforeTree.exists) {
+    return { attempted: false, treeTermination: true, terminated: true, confirmed: true };
+  }
+  if (!beforeTree.supported || beforeTree.processes.length === 0) {
+    return { attempted: false, treeTermination: true, terminated: false, confirmed: false, reason: 'identity-unavailable' };
+  }
+  const beforeRoot = beforeTree.processes.find((process) => process.pid === rootPid)!;
+  if (options.expectedIdentityHash && beforeRoot.identityHash !== options.expectedIdentityHash) {
+    return { attempted: false, treeTermination: true, terminated: false, confirmed: false, identityHash: beforeRoot.identityHash, reason: 'pid-reused' };
+  }
+
+  const result = run('taskkill', ['/PID', String(rootPid), '/T', '/F']);
+  if (result.status !== 0) {
+    return {
+      attempted: true,
+      treeTermination: true,
+      terminated: false,
+      confirmed: false,
+      identityHash: beforeRoot.identityHash,
+      remainingProcesses: beforeTree.processes.map(({ pid, identityHash }) => ({ pid, identityHash })),
+      reason: 'terminator-failed',
+    };
+  }
+
+  const afterTable = captureWindowsIdentityTable(run);
+  if (!afterTable.supported) {
+    return {
+      attempted: true,
+      treeTermination: true,
+      terminated: false,
+      confirmed: false,
+      identityHash: beforeRoot.identityHash,
+      remainingProcesses: beforeTree.processes.map(({ pid, identityHash }) => ({ pid, identityHash })),
+      reason: 'termination-unconfirmed',
+    };
+  }
+
+  const afterByPid = new Map(afterTable.processes.map((process) => [process.pid, process.identityHash]));
+  const remainingProcesses = beforeTree.processes
+    .filter((process) => afterByPid.get(process.pid) === process.identityHash)
+    .map(({ pid, identityHash }) => ({ pid, identityHash }));
+  return remainingProcesses.length === 0
+    ? { attempted: true, treeTermination: true, terminated: true, confirmed: true, identityHash: beforeRoot.identityHash }
+    : { attempted: true, treeTermination: true, terminated: false, confirmed: false, identityHash: beforeRoot.identityHash, remainingProcesses, reason: 'termination-unconfirmed' };
 }
 
 export function sampleProcessTreeResources(pid: number, options: {

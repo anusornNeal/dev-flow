@@ -25,6 +25,7 @@ import { HARNESS_STRATEGY_VERSION } from './harnessStrategyService.js';
 import { classifyLifecycleLiveWorkAuthority } from './lifecycleAuthorityService.js';
 import { classifyRecoveryCapabilityParity, type RuntimeClientState } from './runtimeIdentityService.js';
 import { resolveTaskClaimLiveness } from './taskClaimLivenessService.js';
+import { getResidualVerificationResourceSnapshot } from './residualVerificationProcessService';
 
 const lastHealthEventSignatures = new Map<string, string>();
 let capabilityCatalogProvider: () => ReturnType<typeof getCapabilityCatalog> = getCapabilityCatalog;
@@ -944,6 +945,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   if (git.ok && !git.clean && !git.operation?.blocked) recommendations.push('Working tree has local changes; review or commit them before starting unrelated work.');
 
   const queueDepth = Number(diagnostics?.mcp?.queueDepth || 0);
+  const residualProcessDebt = getResidualVerificationResourceSnapshot();
   const runtimeSupervisor = diagnostics?.runtimeSupervisor;
   const runtimeSourceFreshness = diagnostics?.runtime?.sourceFreshness || null;
   const runtimeDiagnosis = diagnostics?.runtimeDiagnosis || null;
@@ -1033,6 +1035,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
   if (queueDepth > 0) recommendations.push('MCP tool jobs are queued; inspect job status/log before starting conflicting repo work.');
   if (Number(durableJobs.staleRunning || 0) > 0) recommendations.push('A stale MCP tool job lease was detected in durable state; inspect recovery classification before retrying the job.');
   if (isolation.capacity?.saturated) recommendations.push('Verification capacity is saturated; queued verify work is capacity-limited rather than blocked by a workspace correctness lock.');
+  if (residualProcessDebt.count > 0) recommendations.push(`Residual verification process debt remains (${residualProcessDebt.count} record(s), ${residualProcessDebt.resourceEstimate.processCount} estimated process(es)); heavy verification stays degraded until identity-safe cleanup is confirmed.`);
   if (failedJobs > 0) {
     const groupedTools = failedJobGroups.map((group) => `${group.toolName}=${group.count}`).join(', ');
     recommendations.push(groupedTools
@@ -1142,6 +1145,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
       failedJobEvidence,
       failedJobSummaries,
       durableJobs,
+      residualProcessDebt,
       staleAgentRuns,
       duplicateBursts,
       repoCaches: { domains: repoCaches },
@@ -1196,6 +1200,7 @@ export function getWorkflowHealth(state: AppState, args: Record<string, any> = {
     queue: {
       depth: queueDepth,
       capacity: isolation.capacity,
+      ...(residualProcessDebt.count > 0 ? { residualProcessDebt } : {}),
       durableJobs: {
         queued: Number(durableJobs.queued || 0),
         running: Number(durableJobs.running || 0),

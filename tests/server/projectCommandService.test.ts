@@ -475,14 +475,14 @@ test('Windows command termination uses the exact process-tree terminator before 
     },
   });
   assert.deepEqual(treeCalls, [123]);
-  assert.equal(tree.mode, 'process-tree');
+  assert.equal(tree.mode, 'process-tree');  assert.equal(tree.confirmedDead, true);
   assert.equal(fallbackKills, 0);
 
   const fallback = terminateCommandProcess(child, {
     platform: 'win32',
     treeTerminator: () => ({ attempted: true, treeTermination: true, terminated: false, reason: 'terminator-failed' }),
   });
-  assert.equal(fallback.mode, 'root-signal');
+  assert.equal(fallback.mode, 'root-signal');  assert.equal(fallback.confirmedDead, false);
   assert.equal(fallbackKills, 1);
 
   const throwingFallback = terminateCommandProcess(child, {
@@ -490,7 +490,7 @@ test('Windows command termination uses the exact process-tree terminator before 
     treeTerminator: () => { throw new Error('taskkill unavailable'); },
   });
   assert.equal(throwingFallback.mode, 'root-signal');
-  assert.equal(throwingFallback.terminated, true);
+  assert.equal(throwingFallback.terminated, true);  assert.equal(throwingFallback.confirmedDead, false);
   assert.match(String(throwingFallback.terminationError || ''), /taskkill unavailable/);
   assert.equal(fallbackKills, 2);
 });

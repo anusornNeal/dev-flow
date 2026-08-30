@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  captureSystemResourceSnapshot,
+  captureSystemResourceSnapshot,  captureProcessIdentity,
   diffSystemResourceSnapshots,
   getMachineRuntimeProfile,
   normalizeLocalPathIdentity,
@@ -173,20 +173,79 @@ test('Windows process sampling fails closed when CIM returns a malformed partial
   assert.equal(sample.rssBytes, 10 * 1024);
 });
 
-test('Windows process-tree termination targets only the requested root tree', () => {
+test('Windows process identity stays stable across re-parenting while CreationDate stays the same', () => {
+  let parentPid = 1;
+  const run = () => ({
+    status: 0,
+    stdout: [
+      '"ProcessId","ParentProcessId","CreationDate"',
+      `"123","${parentPid}","20260830180000.000000+420"`,
+    ].join('\n'),
+  });
+  const first = captureProcessIdentity(123, { platform: 'win32', run });
+  parentPid = 999;
+  const second = captureProcessIdentity(123, { platform: 'win32', run });
+  assert.equal(first.exists, true);
+  assert.equal(first.identityHash, second.identityHash, 'PPID changes must not turn the same process into a different identity');
+});
+
+test('Windows process-tree termination quarantines a surviving re-parented descendant and never targets siblings', () => {
   const calls: Array<{ executable: string; args: string[] }> = [];
+  let tableRead = 0;
   const result = terminateProcessTree(123, {
     platform: 'win32',
     run: (executable, args) => {
       calls.push({ executable, args });
-      return { status: 0, stdout: 'SUCCESS' };
+      if (executable === 'taskkill') return { status: 0, stdout: 'SUCCESS' };
+      tableRead += 1;
+      return {
+        status: 0,
+        stdout: tableRead === 1
+          ? [
+              '"ProcessId","ParentProcessId","CreationDate"',
+              '"123","1","root-old"',
+              '"124","123","child-stable"',
+              '"999","1","sibling"',
+            ].join('\n')
+          : [
+              '"ProcessId","ParentProcessId","CreationDate"',
+              '"123","1","root-new"',
+              '"124","1","child-stable"',
+              '"999","1","sibling"',
+            ].join('\n'),
+      };
     },
   });
 
-  assert.deepEqual(calls, [{ executable: 'taskkill', args: ['/PID', '123', '/T', '/F'] }]);
-  assert.equal(calls[0].args.includes('999'), false, 'an unrelated sibling PID must never be targeted');
-  assert.equal(result.terminated, true);
-  assert.equal(result.treeTermination, true);
+  const taskkill = calls.filter((call) => call.executable === 'taskkill');
+  assert.deepEqual(taskkill, [{ executable: 'taskkill', args: ['/PID', '123', '/T', '/F'] }]);
+  assert.equal(taskkill[0].args.includes('999'), false, 'an unrelated sibling PID must never be targeted');
+  assert.equal(result.terminated, false);
+  assert.equal(result.confirmed, false);
+  assert.equal(result.reason, 'termination-unconfirmed');
+  assert.deepEqual(result.remainingProcesses?.map((process) => process.pid), [124]);
+});
+
+test('Windows process-tree termination refuses PID reuse before taskkill', () => {
+  const calls: string[] = [];
+  const result = terminateProcessTree(123, {
+    platform: 'win32',
+    expectedIdentityHash: 'stale-identity',
+    run: (executable) => {
+      calls.push(executable);
+      return {
+        status: 0,
+        stdout: [
+          '"ProcessId","ParentProcessId","CreationDate"',
+          '"123","1","new-process"',
+        ].join('\n'),
+      };
+    },
+  });
+  assert.deepEqual(calls, ['powershell.exe']);
+  assert.equal(result.reason, 'pid-reused');
+  assert.equal(result.attempted, false);
+  assert.equal(result.confirmed, false);
 });
 
 test('process sampling degrades safely when platform signals are unavailable', () => {

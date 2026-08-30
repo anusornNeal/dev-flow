@@ -1304,6 +1304,25 @@ test('stale local-native work becomes scheduler attention while retaining its ta
   assert.equal(replacement.task?.taskId, 'native-stale');
 });
 
+test('partitioned next action ignores foreign-partition attention and keeps local work runnable', () => {
+  const projectId = 'project-next-action-partition-attention';
+  createCandidateProject(projectId);
+  seedCandidateTask(projectId, 'partition-attention-foreign', ['src/PartitionAttentionForeign.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-900' });
+  seedCandidateTask(projectId, 'partition-attention-ready', ['src/PartitionAttentionReady.ts'], { priority: 'medium', status: 'todo', displayId: 'NXT-901' });
+
+  claims.claimTaskForSession('partition-attention-foreign', { sessionId: 'partition-attention-owner', ownerLabel: 'Partition Attention Owner' });
+  const attentionSession = listExecutionSessionsForTask('partition-attention-foreign').find((entry: any) => entry.status === 'active');
+  assert.ok(attentionSession);
+  execution.cancelExecutionSession(attentionSession!.id);
+
+  const next = claims.getNextActionForSession(projectId, {
+    sessionId: 'partition-one-worker', limit: 10, partitionCount: 3, partitionIndex: 1,
+  });
+  assert.equal(next.action, 'claim-new');
+  assert.equal(next.task?.taskId, 'partition-attention-ready');
+  assert.equal(JSON.stringify(next).includes('partition-attention-foreign'), false);
+});
+
 test('next action is read-only, project-pinned, and prioritizes attention over owned continuation and new work', () => {
   const projectId = 'project-next-action-attention';
   const otherProjectId = 'project-next-action-other';

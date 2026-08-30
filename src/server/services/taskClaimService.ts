@@ -663,6 +663,7 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   const ordinaryAttention = projection.entries.find((entry) => (
     entry.state === 'attention'
     && !((entry as any).context?.backgroundPipeline?.state === 'attention')
+    && (!partition || taskMatchesPartition(entry.displayId, partition))
   ));
   if (ordinaryAttention) {
     return {
@@ -707,7 +708,9 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
     };
   }
 
-  const attention = projection.entries.find((entry) => entry.state === 'attention' && entry.taskId !== ownedTask?.id);
+  const attention = projection.entries.find((entry) => entry.state === 'attention'
+    && entry.taskId !== ownedTask?.id
+    && (!partition || taskMatchesPartition(entry.displayId, partition)));
   if (attention) {
     return {
       action: 'resolve-attention' as const,

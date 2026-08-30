@@ -20,7 +20,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-30.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-30.2';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -911,6 +911,21 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
     }),
   },
   {
+    name: 'append_worker_log',
+    description: 'Append bounded operational diagnostics outside task execution ownership.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string' },
+        workerId: { type: 'string' },
+        entry: { type: 'string' },
+      },
+      required: ['projectId', 'workerId', 'entry'],
+    },
+    outputSchema: { type: 'object' },
+    buildHttpRequest: (args) => ({ method: 'POST', path: '/api/worker-logs/append', body: args }),
+  },
+  {
     name: 'write_local_file',
     description: 'Write a UTF-8 local file safely within a project root. Prefer this for small generated edits when a full-file replacement is faster than remote write flows.',
     inputSchema: {
@@ -1784,7 +1799,7 @@ const CODING_PROFILE_TOOLS = new Set([
   'get_skill_router', 'get_authoring_skill', 'get_guidance_skill', 'get_jira_authoring_bundle',
   'get_figma_authoring_context', 'attach_figma_context_to_task', 'get_project_atlas',
   'get_repo_context_bundle', 'list_local_files', 'read_local_file', 'read_file_snippets_batch', 'search_local_files', 'execute_repo_query_plan',
-  'write_local_file', 'edit_local_files_batch', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path',
+  'write_local_file', 'append_worker_log', 'edit_local_files_batch', 'prepare_compact_edit', 'apply_prepared_edit', 'apply_and_verify', 'delete_local_path', 'move_local_path',
   'inspect_project_verification', 'run_project_command',
   'get_git_status', 'get_git_diff', 'get_git_log', 'get_git_show', 'get_git_branch', 'get_git_sync_status',
   'ensure_git_branch', 'commit_git_changes', 'push_git_branch', 'create_pull_request',

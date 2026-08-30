@@ -5,6 +5,7 @@ import type { ApiRouteDeps } from '../types';
 import { getCapabilityCatalog, getToolSchema } from '../contracts/devflowContract';
 import { createApiError, sendApiError } from '../services/api';
 import { listLocalFiles, readFileSnippetsBatch, readLocalFile, searchLocalFiles, writeLocalFile } from '../services/localFileService';
+import { appendWorkerDiagnosticLog, listWorkerDiagnosticLogs, readWorkerDiagnosticLog } from '../services/workerDiagnosticLogService';
 import { executeRepoQueryPlan } from '../services/repoQueryPlanService';
 import { applyLocalPatch } from '../services/localPatchService';
 import { deleteLocalPath, moveLocalPath } from '../services/localPathMutationService';
@@ -362,6 +363,30 @@ export function registerDevFlowRoutes(app: express.Express, deps: ApiRouteDeps) 
         (payload) => readFileSnippetsBatch(deps.state, payload),
       );
       return res.json(result);
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/worker-logs/append', (req, res) => {
+    try {
+      return res.json(appendWorkerDiagnosticLog(deps.state, req.body as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/worker-logs/read', (req, res) => {
+    try {
+      return res.json(readWorkerDiagnosticLog(deps.state, req.query as Record<string, any>));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.get('/api/worker-logs', (req, res) => {
+    try {
+      return res.json(listWorkerDiagnosticLogs(deps.state, req.query as Record<string, any>));
     } catch (error) {
       return sendApiError(res, error);
     }

@@ -36,6 +36,19 @@ test('task-domain contracts are owned by a focused module and composed into the 
   assert.deepEqual(aggregateNames.slice(first, first + TASK_TOOL_NAMES.length), TASK_TOOL_NAMES);
 });
 
+test('worker diagnostic log contracts are explicit operational metadata tools', () => {
+  const append = getToolDefinitionByName('append_worker_log');
+  assert.ok(append);
+  assert.deepEqual((append?.inputSchema as any)?.required, ['projectId', 'workerId', 'entry']);
+  assert.equal(append?.buildHttpRequest({ projectId: 'p', workerId: 'worker-c', entry: 'x' }).path, '/api/worker-logs/append');
+  for (const name of ['append_worker_log']) {
+    assert.equal(isToolAllowedInProfile(name, 'coding'), true, `${name} should be callable by scheduled coding workers`);
+  }
+  const routeSource = fs.readFileSync('src/server/routes/devflow.ts', 'utf8');
+  assert.match(routeSource, /\/api\/worker-logs\/append/);
+  assert.match(routeSource, /\/api\/worker-logs\/read/);
+});
+
 test('task scope expansion keeps a first-class owner-guarded mutation contract', () => {
   const tool = taskToolDefinitions.find((entry) => entry.name === 'expand_task_scope');
   assert.ok(tool);

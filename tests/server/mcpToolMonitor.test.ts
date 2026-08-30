@@ -225,6 +225,9 @@ test('isolation diagnostics separate correctness and capacity waits without leak
         },
         phaseTelemetry: {
           admissionWait: { count: 3, totalMs: 6, p50Ms: 2, p95Ms: 3 },
+          admissionResource: { count: 3, totalMs: 3, p50Ms: 1, p95Ms: 2 },
+          admissionPolicy: { count: 3, totalMs: 2, p50Ms: 1, p95Ms: 1 },
+          admissionPersistence: { count: 3, totalMs: 1, p50Ms: 0, p95Ms: 1 },
           queueWait: { count: 3, totalMs: 150, p50Ms: 50, p95Ms: 80 },
           workspaceLockWait: { count: 3, totalMs: 42, p50Ms: 12, p95Ms: 20 },
           capacityWait: { count: 2, totalMs: 70, p50Ms: 30, p95Ms: 40 },
@@ -243,6 +246,9 @@ test('isolation diagnostics separate correctness and capacity waits without leak
 
   assert.equal(isolation.waits.workspaceLockWait.p95Ms, 20);
   assert.equal(isolation.waits.capacityWait.p95Ms, 40);
+  assert.equal(isolation.phases.admissionResource.p95Ms, 2);
+  assert.equal(isolation.phases.admissionPolicy.p95Ms, 1);
+  assert.equal(isolation.phases.admissionPersistence.p95Ms, 1);
   assert.equal(isolation.phases.queueWait.p95Ms, 80);
   assert.equal(isolation.phases.candidatePreparation.p95Ms, 30);
   assert.equal(isolation.phases.execution.p95Ms, 120);

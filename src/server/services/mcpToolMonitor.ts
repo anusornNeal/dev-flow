@@ -642,6 +642,9 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
     },
     phases: {
       admissionWait: phaseTelemetry.admissionWait || emptyTiming,
+      admissionResource: phaseTelemetry.admissionResource || emptyTiming,
+      admissionPolicy: phaseTelemetry.admissionPolicy || emptyTiming,
+      admissionPersistence: phaseTelemetry.admissionPersistence || emptyTiming,
       queueWait: phaseTelemetry.queueWait || emptyTiming,
       workspaceLockWait: phaseTelemetry.workspaceLockWait || waitTelemetry.workspaceLockWait || emptyTiming,
       capacityWait: phaseTelemetry.capacityWait || waitTelemetry.capacityWait || emptyTiming,

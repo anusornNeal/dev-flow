@@ -17,6 +17,7 @@ const { getRepoRevisionForRoot } = await import('../../src/server/services/repoR
 const { readJobResult } = await import('../../src/server/repositories/mcpToolJobRepository.js');
 const {
   __setToolJobTestRunner,
+  __autonomousTailConfigForTests,
   enqueueToolJob,
   getToolJobStatus,
 } = await import('../../src/server/services/mcpToolJobService.js');
@@ -83,6 +84,13 @@ after(() => {
   __setToolJobTestRunner('run_project_command', null);
   try { db.close(); } catch {}
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
+});
+
+test('autonomous tail config uses explicit commit intent without requiring the legacy enabled flag', () => {
+  assert.deepEqual(__autonomousTailConfigForTests({ args: { autonomousTail: { commitMessage: 'fix: close verified task' } } } as any), {
+    commitMessage: 'fix: close verified task',
+  });
+  assert.equal(__autonomousTailConfigForTests({ args: { autonomousTail: {} } } as any), null);
 });
 
 test('current same-candidate GREEN result is explicitly authoritative and current', async () => {

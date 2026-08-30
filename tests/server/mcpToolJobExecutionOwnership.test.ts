@@ -52,10 +52,11 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
-const { claimTaskForSession } = await import('../../src/server/services/taskClaimService.js');
+const { claimTaskForSession, releaseTaskClaim } = await import('../../src/server/services/taskClaimService.js');
 const workspaceService = await import('../../src/server/services/sessionWorkspaceService.js');
 const execution = await import('../../src/server/services/executionSessionService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
+const continuation = await import('../../src/server/services/executionContinuationService.js');
 const { runBuiltinToolJob } = await import('../../src/server/services/mcpToolJobRunnerRegistry.js');
 const jobService = await import('../../src/server/services/mcpToolJobService.js') as any;
 const jobRepo = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
@@ -136,6 +137,112 @@ function verificationArgs(command: string) {
   assert.ok(args.__verificationCandidate);
   return args;
 }
+
+test('commit-intent continuation reuses exact authoritative GREEN and admits exactly one tail without verification replay', async () => {
+  const isolatedTaskId = `${taskId}-tail-intent`;
+  saveTask({
+    id: isolatedTaskId,
+    displayId: 'DVF-OWNERSHIP-TAIL',
+    title: 'Tail intent fixture',
+    description: 'Prove missing commit intent continues from exact GREEN.',
+    projectId,
+    status: 'todo',
+    priority: 'medium',
+    category: 'backend',
+    tags: ['tail-intent'],
+    targetFiles: ['src/unrelated.ts'],
+    checklist: [],
+    logs: [],
+    bugs: [],
+    images: [],
+    createdAt: now,
+    updatedAt: now,
+  } as any);
+  const isolatedOwner = 'ownership-tail-intent';
+  const isolatedClaim = claimTaskForSession(isolatedTaskId, {
+    sessionId: isolatedOwner,
+    ownerKind: 'chat',
+    ownerLabel: 'Tail intent test',
+  });
+  const isolatedWorkspace = workspaceService.resolveSessionWorkspace(isolatedClaim.claim.workspaceId)!;
+  const isolatedSession = execution.getActiveTaskExecutionSessionForWorkspace(isolatedWorkspace.workspaceId)!;
+  continuation.persistBoardLoopIntent(isolatedSession.id, {
+    loopId: `loop-${isolatedSession.id}`,
+    projectId,
+    requestedTaskId: isolatedTaskId,
+    status: 'active',
+    startedAt: new Date().toISOString(),
+  } as any);
+
+  const verificationJobId = `job-green-${isolatedSession.id}`;
+  jobRepo.createJob(verificationJobId, 'run_project_command', {
+    projectId,
+    workspaceId: isolatedWorkspace.workspaceId,
+    command: 'green-check',
+    __executionJobBinding: {
+      operationId: verificationJobId,
+      executionSessionId: isolatedSession.id,
+      taskId: isolatedTaskId,
+      workspaceId: isolatedWorkspace.workspaceId,
+      projectId,
+      toolName: 'run_project_command',
+    },
+  }, `workspace:${isolatedWorkspace.workspaceId}`, { eagerArtifacts: false });
+  jobRepo.writeJobResult(verificationJobId, {
+    ok: true,
+    status: 'succeeded',
+    verificationBinding: { authoritative: true },
+  });
+  jobRepo.transitionJobStatus(verificationJobId, ['queued'], { status: 'succeeded' });
+
+  let tailRuns = 0;
+  jobService.__setToolJobTestRunner('continue_task_execution_tail', async () => {
+    tailRuns += 1;
+    return { ok: true, status: 'completed' };
+  });
+  try {
+    const verificationJobsBefore = jobRepo.listRecentJobs(200).filter((job: any) => (
+      job.toolName === 'run_project_command'
+      && job.args?.__executionJobBinding?.executionSessionId === isolatedSession.id
+    ));
+    assert.equal(verificationJobsBefore.length, 1);
+
+    const first = jobService.continueAutonomousTailWithCommitIntent(state, {
+      executionSessionId: isolatedSession.id,
+      triggerJobId: verificationJobId,
+      workspaceId: isolatedWorkspace.workspaceId,
+      commitMessage: 'fix: continue exact green',
+    });
+    const second = jobService.continueAutonomousTailWithCommitIntent(state, {
+      executionSessionId: isolatedSession.id,
+      triggerJobId: verificationJobId,
+      workspaceId: isolatedWorkspace.workspaceId,
+      commitMessage: 'fix: continue exact green',
+    });
+
+    assert.equal(first.jobId, second.jobId, 'duplicate continuation must reuse the same durable tail');
+    assert.equal(second.reused, true);
+    assert.equal(first.verificationReplayed, false);
+    assert.equal(first.verificationCandidateMaterialized, false);
+    await waitUntil(() => jobService.getToolJobStatus(first.jobId)?.status === 'succeeded', 'Expected autonomous tail to finish');
+    assert.equal(tailRuns, 1, 'exactly one autonomous tail runner should execute');
+
+    const verificationJobsAfter = jobRepo.listRecentJobs(200).filter((job: any) => (
+      job.toolName === 'run_project_command'
+      && job.args?.__executionJobBinding?.executionSessionId === isolatedSession.id
+    ));
+    assert.equal(verificationJobsAfter.length, 1, 'commit-intent continuation must not enqueue duplicate verification');
+    const tailJobs = jobRepo.listRecentJobs(200).filter((job: any) => (
+      job.toolName === 'continue_task_execution_tail'
+      && job.args?.triggerJobId === verificationJobId
+    ));
+    assert.equal(tailJobs.length, 1, 'duplicate continuation/reconnect must not duplicate tail effects');
+  } finally {
+    jobService.__setToolJobTestRunner('continue_task_execution_tail', null);
+    releaseTaskClaim(isolatedTaskId, { sessionId: isolatedOwner, nextStatus: 'todo' });
+    workspaceService.cleanupSessionWorkspace(isolatedWorkspace.workspaceId);
+  }
+});
 
 test('production enqueue binds queued lifecycle work to the admitted execution before returning', () => {
   const before = execution.getExecutionSessionState(session.id).session;

@@ -37,6 +37,15 @@ export type ExecutionContinuationNextAction =
       workspaceId?: string;
       replacementExecutionAllowed: false;
     }
+  | {
+      action: 'supply-commit-intent';
+      tool: 'continue_task_execution_tail';
+      executionSessionId: string;
+      triggerJobId: string;
+      workspaceId?: string;
+      commitMessageRequired: true;
+      verificationRequired: false;
+    }
   | null;
 
 export type ExecutionContinuationResult = {
@@ -490,6 +499,29 @@ export function evaluateExecutionContinuation(
         operationId: finalization.id,
         workspaceId: finalization.workspaceId,
         reintegrate: false,
+      },
+    };
+  }
+
+  if (
+    terminalHandoffAttention?.code === 'AUTONOMOUS_TAIL_COMMIT_INTENT_REQUIRED'
+    && latestVerificationJob
+  ) {
+    return {
+      ...base,
+      blockers: blockers.filter((entry) => entry.code !== 'AUTONOMOUS_TAIL_COMMIT_INTENT_REQUIRED'),
+      terminal: false,
+      continuationRequired: true,
+      blocked: false,
+      reasonCodes: ['AUTONOMOUS_TAIL_COMMIT_INTENT_REQUIRED'],
+      nextAction: {
+        action: 'supply-commit-intent',
+        tool: 'continue_task_execution_tail',
+        executionSessionId: session.id,
+        triggerJobId: latestVerificationJob.jobId,
+        ...(session.workspaceId ? { workspaceId: session.workspaceId } : {}),
+        commitMessageRequired: true,
+        verificationRequired: false,
       },
     };
   }

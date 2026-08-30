@@ -199,7 +199,7 @@ test('persisted board-loop intent is projected by continuation without caller re
   assert.equal(historical.boardLoop.loopId, 'loop-persisted-fixture');
 });
 
-test('missing terminal handoff is surfaced as autonomous-tail attention for an active board loop', () => {
+test('authoritative GREEN without commit intent requests lightweight tail continuation instead of verification replay', () => {
   const { task, session } = fixture({ checklistComplete: true });
   const persist = continuationService.persistBoardLoopIntent as any;
   persist(session.id, {
@@ -229,8 +229,8 @@ test('missing terminal handoff is surfaced as autonomous-tail attention for an a
     verificationBinding: { authoritative: true },
     terminalHandoff: {
       required: true,
-      code: 'TERMINAL_HANDOFF_REQUIRED',
-      message: 'Active board-loop terminal verification requires autonomous tail handoff.',
+      code: 'AUTONOMOUS_TAIL_COMMIT_INTENT_REQUIRED',
+      message: 'Authoritative GREEN is preserved; supply reasoning-agent commit intent to continue the autonomous tail.',
     },
   });
   transitionJobStatus(jobId, ['queued'], { status: 'succeeded' });
@@ -238,9 +238,14 @@ test('missing terminal handoff is surfaced as autonomous-tail attention for an a
   const result = evaluateExecutionContinuation(state, session.id);
   assert.equal(result.autonomousTail.state, 'attention');
   assert.equal(result.autonomousTail.jobId, jobId);
-  assert.equal(result.autonomousTail.reasonCode, 'TERMINAL_HANDOFF_REQUIRED');
-  assert.ok(result.reasonCodes.includes('TERMINAL_HANDOFF_REQUIRED'));
-  assert.equal(result.blocked, true);
+  assert.equal(result.autonomousTail.reasonCode, 'AUTONOMOUS_TAIL_COMMIT_INTENT_REQUIRED');
+  assert.ok(result.reasonCodes.includes('AUTONOMOUS_TAIL_COMMIT_INTENT_REQUIRED'));
+  assert.equal(result.blocked, false);
+  assert.equal(result.nextAction?.action, 'supply-commit-intent');
+  assert.equal(result.nextAction?.tool, 'continue_task_execution_tail');
+  assert.equal((result.nextAction as any)?.triggerJobId, jobId);
+  assert.equal((result.nextAction as any)?.commitMessageRequired, true);
+  assert.equal((result.nextAction as any)?.verificationRequired, false);
 });
 
 test.after(() => {

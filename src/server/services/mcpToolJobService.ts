@@ -67,10 +67,12 @@ type AsyncRunner = (
 
 function autonomousTailConfig(job: Pick<McpToolJob, 'args'> | null | undefined) {
   const raw = job?.args?.autonomousTail;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.enabled !== true) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const commitMessage = String(raw.commitMessage || '').trim();
   return commitMessage ? { commitMessage } : null;
 }
+
+export const __autonomousTailConfigForTests = autonomousTailConfig;
 
 function missingTerminalHandoff(verificationJob: McpToolJob, result: any) {
   if (!result?.ok || result?.status !== 'succeeded' || result?.verificationBinding?.authoritative !== true) return null;
@@ -82,9 +84,15 @@ function missingTerminalHandoff(verificationJob: McpToolJob, result: any) {
   if (autonomousTailConfig(verificationJob)) return null;
   return {
     required: true,
-    code: 'TERMINAL_HANDOFF_REQUIRED',
-    message: 'Active board-loop terminal verification requires autonomousTail.enabled=true and a non-empty reasoning-agent commitMessage.',
-    retry: { tool: 'run_project_command', autonomousTail: { enabled: true, commitMessageRequired: true } },
+    code: 'AUTONOMOUS_TAIL_COMMIT_INTENT_REQUIRED',
+    message: 'Authoritative GREEN is preserved; supply the reasoning-agent commit intent to continue the existing autonomous tail without rerunning verification.',
+    retry: {
+      tool: AUTONOMOUS_TAIL_TOOL_NAME,
+      triggerJobId: verificationJob.jobId,
+      executionSessionId,
+      commitMessageRequired: true,
+      verificationRequired: false,
+    },
   };
 }
 
@@ -95,11 +103,79 @@ function existingAutonomousTailJob(triggerJobId: string) {
   )) || null;
 }
 
+function enqueueAutonomousTailJob(state: AppState, verificationJob: McpToolJob, commitMessage: string) {
+  const binding = durableExecutionJobBinding(verificationJob);
+  if (!binding) return null;
+  const existing = existingAutonomousTailJob(verificationJob.jobId);
+  if (existing) return existing;
+  const accepted = enqueueToolJob(state, AUTONOMOUS_TAIL_TOOL_NAME, {
+    projectId: binding.projectId,
+    taskId: binding.taskId,
+    workspaceId: binding.workspaceId,
+    triggerJobId: verificationJob.jobId,
+    commitMessage,
+  }, 'repo-write');
+  appendJobLog(verificationJob.jobId, 'stdout', `\n[Autonomous Tail] Accepted durable continuation ${accepted.jobId}.\n`);
+  return getJob(accepted.jobId);
+}
+
+export function continueAutonomousTailWithCommitIntent(
+  state: AppState,
+  input: { executionSessionId: string; triggerJobId: string; commitMessage: string; workspaceId?: string },
+) {
+  const executionSessionId = String(input.executionSessionId || '').trim();
+  const triggerJobId = String(input.triggerJobId || '').trim();
+  const commitMessage = String(input.commitMessage || '').trim();
+  const expectedWorkspaceId = String(input.workspaceId || '').trim();
+  if (!executionSessionId || !triggerJobId || !commitMessage) {
+    throw createApiError(400, 'AUTONOMOUS_TAIL_COMMIT_INTENT_REQUIRED', 'executionSessionId, triggerJobId, and explicit reasoning-agent commitMessage are required.');
+  }
+  const verificationJob = getJob(triggerJobId);
+  if (!verificationJob) throw createApiError(404, 'AUTONOMOUS_TAIL_TRIGGER_NOT_FOUND', `Verification job '${triggerJobId}' was not found.`);
+  if (verificationJob.toolName !== 'run_project_command' || verificationJob.status !== 'succeeded') {
+    throw createApiError(409, 'AUTONOMOUS_TAIL_VERIFICATION_REQUIRED', 'The selected trigger is not a succeeded authoritative verification job.');
+  }
+  const result = readJobResult(triggerJobId)?.result;
+  if (!result?.ok || result?.status !== 'succeeded' || result?.verificationBinding?.authoritative !== true) {
+    throw createApiError(409, 'AUTONOMOUS_TAIL_VERIFICATION_REQUIRED', 'Authoritative GREEN verification is required before autonomous tail continuation.');
+  }
+  const binding = durableExecutionJobBinding(verificationJob);
+  if (!binding || binding.executionSessionId !== executionSessionId) {
+    throw createApiError(409, 'AUTONOMOUS_TAIL_EXECUTION_MISMATCH', 'The selected GREEN belongs to a different execution session.');
+  }
+  if (expectedWorkspaceId && binding.workspaceId !== expectedWorkspaceId) {
+    throw createApiError(409, 'AUTONOMOUS_TAIL_WORKSPACE_MISMATCH', 'The selected GREEN belongs to a different managed workspace.');
+  }
+  const boardLoop = getBoardLoopIntentForExecution(executionSessionId);
+  if (!boardLoop || boardLoop.status !== 'active') {
+    throw createApiError(409, 'AUTONOMOUS_TAIL_BOARD_LOOP_INACTIVE', 'Commit-intent continuation is available only for the active board loop that owns this GREEN.');
+  }
+  const latestVerificationJob = listRecentJobs(200)
+    .filter((job) => job.toolName === 'run_project_command' && String(job.args?.__executionJobBinding?.executionSessionId || '').trim() === executionSessionId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] || null;
+  if (latestVerificationJob && latestVerificationJob.jobId !== triggerJobId) {
+    throw createApiError(409, 'AUTONOMOUS_TAIL_TRIGGER_SUPERSEDED', 'A newer verification job exists for this execution; re-read continuation truth instead of attaching commit intent to older evidence.');
+  }
+  const existing = existingAutonomousTailJob(triggerJobId);
+  const tail = existing || enqueueAutonomousTailJob(state, verificationJob, commitMessage);
+  if (!tail) throw createApiError(409, 'AUTONOMOUS_TAIL_ADMISSION_FAILED', 'The durable autonomous tail could not be admitted.');
+  return {
+    ok: true,
+    status: tail.status,
+    jobId: tail.jobId,
+    triggerJobId,
+    executionSessionId,
+    workspaceId: binding.workspaceId,
+    reused: Boolean(existing),
+    verificationReplayed: false,
+    verificationCandidateMaterialized: false,
+    nextAction: `Call get_tool_job_result for ${tail.jobId} with waitMs=30000 until terminal.`,
+  };
+}
+
 function maybeEnqueueAutonomousTail(state: AppState, verificationJob: McpToolJob | null | undefined, result: any) {
   if (!verificationJob || verificationJob.toolName !== 'run_project_command' || verificationJob.status !== 'succeeded') return null;
   if (!result?.ok || result?.status !== 'succeeded' || result?.verificationBinding?.authoritative !== true) return null;
-  const binding = durableExecutionJobBinding(verificationJob);
-  if (!binding) return null;
   const missingHandoff = missingTerminalHandoff(verificationJob, result);
   if (missingHandoff) {
     writeJobResult(verificationJob.jobId, { ...result, terminalHandoff: missingHandoff });
@@ -108,18 +184,8 @@ function maybeEnqueueAutonomousTail(state: AppState, verificationJob: McpToolJob
   }
   const config = autonomousTailConfig(verificationJob);
   if (!config) return null;
-  const existing = existingAutonomousTailJob(verificationJob.jobId);
-  if (existing) return existing;
   try {
-    const accepted = enqueueToolJob(state, AUTONOMOUS_TAIL_TOOL_NAME, {
-      projectId: binding.projectId,
-      taskId: binding.taskId,
-      workspaceId: binding.workspaceId,
-      triggerJobId: verificationJob.jobId,
-      commitMessage: config.commitMessage,
-    }, 'repo-write');
-    appendJobLog(verificationJob.jobId, 'stdout', `\n[Autonomous Tail] Accepted durable continuation ${accepted.jobId}.\n`);
-    return getJob(accepted.jobId);
+    return enqueueAutonomousTailJob(state, verificationJob, config.commitMessage);
   } catch (error) {
     appendJobLog(verificationJob.jobId, 'stderr', `\n[Autonomous Tail] Continuation admission stopped: ${summarizeError(error)}\n`);
     return null;

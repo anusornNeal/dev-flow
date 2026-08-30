@@ -344,7 +344,7 @@ test('full MCP surface removes globally consolidated tools while keeping high-le
     'search_tasks', 'get_task', 'update_task', 'create_task', 'move_task_to_status', 'toggle_task_checklist',
     'get_repo_context_bundle', 'prepare_compact_edit', 'apply_prepared_edit', 'edit_local_files_batch',
     'get_figma_authoring_context', 'get_git_status', 'prepare_session_workspace', 'integrate_workspace',
-    'run_project_command', 'get_tool_job_result', 'cancel_tool_job', 'devflow_health_check', 'get_project_atlas',
+    'run_project_command', 'continue_task_execution_tail', 'get_tool_job_result', 'cancel_tool_job', 'devflow_health_check', 'get_project_atlas',
   ];
   for (const replacement of replacements) {
     assert.equal(fullNames.has(replacement), true, 'full MCP surface should keep ' + replacement);
@@ -467,9 +467,9 @@ test('MCP cleanup preserves coding workflows within the established surface budg
     assert.deepEqual(tools.filter((name) => !codingNames.has(name)), []);
   }
   const profileSummary = getToolProfileSummary();
-  assert.ok(profileSummary.full.toolCount <= 109);
-  // Explicit client callable-tool evidence adds two bounded recovery schema fields.
-  assert.ok(profileSummary.full.schemaBytes <= 174_250);
+  assert.ok(profileSummary.full.toolCount <= 110);
+  // Keep the explicit authoritative-GREEN continuation within a tightly bounded full-surface increase.
+  assert.ok(profileSummary.full.schemaBytes <= 176_000);
 });
 
 test('MCP profile resolution defaults to lean coding and preserves explicit valid profiles', () => {

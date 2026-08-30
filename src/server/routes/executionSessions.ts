@@ -6,6 +6,7 @@ import { getExecutionSessionState } from '../services/executionSessionService';
 import { createExecutionHandoffSnapshot, getExecutionSessionResumeView } from '../services/executionSessionHandoffService';
 import { resolveSessionWorkspace } from '../services/sessionWorkspaceService';
 import { evaluateExecutionContinuation } from '../services/executionContinuationService';
+import { continueAutonomousTailWithCommitIntent } from '../services/mcpToolJobService';
 
 function resolveActiveExecutionRepoRoot(deps: ApiRouteDeps, executionSessionId: string, requestedWorkspaceId?: string | null) {
   const { session } = getExecutionSessionState(executionSessionId);
@@ -56,6 +57,22 @@ export function registerExecutionSessionRoutes(app: express.Express, deps: ApiRo
         repoRoot,
         workspaceId,
         boardLoopRequested: req.query?.boardLoopRequested === 'true',
+      }));
+    } catch (error) {
+      return sendApiError(res, error);
+    }
+  });
+
+  app.post('/api/execution-sessions/:executionSessionId/continue-tail', (req, res) => {
+    try {
+      const executionSessionId = String(req.params.executionSessionId || '').trim();
+      const workspaceId = typeof req.body?.workspaceId === 'string' ? req.body.workspaceId : undefined;
+      resolveActiveExecutionRepoRoot(deps, executionSessionId, workspaceId);
+      return res.json(continueAutonomousTailWithCommitIntent(deps.state, {
+        executionSessionId,
+        triggerJobId: String(req.body?.triggerJobId || ''),
+        commitMessage: String(req.body?.commitMessage || ''),
+        workspaceId,
       }));
     } catch (error) {
       return sendApiError(res, error);

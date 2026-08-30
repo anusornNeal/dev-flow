@@ -61,7 +61,7 @@ Use a conventional commit input and let DevFlow apply the authoritative task/tic
 Do not push unless the user explicitly requests publication.
 
 ## Preferred terminal path
-For continue-until-terminal intent, the authoritative final verification is the handoff boundary. Before launching it, the reasoning agent must choose the conventional commit message and request `run_project_command` with `autonomousTail.enabled=true` plus that non-empty `commitMessage`. Do not ask DevFlow to invent semantic commit text while the reasoning agent is available.
+For continue-until-terminal intent, the authoritative final verification is the handoff boundary. Before launching it, the reasoning agent must choose the conventional commit message and request `run_project_command` with `autonomousTail.commitMessage` set to that non-empty intent; the legacy `enabled=true` ceremony is not required. Do not ask DevFlow to invent semantic commit text while the reasoning agent is available. If authoritative GREEN already exists but commit intent was omitted, call `get_execution_continuation` and supply only that missing intent through `continue_task_execution_tail`; do not rerun equivalent verification.
 
 Once authoritative GREEN verification accepts that terminal handoff, deterministic closure is DevFlow-owned: task-owned commit, repository-policy integration/finalization, any required post-integration verification, safe cleanup, and DONE continue without another reasoning-agent mutation call. GREEN verification, a clean commit, pending finalization, or cleanup are not response boundaries after autonomous-tail admission. Resume reasoning only for structured attention or recovery.
 

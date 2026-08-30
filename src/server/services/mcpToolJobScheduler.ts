@@ -37,7 +37,6 @@ export function classifyBackgroundPipelineJob(job: { toolName?: string; status?:
   const toolName = String(job?.toolName || '').trim();
   const status = String(job?.status || '').trim().toLowerCase();
   const verificationTail = toolName === 'run_project_command'
-    && job?.args?.autonomousTail?.enabled === true
     && Boolean(String(job?.args?.autonomousTail?.commitMessage || '').trim());
   const executionTail = toolName === 'continue_task_execution_tail';
   const phase: BackgroundPipelineJobDisposition['phase'] = verificationTail ? 'verification' : executionTail ? 'execution-tail' : 'none';

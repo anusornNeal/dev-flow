@@ -46,7 +46,7 @@ test('scheduler profile preserves read/search/write cost classes', () => {
   assert.deepEqual(getSchedulerProfile({} as any, 'get_authoring_skill', {}, 'skill-read'), { accessMode: 'read', costClass: 'light-read' });
 });
 
-test('background pipeline classifier distinguishes autonomous verification and execution tails', () => {
+test('background pipeline classifier treats explicit commit intent as the terminal verification handoff without enabled ceremony', () => {
   assert.deepEqual(classifyBackgroundPipelineJob({ toolName: 'run_project_command', status: 'queued', args: {} }), {
     pipelineCapable: false,
     state: 'not-pipeline',
@@ -56,7 +56,7 @@ test('background pipeline classifier distinguishes autonomous verification and e
   assert.deepEqual(classifyBackgroundPipelineJob({
     toolName: 'run_project_command',
     status: 'running',
-    args: { autonomousTail: { enabled: true, commitMessage: 'feat: finish card' } },
+    args: { autonomousTail: { commitMessage: 'feat: finish card' } },
   }), {
     pipelineCapable: true,
     state: 'in-flight',
@@ -66,8 +66,13 @@ test('background pipeline classifier distinguishes autonomous verification and e
   assert.equal(classifyBackgroundPipelineJob({
     toolName: 'run_project_command',
     status: 'failed',
-    args: { autonomousTail: { enabled: true, commitMessage: 'feat: finish card' } },
+    args: { autonomousTail: { commitMessage: 'feat: finish card' } },
   }).state, 'attention');
+  assert.equal(classifyBackgroundPipelineJob({
+    toolName: 'run_project_command',
+    status: 'running',
+    args: { autonomousTail: {} },
+  }).pipelineCapable, false);
   assert.deepEqual(classifyBackgroundPipelineJob({ toolName: 'continue_task_execution_tail', status: 'running', args: {} }), {
     pipelineCapable: true,
     state: 'in-flight',

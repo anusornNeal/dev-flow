@@ -20,7 +20,7 @@ import { uiPreviewToolDefinitions } from './devflowUiPreviewTools';
 import { buildMcpTransportInputSchema } from './mcpSchemaTransport';
 import { resolveRuntimeMcpToolProfileValue } from './mcpToolProfileConfig';
 export type { DevFlowToolDefinition, DevFlowToolHttpRequest } from './devflowContractCore';
-export const DEVFLOW_CONTRACT_VERSION = '2026-08-26.1';
+export const DEVFLOW_CONTRACT_VERSION = '2026-08-30.1';
 
 export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
   {
@@ -1325,12 +1325,12 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         infrastructureRetryPolicy: { type: 'string', enum: ['none', 'resource-safe-once'], description: 'Bounded verification infrastructure recovery policy. resource-safe-once retries a proven infrastructure failure at most once using a safe machine-aware profile.' },
         autonomousTail: {
           type: 'object',
-          description: 'Optional one-shot handoff to DevFlow after authoritative GREEN verification. When enabled, DevFlow durably continues the deterministic commit/finalization/post-integration verification/cleanup tail without additional ChatGPT tool calls. Omit this object for normal verification-only behavior.',
+          description: 'Optional terminal handoff to DevFlow after authoritative GREEN verification. Supplying explicit commitMessage intent is sufficient; the legacy enabled flag is accepted for compatibility but is no longer required. Omit this object for verification-only behavior.',
           properties: {
-            enabled: { type: 'boolean', description: 'Must be true to request autonomous tail continuation.' },
+            enabled: { type: 'boolean', description: 'Legacy compatibility flag. Commit intent, not enabled=true ceremony, authorizes the terminal handoff.' },
             commitMessage: { type: 'string', minLength: 3, maxLength: 240, description: 'Conventional commit input chosen by the initiating reasoning agent. DevFlow never guesses this message.' },
           },
-          required: ['enabled', 'commitMessage'],
+          required: ['commitMessage'],
           additionalProperties: false,
         },
         verificationBatch: {

@@ -362,12 +362,52 @@ test('a single completed tools/list does not extend restart quiescence', () => {
   assert.equal(accepted.duplicate, false);
 });
 
-test('multiple completed tools/list calls preserve multi-client restart quiescence', () => {
+test('completed discovery and restart-readiness control traffic do not self-block restart', () => {
   resetRestartState();
   const activityAt = 10_000;
-  for (const timestamp of [activityAt, activityAt + 100]) {
+  for (const [operation, toolName, timestamp] of [
+    ['initialize', null, activityAt],
+    ['tools/list', null, activityAt + 50],
+    ['initialize', null, activityAt + 100],
+    ['tools/list', null, activityAt + 150],
+    ['tools/call', 'devflow_health_check', activityAt + 200],
+    ['tools/call', 'devflowz.get_devflow_restart_status', activityAt + 250],
+  ] as const) {
     recordMcpTransportRequest({
-      operation: 'tools/list',
+      operation,
+      toolName,
+      statusCode: 200,
+      totalMs: 10,
+      phaseMs: { parse: 1, connect: 0, handle: 7, close: 0, responseFinalize: 2 },
+      timestamp,
+    });
+  }
+
+  const accepted = requestDevFlowRestart({}, {
+    env: {
+      DEVFLOW_RESTART_SUPERVISOR: 'start-all',
+      DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'restart-control-traffic-test-token',
+    },
+    now: () => new Date(activityAt + 1_000),
+    uuid: () => 'restart-control-traffic-test',
+  });
+
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.duplicate, false);
+});
+
+test('completed discovery cannot hide genuine recent workload activity', () => {
+  resetRestartState();
+  const activityAt = 10_000;
+  for (const [operation, toolName, timestamp] of [
+    ['initialize', null, activityAt],
+    ['tools/list', null, activityAt + 50],
+    ['tools/call', 'devflow_health_check', activityAt + 100],
+    ['tools/call', 'get_repo_context_bundle', activityAt + 150],
+  ] as const) {
+    recordMcpTransportRequest({
+      operation,
+      toolName,
       statusCode: 200,
       totalMs: 10,
       phaseMs: { parse: 1, connect: 0, handle: 7, close: 0, responseFinalize: 2 },
@@ -379,14 +419,15 @@ test('multiple completed tools/list calls preserve multi-client restart quiescen
     () => requestDevFlowRestart({}, {
       env: {
         DEVFLOW_RESTART_SUPERVISOR: 'start-all',
-        DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'restart-multi-discovery-test-token',
+        DEVFLOW_RESTART_SUPERVISOR_TOKEN: 'restart-workload-test-token',
       },
       now: () => new Date(activityAt + 1_000),
-      uuid: () => 'multi-discovery-window-test',
+      uuid: () => 'restart-workload-test',
     }),
     (error: any) => {
       assert.equal(error?.payload?.code, 'RESTART_BUSY');
-      assert.equal(error?.payload?.details?.mcpActivity?.recentToolsListOperations, 2);
+      assert.equal(error?.payload?.details?.mcpActivity?.recentWorkloadToolCalls, 1);
+      assert.equal(error?.payload?.details?.mcpActivity?.recentRestartControlOperations, 3);
       return true;
     },
   );

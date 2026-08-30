@@ -293,6 +293,25 @@ export function getMcpTransportToolName(body: unknown) {
   return normalizeSafeToken((body as any)?.params?.name);
 }
 
+const RESTART_CONTROL_TOOL_NAMES = new Set([
+  'devflow_health_check',
+  'get_devflow_restart_status',
+]);
+
+function canonicalToolName(toolName: string | null | undefined) {
+  const normalized = normalizeSafeToken(toolName);
+  if (!normalized) return null;
+  const segments = normalized.split(/(?:[.:/]|__)+/).filter(Boolean);
+  return segments.at(-1) || normalized;
+}
+
+function isRestartControlRecord(record: McpTransportRecord) {
+  if (record.operation === 'initialize' || record.operation === 'tools/list') return true;
+  if (record.operation !== 'tools/call') return false;
+  const toolName = canonicalToolName(record.toolName);
+  return Boolean(toolName && RESTART_CONTROL_TOOL_NAMES.has(toolName));
+}
+
 function isRestartMeaningfulOperation(operation: McpTransportOperation) {
   return operation === 'initialize' || operation === 'tools/list' || operation === 'tools/call';
 }
@@ -479,11 +498,16 @@ export function getMcpRestartActivitySnapshot(options?: { now?: number; quiescen
     && record.timestamp >= cutoff
     && record.timestamp <= now
   ));
+  const restartControlRecords = recentMeaningful.filter(isRestartControlRecord);
+  const recentWorkload = recentMeaningful.filter((record) => !isRestartControlRecord(record));
   const recentInitializeOperations = recentMeaningful.filter((record) => record.operation === 'initialize').length;
   const recentToolsListOperations = recentMeaningful.filter((record) => record.operation === 'tools/list').length;
   const recentToolCalls = recentMeaningful.filter((record) => record.operation === 'tools/call').length;
-  const recentQuiescenceBusy = recentInitializeOperations > 1 || recentToolCalls > 0 || recentToolsListOperations > 1;
+  const recentRestartControlOperations = restartControlRecords.length;
+  const recentWorkloadToolCalls = recentWorkload.filter((record) => record.operation === 'tools/call').length;
+  const recentQuiescenceBusy = recentWorkload.length > 0;
   const lastMeaningfulTimestamp = recentMeaningful.reduce((latest, record) => Math.max(latest, record.timestamp), 0);
+  const lastWorkloadTimestamp = recentWorkload.reduce((latest, record) => Math.max(latest, record.timestamp), 0);
   const inFlightMeaningfulOperations = activeRestartMeaningfulTrackers.size;
 
   return {
@@ -494,8 +518,12 @@ export function getMcpRestartActivitySnapshot(options?: { now?: number; quiescen
     recentInitializeOperations,
     recentToolsListOperations,
     recentToolCalls,
+    recentRestartControlOperations,
+    recentWorkloadOperations: recentWorkload.length,
+    recentWorkloadToolCalls,
     recentQuiescenceBusy,
     lastMeaningfulActivityAt: lastMeaningfulTimestamp > 0 ? new Date(lastMeaningfulTimestamp).toISOString() : null,
+    lastWorkloadActivityAt: lastWorkloadTimestamp > 0 ? new Date(lastWorkloadTimestamp).toISOString() : null,
     privacy: {
       rawSessionIdentifiersStored: false,
       rawClientIdentifiersStored: false,

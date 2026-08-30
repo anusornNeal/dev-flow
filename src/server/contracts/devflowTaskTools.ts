@@ -142,7 +142,7 @@ export const taskToolDefinitions: DevFlowToolDefinition[] = [
         continuation: { type: 'object' },
         attention: { type: 'object' },
         claim: { type: 'object' },
-        blocked: { type: 'array', items: { type: 'object' } },
+        blocked: { type: 'array', items: { type: 'object' }, description: 'Scheduler blockers. RUNTIME_REFRESH_REQUIRED entries include a structured recovery descriptor naming restart_devflow and a reconnect-then-get_next_action continuation.' },
         loop: { type: 'object', description: 'Bounded durable board-loop metadata projected from DevFlow-owned execution evidence.' },
       },
       required: ['action', 'projectId', 'reasonCodes'],

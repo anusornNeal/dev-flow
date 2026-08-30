@@ -1602,6 +1602,9 @@ test('contract-sensitive stale runtime blocks unowned scheduler selection and at
     assert.equal(blocked.blocked?.[0]?.code, 'RUNTIME_REFRESH_REQUIRED');
     assert.match(String(blocked.blocked?.[0]?.message || ''), /currently advertised|runtime refresh/i);
     assert.match(String(blocked.blocked?.[0]?.nextAction || ''), /audit|author|follow-up|card/i);
+    assert.equal(blocked.blocked?.[0]?.recovery?.tool, 'restart_devflow');
+    assert.equal(blocked.blocked?.[0]?.recovery?.after?.tool, 'get_next_action');
+    assert.equal(blocked.blocked?.[0]?.recovery?.after?.reconnect, true);
 
     const refused = claims.claimNextTaskForSession(projectId, { sessionId: 'runtime-gate-worker', ownerLabel: 'Chat Runtime Gate', limit: 10 }) as any;
     assert.equal(refused.status, 'no-eligible');

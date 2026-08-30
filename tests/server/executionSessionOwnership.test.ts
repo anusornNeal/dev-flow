@@ -113,6 +113,26 @@ function currentVerificationResult(provenance: { repoRevision: string }, suffix:
   };
 }
 
+test('owned-change projection keeps one current state per path when the execution context handle rotates', () => {
+  const { workspace, session } = createTaskBoundSession('context-rotation-owned-state');
+  const ownedPath = path.join(workspace.root, 'src', 'A.ts');
+
+  fs.writeFileSync(ownedPath, 'export const A = 30;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts'], { repoRoot: workspace.root, source: 'first-edit' });
+
+  sessions.recordTaskExecutionContextReady(
+    { taskId: 'task-owned', workspaceId: workspace.workspaceId },
+    { contextHandle: 'ctx-owned-state-rotated' },
+  );
+  fs.writeFileSync(ownedPath, 'export const A = 31;\n', 'utf8');
+  sessions.recordExecutionOwnedChanges(session.id, ['src/A.ts'], { repoRoot: workspace.root, source: 'second-edit' });
+
+  const ownership = sessions.getExecutionOwnershipState(session.id, { repoRoot: workspace.root });
+  assert.equal(ownership.ownedFiles.filter((entry: any) => entry.path === 'src/A.ts').length, 1);
+  assert.deepEqual(ownership.ownershipDrift, []);
+  assert.equal(ownership.ownedFiles.find((entry: any) => entry.path === 'src/A.ts')?.source, 'second-edit');
+});
+
 test('owned revision policy is extracted behind the execution-session facade', async () => {
   const ownedRevisionPolicy = await import('../../src/server/services/executionOwnedRevisionService.js');
   for (const name of [

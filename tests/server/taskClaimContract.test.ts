@@ -114,6 +114,7 @@ test('scheduler contracts expose durable board-loop start and stop-confirmation 
   assert.match(String(claimNext.description || ''), /durable[\s\S]*board-loop|board-loop[\s\S]*durable/i);
   assert.ok(nextOutput?.properties?.action?.enum?.includes('confirm-loop-stop'));
   assert.equal(nextOutput?.properties?.loop?.type, 'object');
+  assert.match(String(nextOutput?.properties?.blocked?.description || ''), /restart_devflow[\s\S]*get_next_action/i);
   assert.match(String(next.description || ''), /resume[\s\S]*board-loop|board-loop[\s\S]*resume/i);
 
   const request = claimNext.buildHttpRequest({

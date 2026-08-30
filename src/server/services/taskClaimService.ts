@@ -534,6 +534,11 @@ function schedulerRuntimeRefreshGate() {
     code: RUNTIME_REFRESH_REASON_CODE,
     message: `The running DevFlow contract source is stale (${sourceFreshness.loadedRevision || 'unknown'} -> ${sourceFreshness.currentRevision || 'unknown'}) and the revision gap touches authoritative runtime/MCP surfaces. New scheduler work is paused until runtime refresh.`,
     nextAction: 'Continue only compatible already-owned recovery/finalization work using the currently advertised tool surface. Do not create audit, authoring, follow-up, defect, or runtime-behavior cards from this stale evidence. When restart safety permits, use the guarded API restart and reconnect/refresh the client registry.',
+    recovery: {
+      tool: 'restart_devflow' as const,
+      args: { reason: 'Refresh stale runtime/MCP contract before scheduler work' },
+      after: { tool: 'get_next_action' as const, reconnect: true as const },
+    },
     evidence: {
       loadedRevision: sourceFreshness.loadedRevision,
       currentRevision: sourceFreshness.currentRevision,
@@ -560,6 +565,11 @@ export type SchedulerNextActionResult = {
     reasonCodes?: string[];
     message?: string;
     nextAction?: string;
+    recovery?: {
+      tool: 'restart_devflow';
+      args: { reason: string };
+      after: { tool: 'get_next_action'; reconnect: true };
+    };
     evidence?: Record<string, unknown>;
   }>;
   loop?: BoardLoopIntent;

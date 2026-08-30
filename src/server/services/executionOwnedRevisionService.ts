@@ -131,6 +131,25 @@ function evidenceId(sessionId: string, input: { kind: string; path: string | nul
   return `evidence-${digest}`;
 }
 
+function currentOwnedChangeEvidence(entries: ReturnType<typeof listExecutionSessionEvidence>) {
+  const latestByPath = new Map<string, (typeof entries)[number]>();
+  for (const entry of entries) {
+    if (entry.kind !== 'owned-change' || !entry.path) continue;
+    const prior = latestByPath.get(entry.path);
+    if (!prior) {
+      latestByPath.set(entry.path, entry);
+      continue;
+    }
+    const updatedOrder = String(entry.updatedAt || '').localeCompare(String(prior.updatedAt || ''));
+    const createdOrder = String(entry.createdAt || '').localeCompare(String(prior.createdAt || ''));
+    const idOrder = String(entry.id || '').localeCompare(String(prior.id || ''));
+    if (updatedOrder > 0 || (updatedOrder === 0 && (createdOrder > 0 || (createdOrder === 0 && idOrder > 0)))) {
+      latestByPath.set(entry.path, entry);
+    }
+  }
+  return [...latestByPath.values()];
+}
+
 export function recordExecutionOwnedChanges(
   id: string,
   paths: string[],
@@ -144,8 +163,7 @@ export function recordExecutionOwnedChanges(
   if (!source) throw executionSessionError('EXECUTION_OWNERSHIP_SOURCE_REQUIRED', 'Execution ownership source is required.');
   const repo = getRepoRevisionForRoot(root);
   const existing = new Map(
-    listExecutionSessionEvidence(id)
-      .filter((entry) => entry.kind === 'owned-change' && entry.path)
+    currentOwnedChangeEvidence(listExecutionSessionEvidence(id))
       .map((entry) => [entry.path!, entry] as const),
   );
   const ownedPaths = normalizeStringList(paths)
@@ -203,7 +221,7 @@ export function getExecutionOwnershipState(
   const root = requireRepoRoot(options.repoRoot);
   const repo = getRepoRevisionForRoot(root);
   const evidence = listExecutionSessionEvidence(id);
-  const ownedEvidence = evidence.filter((entry) => entry.kind === 'owned-change' && entry.path);
+  const ownedEvidence = currentOwnedChangeEvidence(evidence);
   const ownedFiles = ownedEvidence.map((entry) => {
     const metadata = entry.metadata || {};
     const observedFileRevision = currentOwnedFileRevision(root, entry.path!);
@@ -402,8 +420,7 @@ export function reconcileExecutionOwnedRevisionDrift(
   const ownership = getExecutionOwnershipState(id, { repoRoot: root });
   const ownedStateByPath = new Map(ownership.ownedFiles.map((entry) => [entry.path, entry] as const));
   const ownedEvidenceByPath = new Map(
-    listExecutionSessionEvidence(id)
-      .filter((entry) => entry.kind === 'owned-change' && entry.path)
+    currentOwnedChangeEvidence(listExecutionSessionEvidence(id))
       .map((entry) => [entry.path!, entry] as const),
   );
   const reconciliationId = ownedRevisionReconciliationId(id, normalized, reason, provenance);

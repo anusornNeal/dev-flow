@@ -299,9 +299,21 @@ export function evaluateExecutionContinuation(
     ? task.checklist.filter((entry: any) => !entry?.completed).map((entry: any) => String(entry?.text || entry?.id || '').trim()).filter(Boolean)
     : [];
 
+  const completedFinalizedScope = Boolean(
+    task?.status === 'done'
+    && session.status === 'completed'
+    && session.lifecycle.stage === 'finalized'
+    && finalization?.status === 'completed'
+    && finalization.executionSessionId === session.id
+    && pendingOperations.length === 0
+    && persistedBoardLoop?.status === 'terminal'
+    && persistedBoardLoop.stopEligible === true
+    && persistedBoardLoop.executionSessionId === session.id
+  );
+
   const blockers: Array<{ code: string; message: string; affectedId?: string | null }> = [];
   if (workspaceMismatch) blockers.push({ code: 'EXECUTION_WORKSPACE_MISMATCH', message: 'Requested workspace does not match the execution-bound workspace.', affectedId: expectedWorkspaceId });
-  if (workspaceMissing) blockers.push({ code: 'EXECUTION_WORKSPACE_REVALIDATION_REQUIRED', message: 'The execution-bound managed workspace is unavailable or stale and must be recovered before mutation continues.', affectedId: session.workspaceId });
+  if (workspaceMissing && !completedFinalizedScope) blockers.push({ code: 'EXECUTION_WORKSPACE_REVALIDATION_REQUIRED', message: 'The execution-bound managed workspace is unavailable or stale and must be recovered before mutation continues.', affectedId: session.workspaceId });
   if (staleEvidence.length > 0 || repoRevisionMismatch) blockers.push({
     code: 'EXECUTION_EVIDENCE_REVALIDATION_REQUIRED',
     message: 'Revision-bound execution evidence is stale or no longer matches the current repository candidate.',
@@ -314,11 +326,15 @@ export function evaluateExecutionContinuation(
       authority = computeLifecycleAuthoritySnapshot(task.id, { workspaceId: session.workspaceId || undefined });
     } catch {}
   }
-  for (const entry of authority?.hardBlockers || []) blockers.push({
-    code: String((entry as any)?.code || 'EXECUTION_HARD_BLOCKER'),
-    message: blockerMessage(entry),
-    affectedId: (entry as any)?.affectedId == null ? null : String((entry as any).affectedId),
-  });
+  for (const entry of authority?.hardBlockers || []) {
+    const code = String((entry as any)?.code || 'EXECUTION_HARD_BLOCKER');
+    if (completedFinalizedScope && code === 'WORKSPACE_METADATA_MISSING') continue;
+    blockers.push({
+      code,
+      message: blockerMessage(entry),
+      affectedId: (entry as any)?.affectedId == null ? null : String((entry as any).affectedId),
+    });
+  }
 
   const tailJobs = listRecentJobs(200)
     .filter((job) => job.toolName === 'continue_task_execution_tail' && String(job.args?.__executionJobBinding?.executionSessionId || '').trim() === session.id)

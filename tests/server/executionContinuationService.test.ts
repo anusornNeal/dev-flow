@@ -16,6 +16,7 @@ const { createExecutionSession, recordExecutionLifecycleTransition } = await imp
 const { updateExecutionSessionRecord, saveExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
 const { recordExecutionPendingOperationReference } = await import('../../src/server/services/executionCheckpointService.js');
 const { createJob, transitionJobStatus, writeJobResult } = await import('../../src/server/repositories/mcpToolJobRepository.js');
+const { createTaskFinalizationOperation } = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
 
 const continuationService: any = await import('../../src/server/services/executionContinuationService.js');
 const { evaluateExecutionContinuation } = continuationService;
@@ -158,6 +159,55 @@ test('stale execution evidence is a bounded recovery blocker, not successful com
   assert.ok(result.reasonCodes.includes('EXECUTION_EVIDENCE_REVALIDATION_REQUIRED'));
   assert.equal(result.nextAction?.action, 'recover-execution');
   assert.equal(result.nextAction && 'replacementExecutionAllowed' in result.nextAction ? result.nextAction.replacementExecutionAllowed : null, false);
+});
+
+test('completed finalization remains terminal after intentional workspace cleanup', () => {
+  const workspaceId = `ws-cleaned-${sequence + 1}`;
+  const { task, session } = fixture({ checklistComplete: true, taskStatus: 'done', workspaceId });
+  advanceTo(session.id, 'finalized');
+  const now = new Date().toISOString();
+  updateExecutionSessionRecord(session.id, { status: 'completed', endedAt: now, updatedAt: now });
+  createTaskFinalizationOperation({
+    id: `finalization-${session.id}`,
+    projectId: project.id,
+    taskId: task.id,
+    workspaceId,
+    executionSessionId: session.id,
+    ownershipEpochId: null,
+    sourceHead: 'source-head',
+    baseRevision: 'base-revision',
+    baseBranch: 'overhaul-devflow',
+    candidateId: null,
+    candidateRepoRevision: null,
+    ownedFingerprint: null,
+    phase: 'completed',
+    status: 'completed',
+    createdAt: now,
+    updatedAt: now,
+    completedAt: now,
+  });
+  const persist = continuationService.persistBoardLoopIntent as any;
+  persist(session.id, {
+    loopId: `loop-cleaned-${session.id}`,
+    projectId: project.id,
+    requestedTaskId: task.id,
+    status: 'terminal',
+    startedAt: now,
+    updatedAt: now,
+    stopEligible: true,
+    reasonCodes: ['NO_ELIGIBLE_TASK'],
+  });
+
+  const result = evaluateExecutionContinuation(state, session.id);
+  assert.equal(result.terminal, true);
+  assert.equal(result.continuationRequired, false);
+  assert.equal(result.blocked, false);
+  assert.deepEqual(result.reasonCodes, ['EXECUTION_SCOPE_TERMINAL']);
+  assert.equal(result.nextAction, null);
+  assert.equal(result.boardLoop.status, 'terminal');
+  assert.equal(result.boardLoop.stopEligible, true);
+  assert.equal(result.blockers.some((entry: any) => entry.code === 'EXECUTION_WORKSPACE_REVALIDATION_REQUIRED'), false);
+  assert.equal(result.blockers.some((entry: any) => entry.code === 'WORKSPACE_METADATA_MISSING'), false);
 });
 
 test('historical completed execution stays readable and is terminal without new continuation evidence', () => {

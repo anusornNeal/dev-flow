@@ -35,7 +35,8 @@ const {
 const { clearWorkspaceMetadataCache, getWorkspaceMetadataCacheStats } = await import('../../src/server/services/workspaceMetadataCacheService.js');
 const { createProject: upsertProject } = await import('../../src/server/repositories/projectRepository.js');
 const { getRepoCacheDiagnostics, invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
-const { clearVerificationResourceProfilesForTests, getVerificationResourceProfileDiagnostics, recordVerificationResourceSample } = await import('../../src/server/services/verificationResourceProfileService.js');
+const verificationResourceProfileService = await import('../../src/server/services/verificationResourceProfileService.js');
+const { clearVerificationResourceProfilesForTests, getVerificationResourceProfileDiagnostics, recordVerificationResourceSample } = verificationResourceProfileService;
 
 function createProject(name: string, scripts: Record<string, string>) {
   const root = path.join(tempRoot, name);
@@ -188,7 +189,7 @@ test('Gradle recovery heap policy scales above 2 GB and preserves an existing la
   assert.equal(unsafeLowMachine.heapSource, 'machine-policy');
 });
 
-test('recovery profile audits capped timeout and Gradle worker/heap policy without changing repo state', () => {
+test('recovery profile audits adaptive verification timeout and Gradle worker/heap policy without changing repo state', () => {
   const root = createConfigProject('recovery-profile-audit', [
     'commands:',
     '  gradle-check:',
@@ -209,8 +210,8 @@ test('recovery profile audits capped timeout and Gradle worker/heap policy witho
   assert.equal(recovery!.profile.gradleTuned, true);
   assert.equal(recovery!.profile.maxWorkers, 1);
   assert.equal(recovery!.profile.requestedTimeoutMs, 375_000);
-  assert.equal(recovery!.profile.timeoutMs, 300_000);
-  assert.equal(recovery!.profile.timeoutCapped, true);
+  assert.equal(recovery!.profile.timeoutMs, 375_000);
+  assert.equal(recovery!.profile.timeoutCapped, false);
   assert.equal(typeof recovery!.profile.heapFloorMb, 'number');
   assert.equal(typeof recovery!.profile.heapPolicyCeilingMb, 'number');
   assert.equal(['machine-policy', 'existing-larger-safe'].includes(String(recovery!.profile.heapSource)), true);
@@ -231,7 +232,168 @@ test('durable run_project_command budget includes the one allowed infrastructure
   }), 225);
   assert.equal(getProjectCommandDurableExecutionBudgetMs(state, {
     projectId: 'project-command', command: 'typecheck', timeoutMs: 300_000, infrastructureRetryPolicy: 'resource-safe-once',
-  }), 600_000, 'each attempt remains capped while the durable budget covers both attempts');
+  }), 675_000, 'verification recovery may expand above the legacy 300s cap while the durable budget covers both attempts');
+});
+
+test('adaptive verification timeout persists semantic history and treats timeout observations as censored lower bounds', () => {
+  clearVerificationResourceProfilesForTests();
+  const api = verificationResourceProfileService as any;
+  assert.equal(typeof api.resolveVerificationTimeoutBudget, 'function');
+  assert.equal(typeof api.resetVerificationResourceProfileMemoryForTests, 'function');
+
+  const full = {
+    repositoryKey: 'project:adaptive-timeout',
+    semanticKey: 'full-test',
+    machineKey: 'machine-a',
+    cost: 'high' as const,
+    verificationClass: 'heavy' as const,
+    sharedResources: ['repo'],
+  };
+  const typecheck = {
+    ...full,
+    semanticKey: 'typecheck',
+    cost: 'medium' as const,
+    verificationClass: 'fast' as const,
+    sharedResources: ['typescript'],
+  };
+
+  recordVerificationResourceSample(full, {
+    status: 'timed_out',
+    durationMs: 300_500,
+    censoredLowerBoundMs: 300_000,
+  });
+  const escalated = api.resolveVerificationTimeoutBudget(full, {
+    fallbackTimeoutMs: 120_000,
+    ceilingMs: 900_000,
+  });
+  assert.equal(escalated.censoredSampleCount, 1);
+  assert.ok(escalated.timeoutMs > 300_000, 'a timeout at 300s proves the next automatic budget must exceed 300s');
+
+  const isolatedShort = api.resolveVerificationTimeoutBudget(typecheck, {
+    fallbackTimeoutMs: 120_000,
+    ceilingMs: 900_000,
+  });
+  assert.equal(isolatedShort.timeoutMs, 120_000, 'a long full-test observation must not inflate typecheck');
+
+  for (const durationMs of [360_000, 380_000, 400_000]) {
+    recordVerificationResourceSample(full, { status: 'succeeded', durationMs });
+  }
+  const learned = api.resolveVerificationTimeoutBudget(full, {
+    fallbackTimeoutMs: 120_000,
+    ceilingMs: 900_000,
+  });
+  assert.ok(learned.timeoutMs > 300_000);
+  assert.equal(learned.source, 'learned');
+  assert.equal(learned.ceilingMs, 900_000);
+  assert.equal(learned.capped, false);
+  const learnedDiagnostics = getVerificationResourceProfileDiagnostics();
+  const learnedDiagnostic = learnedDiagnostics.profiles.find((profile: any) => profile.profileKey === learned.profileKey);
+  assert.equal(learnedDiagnostic?.timeoutDecision?.source, 'learned');
+  assert.equal(learnedDiagnostic?.timeoutDecision?.timeoutMs, learned.timeoutMs);
+
+  const explicit = api.resolveVerificationTimeoutBudget(full, {
+    fallbackTimeoutMs: 120_000,
+    explicitTimeoutMs: 100_000,
+    ceilingMs: 900_000,
+  });
+  assert.equal(explicit.timeoutMs, 100_000);
+  assert.equal(explicit.source, 'explicit');
+
+  api.resetVerificationResourceProfileMemoryForTests();
+  const afterRestart = api.resolveVerificationTimeoutBudget(full, {
+    fallbackTimeoutMs: 120_000,
+    ceilingMs: 900_000,
+  });
+  assert.equal(afterRestart.sampleCount, 4, 'durable samples must rehydrate after in-memory state is reset');
+  assert.ok(afterRestart.timeoutMs > 300_000);
+  clearVerificationResourceProfilesForTests();
+});
+
+test('project command durable budget uses adaptive verification history above the legacy 300s cap without inflating unrelated commands', () => {
+  clearVerificationResourceProfilesForTests();
+  const root = createProject('adaptive-command-budget', {
+    test: 'node scripts/full.mjs',
+    typecheck: 'node scripts/typecheck.mjs',
+  });
+  fs.writeFileSync(path.join(root, 'scripts', 'full.mjs'), 'process.exit(0);\n');
+  fs.writeFileSync(path.join(root, 'scripts', 'typecheck.mjs'), 'process.exit(0);\n');
+  const state = stateFor(root);
+  const fullProfile = describeProjectCommandResourceProfile(state, { projectId: 'project-command', command: 'test' });
+  for (const durationMs of [330_000, 360_000, 390_000]) {
+    recordVerificationResourceSample(fullProfile.resourceDescriptor, { status: 'succeeded', durationMs });
+  }
+
+  const adaptiveBudget = getProjectCommandDurableExecutionBudgetMs(state, {
+    projectId: 'project-command', command: 'test', infrastructureRetryPolicy: 'none',
+  });
+  const shortBudget = getProjectCommandDurableExecutionBudgetMs(state, {
+    projectId: 'project-command', command: 'typecheck', infrastructureRetryPolicy: 'none',
+  });
+  const explicitBudget = getProjectCommandDurableExecutionBudgetMs(state, {
+    projectId: 'project-command', command: 'test', timeoutMs: 100_000, infrastructureRetryPolicy: 'none',
+  });
+
+  assert.ok(adaptiveBudget > 300_000, `expected adaptive full-test budget above 300s, got ${adaptiveBudget}`);
+  assert.ok(adaptiveBudget <= 900_000);
+  assert.equal(shortBudget, 120_000);
+  assert.equal(explicitBudget, 100_000, 'explicit caller timeout remains authoritative within the safety ceiling');
+  clearVerificationResourceProfilesForTests();
+});
+
+test('focused verification resource profiles bucket equivalent target shapes without path-cardinality explosion', () => {
+  const root = createConfigProject('adaptive-target-buckets', [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/pass.mjs',
+    '    acceptsTargets: true',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n');
+  for (const name of ['a.test.ts', 'b.test.ts', 'c.test.ts', 'd.test.ts', 'e.test.ts']) {
+    fs.writeFileSync(path.join(root, 'src', name), 'export {};\n');
+  }
+  const state = stateFor(root);
+  const a = describeProjectCommandResourceProfile(state, { projectId: 'project-command', command: 'focused', targets: ['src/a.test.ts'] });
+  const b = describeProjectCommandResourceProfile(state, { projectId: 'project-command', command: 'focused', targets: ['src/b.test.ts'] });
+  const many = describeProjectCommandResourceProfile(state, {
+    projectId: 'project-command', command: 'focused', targets: ['src/a.test.ts', 'src/b.test.ts', 'src/c.test.ts', 'src/d.test.ts', 'src/e.test.ts'],
+  });
+
+  assert.equal(a.resourceDescriptor.semanticKey, b.resourceDescriptor.semanticKey, 'same one-target TypeScript shape should share one resource profile');
+  assert.notEqual(a.resourceDescriptor.semanticKey, many.resourceDescriptor.semanticKey, 'material target-count buckets should remain separate');
+});
+
+test('project command timeout records the selected kill budget as censored lower-bound evidence', () => {
+  clearVerificationResourceProfilesForTests();
+  const root = createConfigProject('adaptive-censored-command', [
+    'commands:',
+    '  slow-check:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/slow.mjs',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'scripts', 'slow.mjs'), 'setInterval(() => {}, 1000);\n');
+  const state = stateFor(root);
+  const described = describeProjectCommandResourceProfile(state, { projectId: 'project-command', command: 'slow-check' });
+  const result = runProjectCommand(state, {
+    projectId: 'project-command',
+    command: 'slow-check',
+    timeoutMs: 60,
+    infrastructureRetryPolicy: 'none',
+    forceFresh: true,
+  });
+  assert.equal(result.status, 'timed_out');
+  const diagnostics = getVerificationResourceProfileDiagnostics();
+  const profile = diagnostics.profiles.find((entry) => entry.profileKey === described.prediction.profileKey);
+  assert.equal(profile?.censoredSampleCount, 1);
+  assert.equal(profile?.maxCensoredLowerBoundMs, 60, 'process teardown latency must not be mistaken for completed runtime');
+  clearVerificationResourceProfilesForTests();
 });
 
 test('runProjectCommand does not retry a bare timeout without infrastructure evidence', () => {
@@ -1609,10 +1771,10 @@ test('invalid repository verification reuse policy fails closed', () => {
 });
 
 test('low-confidence or retried PASS is not promoted to reusable evidence by default', () => {
-  const root = createProject('low-confidence-evidence', { typecheck: 'node scripts/static.mjs' });
+  const root = createProject('low-confidence-evidence', { typecheck: 'node scripts/low-confidence-static.mjs' });
   const counterPath = path.join(tempRoot, 'low-confidence-evidence-counter.txt');
   fs.writeFileSync(path.join(root, 'source.ts'), 'export const value = 1;\n', 'utf8');
-  fs.writeFileSync(path.join(root, 'scripts', 'static.mjs'), [
+  fs.writeFileSync(path.join(root, 'scripts', 'low-confidence-static.mjs'), [
     "import fs from 'node:fs';",
     `const counterPath = ${JSON.stringify(counterPath)};`,
     "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",

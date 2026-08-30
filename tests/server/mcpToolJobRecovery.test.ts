@@ -15,6 +15,8 @@ const { default: db } = await import('../../src/db/index.js');
 const repo = await import('../../src/server/repositories/mcpToolJobRepository.js') as any;
 const runnerRegistry = await import('../../src/server/services/mcpToolJobRunnerRegistry.js') as any;
 const jobService = await import('../../src/server/services/mcpToolJobService.js') as any;
+const projectCommandService = await import('../../src/server/services/projectCommandService.js') as any;
+const resourceProfiles = await import('../../src/server/services/verificationResourceProfileService.js') as any;
 
 function createJob(label: string) {
   return repo.createJob(`job-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}`, 'search_local_files', { query: label }, `repo:${label}`);
@@ -69,6 +71,28 @@ test('claim and heartbeat are atomic and reject competing workers', () => {
   assert.equal(heartbeat?.leaseOwner, 'worker-a');
   assert.equal(Date.parse(heartbeat?.leaseExpiresAt || ''), 32_000);
   assert.equal(repo.heartbeatJob(job.jobId, 'worker-b', 30_000, 2_001), null);
+});
+
+test('durable watchdog consumes adaptive verification budget above the legacy 300s cap', () => {
+  resourceProfiles.clearVerificationResourceProfilesForTests();
+  const root = fs.mkdtempSync(path.join(tempRoot, 'adaptive-deadline-repo-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+    type: 'module',
+    scripts: { test: 'node -e \"process.exit(0)\"' },
+  }));
+  const state = { projectsCache: [{ id: 'adaptive-deadline-project', name: 'Adaptive Deadline', repoUrl: 'https://example.com/adaptive-deadline', localPath: root }] } as any;
+  const described = projectCommandService.describeProjectCommandResourceProfile(state, { localPath: root, command: 'test' });
+  for (const durationMs of [330_000, 360_000, 390_000]) {
+    resourceProfiles.recordVerificationResourceSample(described.resourceDescriptor, { status: 'succeeded', durationMs });
+  }
+  const deadline = jobService.__getDurableExecutionDeadlineDelayMsForTests({
+    toolName: 'run_project_command',
+    state,
+    args: { localPath: root, command: 'test', infrastructureRetryPolicy: 'none' },
+  });
+  assert.ok(deadline?.executionBudgetMs > 300_000, `expected adaptive watchdog budget above 300s, got ${deadline?.executionBudgetMs}`);
+  assert.equal(deadline?.delayMs, deadline.executionBudgetMs + deadline.reconciliationGraceMs);
+  resourceProfiles.clearVerificationResourceProfilesForTests();
 });
 
 test('recovery deadline wins over a fresh heartbeat once run_project_command exceeds its execution budget', () => {

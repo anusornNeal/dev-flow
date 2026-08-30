@@ -281,6 +281,8 @@ function durableExecutionDeadlineDelayMs(entry: Pick<QueueEntry, 'toolName' | 's
   }
 }
 
+export const __getDurableExecutionDeadlineDelayMsForTests = durableExecutionDeadlineDelayMs;
+
 function getLastActiveJobPhase(jobId: string) {
   const phase = jobPhaseTelemetryById.get(jobId);
   if (!phase) return 'execution';

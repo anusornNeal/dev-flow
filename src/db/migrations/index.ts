@@ -20,6 +20,7 @@ import { uiPreviewWorkspacesMigration } from './018-ui-preview-workspaces.js';
 import { taskFinalizationOperationsMigration } from './019-task-finalization-operations.js';
 import { lifecycleEmergencyOperationsMigration } from './020-lifecycle-emergency-operations.js';
 import { taskPrerequisitesMigration } from './021-task-prerequisites.js';
+import { verificationResourceProfilesMigration } from './022-verification-resource-profiles.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -44,6 +45,7 @@ export const DEVFLOW_MIGRATIONS = [
   taskFinalizationOperationsMigration,
   lifecycleEmergencyOperationsMigration,
   taskPrerequisitesMigration,
+  verificationResourceProfilesMigration,
 ] as const;
 
 export function executeAllMigrations() {

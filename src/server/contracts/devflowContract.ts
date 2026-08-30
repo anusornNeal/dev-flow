@@ -1316,7 +1316,7 @@ export const devFlowToolDefinitions: DevFlowToolDefinition[] = [
         preset: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9:_-]*$', description: 'Alias for command.' },
         targets: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 500 }, description: 'Optional bounded repository-relative file targets. Accepted only when the selected repository preset explicitly sets acceptsTargets: true; values are appended as literal argv and never interpreted as shell syntax.' },
         cwd: { type: 'string', description: 'Optional safe subdirectory under the project root.' },
-        timeoutMs: { type: 'number', description: 'Optional timeout in milliseconds, capped at 300000.' },
+        timeoutMs: { type: 'number', description: 'Adaptive verification timeout; max 900000ms.' },
         maxOutputBytes: { type: 'number', description: 'Optional per-stream stdout/stderr byte limit, capped at 100000.' },
         cacheResult: { type: 'boolean', description: 'Omitted: server policy may reuse eligible verification. true permits reuse; false requires fresh execution.' },
         forceFresh: { type: 'boolean', description: 'Bypass reusable verification evidence.' },

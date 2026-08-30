@@ -1,9 +1,16 @@
 import crypto from 'node:crypto';
+import {
+  clearVerificationResourceProfileSamplesForTests,
+  getVerificationResourceProfilePersistenceLimits,
+  loadVerificationResourceProfileSamples,
+  persistVerificationResourceProfileSample,
+} from '../repositories/verificationResourceProfileRepository.js';
 
 export type VerificationResourceCostClass = 'low' | 'medium' | 'high';
 export type VerificationResourceClass = 'fast' | 'heavy';
 export type VerificationResourceSampleStatus = 'succeeded' | 'failed' | 'timed_out';
 export type VerificationResourceConfidence = 'none' | 'low' | 'medium' | 'high';
+export type VerificationTimeoutSource = 'explicit' | 'learned' | 'censored-escalation' | 'configured' | 'cold-start';
 
 export type VerificationResourceProfileDescriptor = {
   repositoryKey: string;
@@ -29,12 +36,15 @@ export type VerificationResourcePrediction = {
   upperBound: VerificationResourceVector;
   sampleCount: number;
   successfulSampleCount: number;
+  censoredSampleCount: number;
+  maxCensoredLowerBoundMs?: number;
   confidence: VerificationResourceConfidence;
 };
 
 export type VerificationResourceSample = {
   status: VerificationResourceSampleStatus;
   durationMs: number;
+  censoredLowerBoundMs?: number;
   cpuRatio?: number;
   memoryBytes?: number;
   processCount?: number;
@@ -43,6 +53,22 @@ export type VerificationResourceSample = {
   treeAccounting?: boolean;
   predicted?: VerificationResourcePrediction;
   recordedAt?: number;
+};
+
+export type VerificationTimeoutDecision = {
+  profileKey: string;
+  timeoutMs: number;
+  requestedTimeoutMs: number;
+  fallbackTimeoutMs: number;
+  ceilingMs: number;
+  capped: boolean;
+  source: VerificationTimeoutSource;
+  sampleCount: number;
+  successfulSampleCount: number;
+  censoredSampleCount: number;
+  expectedDurationMs: number;
+  upperBoundDurationMs: number;
+  confidence: VerificationResourceConfidence;
 };
 
 type StoredVerificationResourceSample = VerificationResourceSample & { recordedAt: number };
@@ -62,8 +88,13 @@ const MIN_LEARNING_SAMPLES = 3;
 const RECENCY_DECAY = 0.78;
 const OUTLIER_LOW_FACTOR = 0.5;
 const OUTLIER_HIGH_FACTOR = 2.5;
+const DEFAULT_TIMEOUT_CEILING_MS = 15 * 60 * 1000;
+const LEARNED_TIMEOUT_MARGIN = 1.2;
+const CENSORED_TIMEOUT_MARGIN = 1.25;
 
 const profiles = new Map<string, VerificationResourceProfile>();
+const hydratedProfileKeys = new Set<string>();
+const timeoutDecisions = new Map<string, VerificationTimeoutDecision>();
 const predictionErrors: Record<RelativeErrorMetric, number[]> = {
   duration: [],
   cpu: [],
@@ -187,13 +218,36 @@ function pruneProfiles() {
     const oldestKey = profiles.keys().next().value as string | undefined;
     if (!oldestKey) break;
     profiles.delete(oldestKey);
+    hydratedProfileKeys.delete(oldestKey);
   }
+}
+
+function hydrateProfile(descriptorInput: VerificationResourceProfileDescriptor) {
+  const descriptor = normalizeDescriptor(descriptorInput);
+  const profileKey = buildVerificationResourceProfileKey(descriptor);
+  if (profiles.has(profileKey) || hydratedProfileKeys.has(profileKey)) return getProfile(profileKey);
+  hydratedProfileKeys.add(profileKey);
+  const persisted = loadVerificationResourceProfileSamples(profileKey);
+  if (persisted.length === 0) return undefined;
+  const samples: StoredVerificationResourceSample[] = persisted.map((sample) => ({ ...sample }));
+  const profile: VerificationResourceProfile = {
+    descriptor,
+    samples,
+    updatedAt: Math.max(...samples.map((sample) => sample.recordedAt), 0),
+  };
+  profiles.set(profileKey, profile);
+  pruneProfiles();
+  return profile;
 }
 
 function buildPrediction(descriptorInput: VerificationResourceProfileDescriptor, profile?: VerificationResourceProfile): VerificationResourcePrediction {
   const descriptor = normalizeDescriptor(descriptorInput);
   const profileKey = buildVerificationResourceProfileKey(descriptor);
   const successful = (profile?.samples || []).filter((sample) => sample.status === 'succeeded');
+  const censored = (profile?.samples || []).filter((sample) => sample.status === 'timed_out');
+  const censoredLowerBounds = censored
+    .map((sample) => finiteNonNegative(sample.censoredLowerBoundMs ?? sample.durationMs))
+    .filter((value): value is number => value !== undefined);
   const authoritativeTreeSamples = successful.filter((sample) => sample.treeAccounting === true);
   const fallback = coldStartVector(descriptor);
   const cpu = learnedMetric(successful, (sample) => sample.cpuRatio ?? sample.systemCpuRatio);
@@ -220,13 +274,14 @@ function buildPrediction(descriptorInput: VerificationResourceProfileDescriptor,
     upperBound,
     sampleCount: profile?.samples.length || 0,
     successfulSampleCount: successful.length,
+    censoredSampleCount: censored.length,
+    ...(censoredLowerBounds.length > 0 ? { maxCensoredLowerBoundMs: Math.max(...censoredLowerBounds) } : {}),
     confidence: confidenceFor(successful.length),
   };
 }
 
 export function predictVerificationResourceCost(descriptor: VerificationResourceProfileDescriptor): VerificationResourcePrediction {
-  const profileKey = buildVerificationResourceProfileKey(descriptor);
-  const profile = getProfile(profileKey);
+  const profile = hydrateProfile(descriptor);
   return buildPrediction(descriptor, profile);
 }
 
@@ -270,11 +325,14 @@ export function recordVerificationResourceSample(
 ) {
   const descriptor = normalizeDescriptor(descriptorInput);
   const profileKey = buildVerificationResourceProfileKey(descriptor);
-  const existing = getProfile(profileKey);
+  const existing = hydrateProfile(descriptor);
   const profile: VerificationResourceProfile = existing || { descriptor, samples: [], updatedAt: 0 };
   const sample: StoredVerificationResourceSample = {
     ...sampleInput,
     durationMs: Math.max(0, Number(sampleInput.durationMs) || 0),
+    ...(sampleInput.status === 'timed_out' ? {
+      censoredLowerBoundMs: Math.max(0, Number(sampleInput.censoredLowerBoundMs ?? sampleInput.durationMs) || 0),
+    } : {}),
     recordedAt: Number.isFinite(Number(sampleInput.recordedAt)) ? Number(sampleInput.recordedAt) : Date.now(),
   };
   profile.samples.push(sample);
@@ -285,9 +343,96 @@ export function recordVerificationResourceSample(
   profile.descriptor = descriptor;
   profiles.delete(profileKey);
   profiles.set(profileKey, profile);
+  hydratedProfileKeys.add(profileKey);
   pruneProfiles();
+  persistVerificationResourceProfileSample(profileKey, descriptor, {
+    status: sample.status,
+    durationMs: sample.durationMs,
+    censoredLowerBoundMs: sample.censoredLowerBoundMs,
+    cpuRatio: sample.cpuRatio,
+    memoryBytes: sample.memoryBytes,
+    processCount: sample.processCount,
+    systemCpuRatio: sample.systemCpuRatio,
+    memoryPressureRatio: sample.memoryPressureRatio,
+    treeAccounting: sample.treeAccounting,
+    recordedAt: sample.recordedAt,
+  });
   recordPredictionErrors(sample);
   return buildPrediction(descriptor, profile);
+}
+
+function rememberTimeoutDecision(decision: VerificationTimeoutDecision) {
+  timeoutDecisions.delete(decision.profileKey);
+  timeoutDecisions.set(decision.profileKey, { ...decision });
+  while (timeoutDecisions.size > MAX_PROFILES) {
+    const oldestKey = timeoutDecisions.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    timeoutDecisions.delete(oldestKey);
+  }
+  return decision;
+}
+
+export function resolveVerificationTimeoutBudget(
+  descriptor: VerificationResourceProfileDescriptor,
+  options: {
+    fallbackTimeoutMs: number;
+    explicitTimeoutMs?: number;
+    ceilingMs?: number;
+    fallbackSource?: 'configured' | 'cold-start';
+  },
+): VerificationTimeoutDecision {
+  const prediction = predictVerificationResourceCost(descriptor);
+  const ceilingMs = Math.max(1, Math.round(Number(options.ceilingMs) || DEFAULT_TIMEOUT_CEILING_MS));
+  const fallbackTimeoutMs = Math.max(1, Math.round(Number(options.fallbackTimeoutMs) || 1));
+  const explicit = Number(options.explicitTimeoutMs);
+  if (Number.isFinite(explicit)) {
+    const requestedTimeoutMs = Math.max(1, Math.round(explicit));
+    return rememberTimeoutDecision({
+      profileKey: prediction.profileKey,
+      timeoutMs: Math.min(ceilingMs, requestedTimeoutMs),
+      requestedTimeoutMs,
+      fallbackTimeoutMs,
+      ceilingMs,
+      capped: requestedTimeoutMs > ceilingMs,
+      source: 'explicit',
+      sampleCount: prediction.sampleCount,
+      successfulSampleCount: prediction.successfulSampleCount,
+      censoredSampleCount: prediction.censoredSampleCount,
+      expectedDurationMs: prediction.expected.durationMs,
+      upperBoundDurationMs: prediction.upperBound.durationMs,
+      confidence: prediction.confidence,
+    });
+  }
+
+  const learnedTimeoutMs = prediction.successfulSampleCount >= MIN_LEARNING_SAMPLES
+    ? Math.ceil(prediction.upperBound.durationMs * LEARNED_TIMEOUT_MARGIN)
+    : 0;
+  const censoredTimeoutMs = prediction.maxCensoredLowerBoundMs
+    ? Math.ceil(prediction.maxCensoredLowerBoundMs * CENSORED_TIMEOUT_MARGIN)
+    : 0;
+  const requestedTimeoutMs = Math.max(fallbackTimeoutMs, learnedTimeoutMs, censoredTimeoutMs);
+  const source: VerificationTimeoutSource = learnedTimeoutMs > 0 && learnedTimeoutMs >= censoredTimeoutMs && learnedTimeoutMs >= fallbackTimeoutMs
+    ? 'learned'
+    : censoredTimeoutMs > fallbackTimeoutMs
+      ? 'censored-escalation'
+      : options.fallbackSource === 'configured'
+        ? 'configured'
+        : 'cold-start';
+  return rememberTimeoutDecision({
+    profileKey: prediction.profileKey,
+    timeoutMs: Math.min(ceilingMs, requestedTimeoutMs),
+    requestedTimeoutMs,
+    fallbackTimeoutMs,
+    ceilingMs,
+    capped: requestedTimeoutMs > ceilingMs,
+    source,
+    sampleCount: prediction.sampleCount,
+    successfulSampleCount: prediction.successfulSampleCount,
+    censoredSampleCount: prediction.censoredSampleCount,
+    expectedDurationMs: prediction.expected.durationMs,
+    upperBoundDurationMs: prediction.upperBound.durationMs,
+    confidence: prediction.confidence,
+  });
 }
 
 function average(values: number[]) {
@@ -299,16 +444,21 @@ export function getVerificationResourceProfileDiagnostics() {
     const prediction = buildPrediction(profile.descriptor, profile);
     return {
       profileKey,
+      repositoryKey: profile.descriptor.repositoryKey,
+      semanticKey: profile.descriptor.semanticKey,
       machineKey: profile.descriptor.machineKey,
       verificationClass: profile.descriptor.verificationClass,
       cost: profile.descriptor.cost,
       sharedResources: [...profile.descriptor.sharedResources],
       sampleCount: prediction.sampleCount,
       successfulSampleCount: prediction.successfulSampleCount,
+      censoredSampleCount: prediction.censoredSampleCount,
+      maxCensoredLowerBoundMs: prediction.maxCensoredLowerBoundMs ?? 0,
       authoritativeMemorySampleCount: profile.samples.filter((sample) => sample.status === 'succeeded' && sample.treeAccounting === true && finiteNonNegative(sample.memoryBytes) !== undefined).length,
       confidence: prediction.confidence,
       expected: prediction.expected,
       upperBound: prediction.upperBound,
+      ...(timeoutDecisions.get(profileKey) ? { timeoutDecision: { ...timeoutDecisions.get(profileKey)! } } : {}),
       updatedAt: profile.updatedAt,
     };
   });
@@ -321,6 +471,7 @@ export function getVerificationResourceProfileDiagnostics() {
     profiles: summaries,
     retainedSamples: summaries.reduce((sum, profile) => sum + profile.sampleCount, 0),
     failedSamples,
+    censoredSamples: summaries.reduce((sum, profile) => sum + profile.censoredSampleCount, 0),
     predictionComparisons,
     meanAbsoluteRelativeError: {
       duration: average(predictionErrors.duration),
@@ -328,16 +479,34 @@ export function getVerificationResourceProfileDiagnostics() {
       memory: average(predictionErrors.memory),
     },
     retention: {
-      maxProfiles: MAX_PROFILES,
-      maxSamplesPerProfile: MAX_SAMPLES_PER_PROFILE,
+      ...getVerificationResourceProfilePersistenceLimits(),
+      inMemoryMaxProfiles: MAX_PROFILES,
+      inMemoryMaxSamplesPerProfile: MAX_SAMPLES_PER_PROFILE,
+    },
+    timeoutPolicy: {
+      minimumLearningSamples: MIN_LEARNING_SAMPLES,
+      learnedSafetyMargin: LEARNED_TIMEOUT_MARGIN,
+      censoredSafetyMargin: CENSORED_TIMEOUT_MARGIN,
+      defaultCeilingMs: DEFAULT_TIMEOUT_CEILING_MS,
     },
   };
 }
 
-export function clearVerificationResourceProfilesForTests() {
+function clearInMemoryState() {
   profiles.clear();
+  hydratedProfileKeys.clear();
+  timeoutDecisions.clear();
   predictionErrors.duration.length = 0;
   predictionErrors.cpu.length = 0;
   predictionErrors.memory.length = 0;
   predictionComparisons = 0;
+}
+
+export function resetVerificationResourceProfileMemoryForTests() {
+  clearInMemoryState();
+}
+
+export function clearVerificationResourceProfilesForTests() {
+  clearInMemoryState();
+  clearVerificationResourceProfileSamplesForTests();
 }

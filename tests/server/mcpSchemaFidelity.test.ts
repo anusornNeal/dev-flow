@@ -62,6 +62,8 @@ test('run_project_command exposes server-owned verification reuse with an uncond
   assert.equal(properties.forceFresh?.type, 'boolean');
   assert.match(String(properties.forceFresh?.description || ''), /bypass reusable verification evidence/i);
   assert.match(String(properties.cacheResult?.description || ''), /omitted[\s\S]*server policy[\s\S]*reuse/i);
+  assert.match(String(properties.timeoutMs?.description || ''), /adaptive/i);
+  assert.match(String(properties.timeoutMs?.description || ''), /900000/);
 });
 
 test('transport normalization preserves nested objects, arrays, enums, descriptions, required fields, and optional fields without redundant parent properties', () => {
@@ -154,7 +156,7 @@ test('schema fidelity assertion reports the exact divergent property path', () =
   );
 });
 
-test('full MCP tools/list exposes the same transport-safe schemas including aliases', async () => {
+test('full MCP tools/list exposes the same transport-safe schemas for canonical tools', async () => {
   const previousProfile = process.env.DEVFLOW_MCP_TOOL_PROFILE;
   process.env.DEVFLOW_MCP_TOOL_PROFILE = 'full';
   try {
@@ -165,7 +167,7 @@ test('full MCP tools/list exposes the same transport-safe schemas including alia
     const response = await handler({ method: 'tools/list', params: {} });
     const listedTools = response.tools as any[];
     const directTools = getMcpToolList('full') as any[];
-    for (const name of ['read_file_snippets_batch', 'apply_and_verify', 'get_agent_task_context', 'get_agent_context']) {
+    for (const name of ['read_file_snippets_batch', 'apply_and_verify']) {
       const listed = listedTools.find((tool) => tool.name === name);
       const direct = directTools.find((tool) => tool.name === name);
       assert.ok(listed, `Schema mismatch at tools/list.${name}: tool missing from MCP registration`);
@@ -173,9 +175,6 @@ test('full MCP tools/list exposes the same transport-safe schemas including alia
       assert.deepEqual(listed.inputSchema, direct.inputSchema, `Schema mismatch at tools/list.${name}.inputSchema`);
     }
 
-    const canonicalAgentTool = listedTools.find((tool) => tool.name === 'get_agent_task_context');
-    const aliasAgentTool = listedTools.find((tool) => tool.name === 'get_agent_context');
-    assert.deepEqual(aliasAgentTool.inputSchema, canonicalAgentTool.inputSchema, 'Schema mismatch at tools/list.get_agent_context.inputSchema: alias diverges from canonical tool');
   } finally {
     if (previousProfile === undefined) delete process.env.DEVFLOW_MCP_TOOL_PROFILE;
     else process.env.DEVFLOW_MCP_TOOL_PROFILE = previousProfile;

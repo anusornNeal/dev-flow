@@ -47,6 +47,7 @@ import { getRepoCacheLineage, recordRepoCacheDecision, registerRepoCacheInvalida
 import {
   predictVerificationResourceCost,
   recordVerificationResourceSample,
+  resolveVerificationTimeoutBudget,
   type VerificationResourcePrediction,
   type VerificationResourceProfileDescriptor,
 } from './verificationResourceProfileService';
@@ -85,6 +86,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 12_000;
 const COMPACT_MAX_OUTPUT_BYTES = 2_000;
 const MAX_TIMEOUT_MS = 300_000;
+const MAX_VERIFICATION_TIMEOUT_MS = 900_000;
 const MAX_OUTPUT_BYTES = 100_000;
 const MAX_PACKAGE_JSON_BYTES = 10 * 1024 * 1024;
 const MAX_COMMAND_TARGETS = 20;
@@ -726,6 +728,26 @@ export function describeProjectCommandForPlanning(state: AppState, args: Record<
   return buildProjectCommandDescriptor(root, command, resolvedCommand, cwdPath);
 }
 
+function resourceProfileSemanticKey(commandDescriptor: ProjectCommandDescriptor, args: Record<string, any>) {
+  if (!commandDescriptor.acceptsTargets) return commandDescriptor.semanticKey;
+  const targets = Array.isArray(args.targets)
+    ? args.targets.map((entry: unknown) => String(entry || '').trim().replace(/\\/g, '/')).filter(Boolean)
+    : [];
+  const count = targets.length;
+  const targetCountBucket = count <= 1 ? '1' : count <= 4 ? '2-4' : count <= 10 ? '5-10' : '11-20';
+  const extensions = [...new Set(targets.map((target) => path.extname(target).toLowerCase() || 'none'))].sort().slice(0, 4);
+  const baseArgs = commandDescriptor.args.slice(0, Math.max(0, commandDescriptor.args.length - count));
+  return crypto.createHash('sha256').update(JSON.stringify({
+    source: commandDescriptor.source,
+    executable: commandDescriptor.executable,
+    args: baseArgs,
+    cwd: commandDescriptor.cwd,
+    scope: commandDescriptor.scope,
+    targetCountBucket,
+    targetExtensions: extensions.length > 0 ? extensions : ['none'],
+  })).digest('hex');
+}
+
 function resourceProfileDescriptorFor(
   root: string,
   commandDescriptor: ProjectCommandDescriptor,
@@ -737,12 +759,35 @@ function resourceProfileDescriptorFor(
     : `repo:${crypto.createHash('sha256').update(normalizeLocalPathIdentity(root)).digest('hex').slice(0, 24)}`;
   return {
     repositoryKey,
-    semanticKey: commandDescriptor.semanticKey,
+    semanticKey: resourceProfileSemanticKey(commandDescriptor, args),
     machineKey: MACHINE_RUNTIME_PROFILE.key,
     cost: commandDescriptor.cost,
     verificationClass: commandDescriptor.verificationClass,
     sharedResources: [...commandDescriptor.sharedResources],
   };
+}
+
+function resolveProjectCommandBaseTimeout(
+  root: string,
+  command: string,
+  resolvedCommand: ResolvedCommand,
+  args: Record<string, any>,
+) {
+  const configuredFallback = Math.max(1, resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const explicitTimeoutMs = Number(args.timeoutMs);
+  if (accessForResolvedCommand(resolvedCommand) !== 'verify') {
+    const requested = Number.isFinite(explicitTimeoutMs) ? explicitTimeoutMs : configuredFallback;
+    return Math.max(1, Math.min(MAX_TIMEOUT_MS, requested));
+  }
+  const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
+  const commandDescriptor = buildProjectCommandDescriptor(root, command, resolvedCommand, cwdPath);
+  const resourceDescriptor = resourceProfileDescriptorFor(root, commandDescriptor, args);
+  return resolveVerificationTimeoutBudget(resourceDescriptor, {
+    fallbackTimeoutMs: configuredFallback,
+    ...(Number.isFinite(explicitTimeoutMs) ? { explicitTimeoutMs } : {}),
+    ceilingMs: MAX_VERIFICATION_TIMEOUT_MS,
+    fallbackSource: resolvedCommand.timeoutMs !== undefined ? 'configured' : 'cold-start',
+  }).timeoutMs;
 }
 
 export function describeProjectCommandResourceProfile(state: AppState, args: Record<string, any>) {
@@ -1012,6 +1057,7 @@ function finalizeResourceProfile(
   systemStart: ReturnType<typeof captureSystemResourceSnapshot>,
   durationMs: number,
   status: CommandStatus,
+  timeoutMs: number,
   processAggregate: ProcessResourceAggregate = { attempts: 0, samples: 0, completeSamples: 0, partialSamples: 0 },
 ) {
   const systemDelta = diffSystemResourceSnapshots(systemStart, captureSystemResourceSnapshot());
@@ -1038,6 +1084,7 @@ function finalizeResourceProfile(
     status,
     durationMs,
     cpuRatio: actual.cpuRatio,
+    ...(status === 'timed_out' ? { censoredLowerBoundMs: timeoutMs } : {}),
     memoryBytes: actual.memoryBytes,
     processCount: actual.processCount,
     systemCpuRatio: actual.systemCpuRatio,
@@ -1164,7 +1211,8 @@ function resolveCommandExecutionOptions(resolvedCommand: ResolvedCommand, args: 
   };
   if (gradleTuned && heapMb) env.GRADLE_OPTS = replaceGradleJvmHeap(process.env.GRADLE_OPTS || '', heapMb);
   const requestedTimeoutMs = Math.max(baseTimeoutMs, Math.ceil(baseTimeoutMs * 1.25));
-  const timeoutMs = Math.min(MAX_TIMEOUT_MS, requestedTimeoutMs);
+  const timeoutCeilingMs = accessForResolvedCommand(resolvedCommand) === 'verify' ? MAX_VERIFICATION_TIMEOUT_MS : MAX_TIMEOUT_MS;
+  const timeoutMs = Math.min(timeoutCeilingMs, requestedTimeoutMs);
   return {
     args: executionArgs,
     env,
@@ -1201,9 +1249,7 @@ export function buildProjectCommandInfrastructureRecovery(state: AppState, args:
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command, args);
-  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
-    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
-    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const baseTimeoutMs = resolveProjectCommandBaseTimeout(root, command, resolvedCommand, args);
   const recoveryArgs = {
     ...args,
     recoveryProfile: VERIFICATION_RECOVERY_PROFILE,
@@ -1222,9 +1268,7 @@ export function getProjectCommandDurableExecutionBudgetMs(state: AppState, args:
   const root = resolveProjectRoot(state, args);
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command, args);
-  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
-    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
-    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const baseTimeoutMs = resolveProjectCommandBaseTimeout(root, command, resolvedCommand, args);
   const firstAttempt = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs).timeoutMs;
   if (args.recoveryProfile || resolveInfrastructureRetryPolicy(args) !== 'resource-safe-once') return firstAttempt;
   const recoveryArgs = {
@@ -1406,9 +1450,7 @@ export function getProjectCommandExecutionIdentity(state: AppState, args: Record
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
-  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
-    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
-    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const baseTimeoutMs = resolveProjectCommandBaseTimeout(root, command, resolvedCommand, args);
   const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   return buildProjectCommandExecutionIdentity(root, resolvedCommand, cwdPath, execution.timeoutMs, maxOutputBytes, responseMode, {}, args);
@@ -1484,9 +1526,7 @@ export function bindProjectCommandVerificationCandidate(
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(resolvedCandidate.root, command, args);
   const cwdPath = resolveSafeCommandCwd(resolvedCandidate.root, args.cwd ?? resolvedCommand.cwd);
-  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
-    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
-    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const baseTimeoutMs = resolveProjectCommandBaseTimeout(resolvedCandidate.root, command, resolvedCommand, args);
   const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
   const lineageToken = options.lineageToken ?? getRepoCacheLineage(sourceRoot, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token;
@@ -1795,9 +1835,7 @@ export function getProjectCommandAdmissionPreflight(
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
-  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
-    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
-    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const baseTimeoutMs = resolveProjectCommandBaseTimeout(root, command, resolvedCommand, args);
   const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
   const timeoutMs = execution.timeoutMs;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
@@ -1863,9 +1901,7 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
   const command = resolveCommandLabel(args.command ?? args.preset);
   const resolvedCommand = resolveAllowedCommand(root, command, args);
   const cwdPath = resolveSafeCommandCwd(root, args.cwd ?? resolvedCommand.cwd);
-  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
-    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
-    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const baseTimeoutMs = resolveProjectCommandBaseTimeout(root, command, resolvedCommand, args);
   const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
   const timeoutMs = execution.timeoutMs;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
@@ -1936,6 +1972,7 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     systemResourceStart,
     durationMs,
     finalizedResult.status,
+    timeoutMs,
   );
   const completed = rememberSuccessfulCommandResult(cacheContext, { ...finalizedResult, resourceProfile }, args);
   if (!args.recoveryProfile && isVerificationInfrastructureFailure(completed)) {
@@ -2014,9 +2051,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
   const displayCwdPath = suppliedCandidate
     ? resolveSafeCommandCwd(sourceRoot, args.cwd ?? resolvedCommand.cwd)
     : executionCwdPath;
-  const baseTimeoutMs = Number.isFinite(Number(args.timeoutMs))
-    ? Math.max(1, Math.min(MAX_TIMEOUT_MS, Number(args.timeoutMs)))
-    : resolvedCommand.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const baseTimeoutMs = resolveProjectCommandBaseTimeout(executionRoot, command, resolvedCommand, args);
   const execution = resolveCommandExecutionOptions(resolvedCommand, args, baseTimeoutMs);
   const timeoutMs = execution.timeoutMs;
   const { responseMode, maxOutputBytes } = resolveOutputBudget(args, resolvedCommand);
@@ -2173,6 +2208,7 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
         systemResourceStart,
         durationMs,
         finalizedResult.status,
+        timeoutMs,
         processAggregate,
       );
       const candidateResult = withVerificationCandidate({

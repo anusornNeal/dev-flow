@@ -73,6 +73,7 @@ export function registerExecutionSessionRoutes(app: express.Express, deps: ApiRo
         triggerJobId: String(req.body?.triggerJobId || ''),
         commitMessage: String(req.body?.commitMessage || ''),
         workspaceId,
+        completedChecklistIds: Array.isArray(req.body?.completedChecklistIds) ? req.body.completedChecklistIds : undefined,
       }));
     } catch (error) {
       return sendApiError(res, error);

@@ -103,7 +103,7 @@ function existingAutonomousTailJob(triggerJobId: string) {
   )) || null;
 }
 
-function enqueueAutonomousTailJob(state: AppState, verificationJob: McpToolJob, commitMessage: string) {
+function enqueueAutonomousTailJob(state: AppState, verificationJob: McpToolJob, commitMessage: string, completedChecklistIds?: string[]) {
   const binding = durableExecutionJobBinding(verificationJob);
   if (!binding) return null;
   const existing = existingAutonomousTailJob(verificationJob.jobId);
@@ -114,6 +114,7 @@ function enqueueAutonomousTailJob(state: AppState, verificationJob: McpToolJob, 
     workspaceId: binding.workspaceId,
     triggerJobId: verificationJob.jobId,
     commitMessage,
+    ...(Array.isArray(completedChecklistIds) ? { completedChecklistIds: [...completedChecklistIds] } : {}),
   }, 'repo-write');
   appendJobLog(verificationJob.jobId, 'stdout', `\n[Autonomous Tail] Accepted durable continuation ${accepted.jobId}.\n`);
   return getJob(accepted.jobId);
@@ -121,7 +122,7 @@ function enqueueAutonomousTailJob(state: AppState, verificationJob: McpToolJob, 
 
 export function continueAutonomousTailWithCommitIntent(
   state: AppState,
-  input: { executionSessionId: string; triggerJobId: string; commitMessage: string; workspaceId?: string },
+  input: { executionSessionId: string; triggerJobId: string; commitMessage: string; workspaceId?: string; completedChecklistIds?: string[] },
 ) {
   const executionSessionId = String(input.executionSessionId || '').trim();
   const triggerJobId = String(input.triggerJobId || '').trim();
@@ -157,7 +158,7 @@ export function continueAutonomousTailWithCommitIntent(
     throw createApiError(409, 'AUTONOMOUS_TAIL_TRIGGER_SUPERSEDED', 'A newer verification job exists for this execution; re-read continuation truth instead of attaching commit intent to older evidence.');
   }
   const existing = existingAutonomousTailJob(triggerJobId);
-  const tail = existing || enqueueAutonomousTailJob(state, verificationJob, commitMessage);
+  const tail = existing || enqueueAutonomousTailJob(state, verificationJob, commitMessage, input.completedChecklistIds);
   if (!tail) throw createApiError(409, 'AUTONOMOUS_TAIL_ADMISSION_FAILED', 'The durable autonomous tail could not be admitted.');
   return {
     ok: true,

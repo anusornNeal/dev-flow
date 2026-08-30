@@ -769,6 +769,26 @@ test('durable finalization operation resumes the same identity across injected p
   }
 });
 
+test('autonomous tail freezes explicit checklist completion attestation before finalization', async () => {
+  const prepared = preparedAutonomousTailFixture('autonomous-checklist-attestation');
+  const task = getTask(prepared.task.id)!;
+  task.checklist = [{ id: 'done', text: 'implemented', completed: false }];
+  saveTask(task);
+
+  const result = await runTaskWorkspaceHappyPathTail(prepared.state, {
+    taskId: prepared.task.id,
+    workspaceId: prepared.workspace.workspaceId,
+    commitMessage: 'feat: autonomous checklist attestation',
+    triggerJobId: 'job-checklist-attestation',
+    completedChecklistIds: ['done'],
+  });
+
+  assert.equal(result.status, 'completed', JSON.stringify(result));
+  const saved = getTask(prepared.task.id)!;
+  assert.equal(saved.checklist?.find((item: any) => item.id === 'done')?.completed, true);
+  assert.equal(result.result?.qualityDebt?.items?.some((entry: any) => entry.code === 'CHECKLIST_INCOMPLETE') ?? false, false);
+});
+
 test('autonomous tail resumes the same integrated operation after workspace runtime restart without duplicate terminal effects', async () => {
   const prepared = preparedAutonomousTailFixture('autonomous-restart-after-integration');
   const beforeCommitCount = Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout);

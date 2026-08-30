@@ -212,6 +212,7 @@ test('commit-intent continuation reuses exact authoritative GREEN and admits exa
       triggerJobId: verificationJobId,
       workspaceId: isolatedWorkspace.workspaceId,
       commitMessage: 'fix: continue exact green',
+      completedChecklistIds: ['done'],
     });
     const second = jobService.continueAutonomousTailWithCommitIntent(state, {
       executionSessionId: isolatedSession.id,
@@ -237,6 +238,7 @@ test('commit-intent continuation reuses exact authoritative GREEN and admits exa
       && job.args?.triggerJobId === verificationJobId
     ));
     assert.equal(tailJobs.length, 1, 'duplicate continuation/reconnect must not duplicate tail effects');
+    assert.deepEqual(tailJobs[0]?.args?.completedChecklistIds, ['done'], 'explicit checklist attestation must survive durable tail enqueue');
   } finally {
     jobService.__setToolJobTestRunner('continue_task_execution_tail', null);
     releaseTaskClaim(isolatedTaskId, { sessionId: isolatedOwner, nextStatus: 'todo' });

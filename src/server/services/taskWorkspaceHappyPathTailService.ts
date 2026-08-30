@@ -25,6 +25,7 @@ export type TaskWorkspaceHappyPathTailInput = {
   workspaceId: string;
   commitMessage: string;
   triggerJobId?: string;
+  completedChecklistIds?: string[];
 };
 
 export type TaskWorkspaceHappyPathTailVerificationRunner = (
@@ -39,6 +40,7 @@ export type TaskWorkspaceFinalizer = (
     operationId?: string;
     checks?: TaskWorkspaceFinalizationCheck[];
     deferPostIntegrationVerification?: boolean;
+    completedChecklistIds?: string[];
   },
 ) => any;
 
@@ -196,6 +198,7 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
         ...(operationId ? { operationId } : {}),
         checks: postIntegrationChecks,
         deferPostIntegrationVerification: Boolean(runPostIntegrationVerification),
+        ...(Array.isArray(input.completedChecklistIds) ? { completedChecklistIds: input.completedChecklistIds } : {}),
       });
     } catch (error: any) {
       return autonomousTailAttention(

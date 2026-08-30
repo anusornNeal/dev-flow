@@ -262,6 +262,7 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
         workspaceId: String(args?.workspaceId || ''),
         commitMessage: String(args?.commitMessage || ''),
         triggerJobId: String(args?.triggerJobId || '') || undefined,
+        ...(Array.isArray(args?.completedChecklistIds) ? { completedChecklistIds: args.completedChecklistIds } : {}),
       },
       async (request) => {
         logger.stdout(`[Autonomous Tail] Running post-integration verification '${request.command}' at ${request.repoRevision.slice(0, 12)}.\n`);

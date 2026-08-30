@@ -587,8 +587,8 @@ export function getNextActionForSession(projectId: string, input: { sessionId: s
   const nowMs = Date.now();
   const workerHash = sessionIdHash(cleanSessionId);
   const projectTasks = getTasksByProjectId(cleanProjectId);
-  const boardLoop = getProjectBoardLoopIntent(cleanProjectId);
   const requestedPartition = parseNextTaskPartition(input.partitionCount, input.partitionIndex);
+  const boardLoop = getProjectBoardLoopIntent(cleanProjectId, requestedPartition);
   const partition = resolveNextTaskPartition(requestedPartition, boardLoop?.status === 'active' ? boardLoop : null);
   let loopBackgroundTaskId: string | null = null;
   let foreignLoopWorker: { taskId: string; displayId?: string; ownerLabel?: string | null } | null = null;
@@ -1682,7 +1682,7 @@ export function claimNextTaskForSession(projectId: string, input: ClaimNextTaskI
     }
 
     const requestedSelectionPolicy = parseBoardLoopSelectionPolicyInput(input.selectionPolicy);
-    const existingLoop = getProjectBoardLoopIntent(cleanProjectId);
+    const existingLoop = getProjectBoardLoopIntent(cleanProjectId, requestedPartition);
     const activeLoop = existingLoop?.status === 'active' ? existingLoop : null;
     const partition = resolveNextTaskPartition(requestedPartition, activeLoop);
 

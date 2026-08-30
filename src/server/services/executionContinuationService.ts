@@ -229,12 +229,17 @@ export function getBoardLoopIntentForExecution(executionSessionId: string) {
   return null;
 }
 
-export function getProjectBoardLoopIntent(projectIdValue: string) {
+export function getProjectBoardLoopIntent(
+  projectIdValue: string,
+  partition?: { count: number; index: number } | null,
+) {
   const projectId = String(projectIdValue || '').trim();
   if (!projectId) return null;
   for (const entry of queryExecutionSessionEvidenceForProject(projectId, BOARD_LOOP_EVIDENCE_KIND, 50)) {
     const intent = normalizeBoardLoopIntent(entry);
-    if (intent) return intent;
+    if (!intent) continue;
+    if (partition && (intent.partitionCount !== partition.count || intent.partitionIndex !== partition.index)) continue;
+    return intent;
   }
   return null;
 }

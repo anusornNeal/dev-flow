@@ -1093,7 +1093,7 @@ test('claim next validates partition pairs before mutation', () => {
   assert.equal(getTask('partition-invalid-target')?.claim, undefined);
 });
 
-test('durable board loop preserves its partition across reconnects and rejects conflicting lane input', () => {
+test('durable board loop preserves partition-local continuity while allowing distinct partitions to progress independently', () => {
   const projectId = 'project-next-partition-loop';
   createCandidateProject(projectId);
   seedCandidateTask(projectId, 'partition-loop-first', ['src/PartitionLoopFirst.ts'], { priority: 'high', status: 'todo', displayId: 'NXT-401' });
@@ -1115,20 +1115,21 @@ test('durable board loop preserves its partition across reconnects and rejects c
   const first = getTask('partition-loop-first')!;
   saveTask({ ...first, status: 'done', claim: undefined, updatedAt: new Date().toISOString() });
 
-  assert.throws(
-    () => (claims.claimNextTaskForSession as any)(projectId, {
-      sessionId: 'partition-loop-conflict', ownerLabel: 'Partition Loop Conflict', partitionCount: 3, partitionIndex: 0, limit: 10,
-    }),
-    (error: any) => error?.payload?.code === 'BOARD_LOOP_PARTITION_CONFLICT',
-  );
+  const independent = (claims.claimNextTaskForSession as any)(projectId, {
+    sessionId: 'partition-loop-independent', ownerLabel: 'Partition Loop Independent', boardLoopRequested: true,
+    partitionCount: 3, partitionIndex: 0, limit: 10,
+  });
+  assert.equal(independent.status, 'claimed');
+  assert.equal(independent.task.id, 'partition-loop-other');
+  assert.deepEqual(independent.partition, { count: 3, index: 0 });
 
   const reconnected = (claims.claimNextTaskForSession as any)(projectId, {
-    sessionId: 'partition-loop-b', ownerLabel: 'Partition Loop B', limit: 10,
+    sessionId: 'partition-loop-b', ownerLabel: 'Partition Loop B', partitionCount: 3, partitionIndex: 2, limit: 10,
   });
   assert.equal(reconnected.status, 'claimed');
   assert.equal(reconnected.task.id, 'partition-loop-second');
   assert.deepEqual(reconnected.partition, { count: 3, index: 2 });
-  assert.equal(getTask('partition-loop-other')?.claim, undefined);
+  assert.equal(getTask('partition-loop-other')?.claim?.ownerLabel, 'Partition Loop Independent');
 });
 
 test('runtime scope expansion reserves discovered paths without mutating targetFiles and release frees them', () => {

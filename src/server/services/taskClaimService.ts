@@ -33,6 +33,8 @@ import { DEFAULT_BOARD_LOOP_SELECTION_POLICY, evaluateExecutionContinuation, get
 import { classifyReasoningPipelineBoundary } from './mcpToolJobScheduler.js';
 import { getLatestExternalTaskStatusRecord, isExternalTaskStatusRecordStale } from './externalTaskStatusService.js';
 import { getRuntimeContractImpact, getRuntimeSourceFreshness } from './runtimeIdentityService.js';
+import { createTaskClaimLiveness, resolveTaskClaimLiveness, touchTaskClaimLiveness } from './taskClaimLivenessService.js';
+import { getJob } from '../repositories/mcpToolJobRepository.js';
 
 const DEFAULT_CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CLAIM_TTL_MS = 60_000;
@@ -104,9 +106,7 @@ function boundedTtlMs(value: unknown) {
 }
 
 function isActiveClaim(claim: unknown, nowMs = Date.now()): claim is TaskClaim {
-  if (!claim || typeof claim !== 'object') return false;
-  const candidate = claim as TaskClaim;
-  return Boolean(candidate.sessionIdHash && candidate.workspaceId && candidate.expiresAt && Date.parse(candidate.expiresAt) > nowMs);
+  return resolveTaskClaimLiveness(claim, new Date(nowMs)).live;
 }
 
 function normalizeScopePath(value: unknown): string {
@@ -858,7 +858,11 @@ function activeReconciledTaskExecutionsForWorkspace(task: any, workspaceId: stri
 function unresolvedExecutionOperations(sessionId: string) {
   const checkpoint = getLatestExecutionCheckpoint(sessionId);
   return (checkpoint?.pendingOperations || [])
-    .filter((entry) => entry.status === 'accepted' || entry.status === 'running');
+    .filter((entry) => entry.status === 'accepted' || entry.status === 'running')
+    .filter((entry) => {
+      const job = getJob(entry.operationId);
+      return !job || job.status === 'queued' || job.status === 'running';
+    });
 }
 
 function unresolvedTaskOperations(task: any) {
@@ -1531,6 +1535,7 @@ function claimTaskForSessionLocked(taskId: string, input: ClaimTaskInput, cleanS
     ownerLabel: normalizeOwnerLabel(input.ownerLabel, ownerKind, hash),
     claimedAt,
     expiresAt: new Date(nowMs + boundedTtlMs(input.ttlMs)).toISOString(),
+    liveness: createTaskClaimLiveness(new Date(nowMs), 'claim'),
   };
   const updated = {
     ...task,
@@ -1600,14 +1605,16 @@ export function renewTaskClaim(taskId: string, input: RenewTaskClaimInput) {
     }
 
     const previousExpiresAt = task.claim.expiresAt;
+    const previousLiveness = resolveTaskClaimLiveness(task.claim, new Date(nowMs));
     const requestedExpiresAtMs = nowMs + boundedTtlMs(input.ttlMs);
     const currentExpiresAtMs = Date.parse(previousExpiresAt);
     const newExpiresAt = new Date(Math.max(currentExpiresAtMs, requestedExpiresAtMs)).toISOString();
     const renewedAt = new Date(nowMs).toISOString();
     const auditOwnerLabel = String(task.claim.ownerLabel || task.claim.ownerKind || 'current owner');
+    const renewedClaim = touchTaskClaimLiveness({ ...task.claim, expiresAt: newExpiresAt }, new Date(nowMs), 'explicit-heartbeat');
     const updated = {
       ...task,
-      claim: { ...task.claim, expiresAt: newExpiresAt },
+      claim: renewedClaim,
       updatedAt: renewedAt,
       logs: [...(Array.isArray(task.logs) ? task.logs : []), {
         id: `log-task-claim-renew-${nowMs}`,
@@ -1623,6 +1630,8 @@ export function renewTaskClaim(taskId: string, input: RenewTaskClaimInput) {
       renewed: true,
       previousExpiresAt,
       expiresAt: newExpiresAt,
+      previousLiveness,
+      liveness: resolveTaskClaimLiveness(updated.claim, new Date(nowMs)),
     };
   });
 }
@@ -1820,7 +1829,7 @@ export function expandTaskClaimScope(taskId: string, input: ExpandTaskClaimScope
     const reservedPaths = new Set(normalizedReservedPaths(task));
     for (const file of addedPaths) reservedPaths.add(file);
     const timestamp = new Date(nowMs).toISOString();
-    const claim: TaskClaim = { ...task.claim, reservedPaths: [...reservedPaths].sort() };
+    const claim: TaskClaim = touchTaskClaimLiveness({ ...task.claim, reservedPaths: [...reservedPaths].sort() }, new Date(nowMs), 'scope-expansion');
     const updated = {
       ...task,
       claim,

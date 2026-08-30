@@ -11,9 +11,9 @@ import {
   type ExecutionSessionRecord,
 } from '../repositories/executionSessionRepository.js';
 import { createApiError } from './api.js';
-import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { cancelExecutionSession, recordExecutionReconciliationEvidence } from './executionSessionService.js';
 import { classifyLifecycleLiveWorkAuthority } from './lifecycleAuthorityService.js';
+import { resolveTaskClaimLiveness } from './taskClaimLivenessService.js';
 
 export type EmergencyOrphanCleanupMode = 'dry-run' | 'apply';
 
@@ -104,17 +104,13 @@ function operationEvidenceId(projectId: string, operationId: string) {
   return `emergency-orphan-cleanup-op-${digest}`;
 }
 
-function activeClaimState(task: any, workspaceId: string, nowMs: number): { code: 'none' | 'active' | 'malformed' | 'workspace-mismatch' } {
+function activeClaimState(task: any, _session: ExecutionSessionRecord, workspaceId: string, nowMs: number): { code: 'none' | 'active' | 'malformed' | 'workspace-mismatch' } {
   const claim = task?.claim;
   if (claim == null) return { code: 'none' };
-  if (typeof claim !== 'object' || Array.isArray(claim)) return { code: 'malformed' };
-  const sessionIdHash = clean((claim as any).sessionIdHash, 200);
-  const claimWorkspaceId = clean((claim as any).workspaceId, 200);
-  const expiresAt = clean((claim as any).expiresAt, 100);
-  const expiresAtMs = Date.parse(expiresAt);
-  if (!sessionIdHash || !claimWorkspaceId || !expiresAt || !Number.isFinite(expiresAtMs)) return { code: 'malformed' };
-  if (claimWorkspaceId !== workspaceId) return { code: 'workspace-mismatch' };
-  return expiresAtMs > nowMs ? { code: 'active' } : { code: 'none' };
+  const liveness = resolveTaskClaimLiveness(claim, new Date(nowMs));
+  if (liveness.state === 'malformed') return { code: 'malformed' };
+  if (liveness.workspaceId && liveness.workspaceId !== workspaceId) return { code: 'workspace-mismatch' };
+  return liveness.live ? { code: 'active' } : { code: 'none' };
 }
 
 function skipped(
@@ -157,7 +153,7 @@ function classifySession(
     return skipped(session, 'TASK_PROJECT_MISMATCH', 'Execution/task project identity does not match the requested project.');
   }
 
-  const claimState = activeClaimState(task, session.workspaceId, nowMs);
+  const claimState = activeClaimState(task, session, session.workspaceId, nowMs);
   if (claimState.code === 'malformed') return skipped(session, 'MALFORMED_CLAIM', 'Task claim exists but cannot be proven inactive from a complete claim identity.');
   if (claimState.code === 'workspace-mismatch') return skipped(session, 'CLAIM_WORKSPACE_MISMATCH', 'Persisted task claim points at a different workspace.');
   if (claimState.code === 'active') return skipped(session, 'ACTIVE_CLAIM', 'Task still has a live claim and cannot be treated as orphaned.');

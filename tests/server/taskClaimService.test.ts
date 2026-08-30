@@ -33,7 +33,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');
-const { listExecutionSessionsForTask, listExecutionSessionEvidence } = await import('../../src/server/repositories/executionSessionRepository.js');
+const { listExecutionSessionsForTask, listExecutionSessionEvidence, updateExecutionSessionRecord } = await import('../../src/server/repositories/executionSessionRepository.js');
 const claims = await import('../../src/server/services/taskClaimService.js');
 const externalStatus = await import('../../src/server/services/externalTaskStatusService.js');
 const commitPlan = await import('../../src/server/services/taskCommitPlanService.js');
@@ -183,6 +183,57 @@ test('claim moves task to in-progress, binds opaque workspace, and is idempotent
 
   assert.throws(
     () => claims.claimTaskForSession('task-a', { sessionId: 'chat-beta-secret', ownerKind: 'chat', ownerLabel: 'Chat B4' }),
+    (error: any) => error?.payload?.code === 'TASK_ALREADY_CLAIMED',
+  );
+});
+
+test('stale retained claim can be reclaimed after liveness expiry while preserving workspace WIP', () => {
+  seedTask('task-ghost-reclaim', ['src/GhostReclaim.ts'], undefined, 'DVF-0816');
+  const first = claims.claimTaskForSession('task-ghost-reclaim', { sessionId: 'ghost-old-owner', ownerLabel: 'Old Worker' });
+  const workspace = workspaces.resolveSessionWorkspace(first.claim.workspaceId)!;
+  fs.writeFileSync(path.join(workspace.root, 'src', 'GhostReclaim.ts'), 'export const GhostReclaim = 99;\n', 'utf8');
+  const oldExecution = activeExecution('task-ghost-reclaim')!;
+  const staleAt = new Date(Date.now() - 31 * 60_000).toISOString();
+  updateExecutionSessionRecord(oldExecution.id, { updatedAt: staleAt });
+  const stored = getTask('task-ghost-reclaim');
+  stored.claim = {
+    ...stored.claim,
+    claimedAt: staleAt,
+    expiresAt: new Date(Date.now() + 23 * 60 * 60_000).toISOString(),
+    liveness: { lastActivityAt: staleAt, expiresAt: new Date(Date.now() - 60_000).toISOString(), windowMs: 30 * 60_000, source: 'test-stale' },
+  };
+  saveTask(stored);
+
+  assert.equal(claims.taskHasActiveClaim(getTask('task-ghost-reclaim')), false);
+  const replacement = claims.claimTaskForSession('task-ghost-reclaim', { sessionId: 'ghost-new-owner', ownerLabel: 'Replacement Worker' });
+
+  assert.equal(replacement.claim.workspaceId, first.claim.workspaceId);
+  assert.notEqual(replacement.claim.ownershipEpochId, first.claim.ownershipEpochId);
+  assert.equal(fs.readFileSync(path.join(workspace.root, 'src', 'GhostReclaim.ts'), 'utf8'), 'export const GhostReclaim = 99;\n');
+  assert.equal(listExecutionSessionsForTask('task-ghost-reclaim').filter((entry: any) => entry.status === 'active').length, 1);
+});
+
+test('stale execution remains live while an accepted or running durable operation is pending', () => {
+  seedTask('task-ghost-pending', ['src/GhostPending.ts'], undefined, 'DVF-0817');
+  const first = claims.claimTaskForSession('task-ghost-pending', { sessionId: 'ghost-pending-owner', ownerLabel: 'Long Job Worker' });
+  const session = activeExecution('task-ghost-pending')!;
+  const staleAt = new Date(Date.now() - 31 * 60_000).toISOString();
+  updateExecutionSessionRecord(session.id, { updatedAt: staleAt });
+  const stored = getTask('task-ghost-pending');
+  stored.claim = {
+    ...stored.claim,
+    claimedAt: staleAt,
+    expiresAt: new Date(Date.now() + 23 * 60 * 60_000).toISOString(),
+    liveness: { lastActivityAt: staleAt, expiresAt: new Date(Date.now() - 60_000).toISOString(), windowMs: 30 * 60_000, source: 'test-stale' },
+  };
+  saveTask(stored);
+  checkpoints.recordExecutionPendingOperationReference(session.id, {
+    operationId: 'non-job-finalization-operation', evidenceId: 'ghost-pending-evidence', kind: 'finalization', status: 'running',
+  });
+
+  assert.equal(claims.taskHasActiveClaim(getTask('task-ghost-pending')), true);
+  assert.throws(
+    () => claims.claimTaskForSession('task-ghost-pending', { sessionId: 'ghost-pending-contender', ownerLabel: 'Contender' }),
     (error: any) => error?.payload?.code === 'TASK_ALREADY_CLAIMED',
   );
 });

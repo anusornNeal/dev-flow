@@ -31,7 +31,7 @@ const { executeAllMigrations } = await import('../../src/db/migrations/index.js'
 executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { getTask, saveTask } = await import('../../src/server/repositories/taskRepository.js');
-const { listExecutionSessionEvidence, listExecutionSessionsForTask } = await import('../../src/server/repositories/executionSessionRepository.js');
+const { listExecutionSessionEvidence, listExecutionSessionsForTask, updateExecutionSessionRecord } = await import('../../src/server/repositories/executionSessionRepository.js');
 const claims = await import('../../src/server/services/taskClaimService.js');
 const workspaces = await import('../../src/server/services/sessionWorkspaceService.js');
 const execution = await import('../../src/server/services/executionSessionService.js');
@@ -296,6 +296,29 @@ test('restart projection treats invalid orphan workspace authority as cleanup de
   assert.equal(liveAuthority.classification, 'invalid-workspace-authority');
   assert.equal(liveAuthority.operations.restart.hardBlocked, true);
   assert.equal(liveAuthority.operations.restart.reasonCodes.includes('LIVE_AUTHORITATIVE_WORK'), true);
+});
+
+test('retained claim past the liveness window is restart debt rather than live authoritative work', () => {
+  const id = seedTask('stale-retained-restart', 'src/StaleRetainedRestart.ts');
+  const claimed = claim(id, 'authority-stale-retained');
+  const session = activeExecution(id)!;
+  const staleAt = new Date(Date.now() - 31 * 60_000).toISOString();
+  updateExecutionSessionRecord(session.id, { updatedAt: staleAt });
+  const task = getTask(id)!;
+  task.claim = {
+    ...task.claim,
+    claimedAt: staleAt,
+    expiresAt: new Date(Date.now() + 23 * 60 * 60_000).toISOString(),
+    liveness: { lastActivityAt: staleAt, expiresAt: new Date(Date.now() - 60_000).toISOString(), windowMs: 30 * 60_000, source: 'test-stale' },
+  };
+  saveTask(task);
+
+  const liveWork = authority.classifyLifecycleLiveWorkAuthority(id, { workspaceId: claimed.claim.workspaceId });
+  assert.equal(liveWork.classification, 'safe-orphan');
+  assert.equal(liveWork.operations.restart.hardBlocked, false);
+  assert.equal(liveWork.operations.restart.debt, true);
+  assert.equal(liveWork.operations.restart.reasonCodes.includes('STALE_RETAINED_CLAIM'), true);
+  assert.equal(liveWork.operations.restart.reasonCodes.includes('LIVE_AUTHORITATIVE_WORK'), false);
 });
 
 test('claimless recoverable workspace WIP is a canonical restart blocker', () => {

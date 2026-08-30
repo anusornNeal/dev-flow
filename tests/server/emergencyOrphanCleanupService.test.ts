@@ -204,6 +204,32 @@ test('expired claim converges as safe orphan while preserving task metadata', ()
   assert.equal(getTask(task.id)?.claim?.workspaceId, workspace.workspaceId);
 });
 
+test('retained claim with stale execution liveness is recoverable without deleting claim or workspace', () => {
+  const task = seedTask('stale-retained-claim');
+  const workspace = managedWorkspace(task, 'stale-retained-claim');
+  const staleAt = now(-31 * 60_000);
+  const persisted = getTask(task.id)!;
+  persisted.claim = {
+    sessionIdHash: 'stale-retained-session',
+    workspaceId: workspace.workspaceId,
+    ownerKind: 'chat',
+    ownerLabel: 'Timed Out Worker',
+    claimedAt: staleAt,
+    expiresAt: now(23 * 60 * 60_000),
+  } as any;
+  saveTask(persisted);
+  const execution = seedExecution('stale-retained-claim', task.id, workspace.workspaceId, { updatedAt: staleAt });
+
+  const result = cleanupOrphanExecutions(applyInput('stale-retained-claim-op'));
+  const candidate = result.candidates.find((entry: any) => entry.executionSessionId === execution.id);
+  assert.equal(candidate?.classification, 'safe');
+  assert.equal(candidate?.reasonCode, 'SAFE_ORPHAN');
+  assert.equal(result.cancelledCount, 1);
+  assert.equal(getExecutionSessionById(execution.id)?.status, 'cancelled');
+  assert.equal(getTask(task.id)?.claim?.workspaceId, workspace.workspaceId);
+  assert.equal(fs.existsSync(workspace.root), true);
+});
+
 test('missing managed workspace root is reported and preserved', () => {
   const task = seedTask('missing-root');
   const workspace = managedWorkspace(task, 'missing-root');

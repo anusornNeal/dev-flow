@@ -9,6 +9,7 @@ import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { computeLifecycleAuthoritySnapshot } from './lifecycleAuthorityService.js';
 import { createApiError } from './api.js';
 import { classifyBackgroundPipelineJob } from './mcpToolJobScheduler.js';
+import { resolveTaskClaimLiveness, type TaskClaimLivenessProjection } from './taskClaimLivenessService.js';
 
 export type ExecutionContinuationNextAction =
   | {
@@ -45,6 +46,7 @@ export type ExecutionContinuationResult = {
   blocked: boolean;
   reasonCodes: string[];
   nextAction: ExecutionContinuationNextAction;
+  claimLiveness: TaskClaimLivenessProjection | null;
   pendingOperations: Array<{
     operationId: string;
     evidenceId: string;
@@ -252,6 +254,7 @@ export function evaluateExecutionContinuation(
   }
 
   const task = session.taskId ? getTaskByIdentifier(session.taskId, 'full') : undefined;
+  const claimLiveness = task ? resolveTaskClaimLiveness(task.claim) : null;
   const checkpoint = getLatestExecutionCheckpoint(session.id);
   const finalization = task ? getLatestTaskFinalizationOperation(task.id, session.workspaceId || undefined) : null;
   const evidence = listExecutionSessionEvidence(session.id);
@@ -411,6 +414,7 @@ export function evaluateExecutionContinuation(
 
   const base = {
     executionSessionId: session.id,
+    claimLiveness,
     pendingOperations,
     task: task ? {
       id: task.id,

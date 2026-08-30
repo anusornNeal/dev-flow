@@ -24,6 +24,7 @@ import { HARNESS_POLICY_VERSION } from './harnessPolicyService.js';
 import { HARNESS_STRATEGY_VERSION } from './harnessStrategyService.js';
 import { classifyLifecycleLiveWorkAuthority } from './lifecycleAuthorityService.js';
 import { classifyRecoveryCapabilityParity, type RuntimeClientState } from './runtimeIdentityService.js';
+import { resolveTaskClaimLiveness } from './taskClaimLivenessService.js';
 
 const lastHealthEventSignatures = new Map<string, string>();
 let capabilityCatalogProvider: () => ReturnType<typeof getCapabilityCatalog> = getCapabilityCatalog;
@@ -179,13 +180,23 @@ function cleanHealthSelector(value: unknown) {
 }
 
 function activeHealthClaim(task: any) {
-  const workspaceId = cleanHealthSelector(task?.claim?.workspaceId);
-  const expiresAtMs = Date.parse(String(task?.claim?.expiresAt || ''));
-  if (!workspaceId || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) return null;
+  const liveness = resolveTaskClaimLiveness(task?.claim);
+  if (!liveness.live || !liveness.workspaceId) return null;
   return {
-    workspaceId,
-    ownershipEpochId: cleanHealthSelector(task?.claim?.ownershipEpochId) || null,
-    expiresAt: String(task.claim.expiresAt),
+    workspaceId: liveness.workspaceId,
+    ownershipEpochId: liveness.ownershipEpochId,
+    expiresAt: liveness.retentionExpiresAt,
+    liveness: {
+      state: liveness.state,
+      lastMeaningfulActivityAt: liveness.lastMeaningfulActivityAt,
+      expiresAt: liveness.livenessExpiresAt,
+      windowMs: liveness.livenessWindowMs,
+      source: liveness.source,
+      migrationDerived: liveness.migrationDerived,
+      protectedByDurableWork: liveness.protectedByDurableWork,
+      pendingOperationIds: liveness.pendingOperationIds,
+      activeJobIds: liveness.activeJobIds,
+    },
   };
 }
 

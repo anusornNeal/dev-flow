@@ -30,6 +30,7 @@ import {
   executionSessionError,
   requireExecutionSession,
 } from './executionSessionPolicyPrimitives.js';
+import { touchTaskClaimLivenessForExecution } from './taskClaimLivenessService.js';
 
 const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60_000;
 const MAX_SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
@@ -196,12 +197,14 @@ export function recordExecutionLifecycleTransition(id: string, input: ExecutionL
   if (!originEvidenceId || !evidenceKind) throw executionSessionError('EXECUTION_LIFECYCLE_EVIDENCE_REQUIRED', 'Lifecycle transitions require authoritative evidence id and kind.');
   if (evidenceStatus !== 'completed') {
     if ((evidenceStatus === 'accepted' || evidenceStatus === 'running') && operationId) {
+      const activityAt = input.now || new Date();
       recordExecutionPendingOperationReference(id, {
         operationId,
         evidenceId: originEvidenceId,
         kind: evidenceKind,
         status: evidenceStatus,
-      }, input.now || new Date());
+      }, activityAt);
+      touchTaskClaimLivenessForExecution(id, activityAt, 'pending-operation');
     }
     throw executionSessionError('EXECUTION_LIFECYCLE_EVIDENCE_NOT_TERMINAL', `Lifecycle evidence '${originEvidenceId}' is ${String(evidenceStatus || 'unknown')}; only completed observable work may advance execution stage.`, {
       evidenceId: originEvidenceId, evidenceKind, evidenceStatus: evidenceStatus || null, requestedStage: toStage,
@@ -237,6 +240,7 @@ export function recordExecutionLifecycleTransition(id: string, input: ExecutionL
     recordAutomaticExecutionCheckpoint(id, transition, now, { publishEvent: false });
     result = { session: refreshed, transition, changed: true, idempotent: false };
   });
+  touchTaskClaimLivenessForExecution(id, now, result.idempotent ? 'lifecycle-observed' : `lifecycle:${toStage}`);
   if (!result.idempotent) publishExecutionSessionChanged(result.session, reasonCode);
   return result;
 }
@@ -244,14 +248,16 @@ export function recordExecutionLifecycleTransition(id: string, input: ExecutionL
 export function updateExecutionSessionProgress(id: string, patch: ExecutionSessionProgressPatch) {
   const session = requireExecutionSession(id);
   assertExecutionSessionActive(session);
+  const now = new Date();
   const updated = updateExecutionSessionRecord(id, {
     contextHandle: Object.prototype.hasOwnProperty.call(patch, 'contextHandle') ? patch.contextHandle || null : session.contextHandle,
     changedFiles: Array.isArray(patch.changedFiles) ? normalizeStringList(patch.changedFiles) : session.changedFiles,
     verification: Array.isArray(patch.verification) ? patch.verification : session.verification,
     branch: Object.prototype.hasOwnProperty.call(patch, 'branch') ? patch.branch || null : session.branch,
     repoRevision: Object.prototype.hasOwnProperty.call(patch, 'repoRevision') ? patch.repoRevision || null : session.repoRevision,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now.toISOString(),
   });
+  touchTaskClaimLivenessForExecution(id, now, 'execution-progress');
   return updated!;
 }
 
@@ -324,6 +330,7 @@ export function resumeExecutionSession(
   }
 
   const refreshed = requireExecutionSession(id);
+  touchTaskClaimLivenessForExecution(id, now, 'execution-resume');
   return {
     resumable: true as const,
     reason: null,

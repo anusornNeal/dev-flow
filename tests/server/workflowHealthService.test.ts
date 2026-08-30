@@ -90,7 +90,13 @@ function seedHealthTask(id: string, displayId: string, claim?: any) {
     images: [],
     createdAt: now,
     updatedAt: now,
-    ...(claim ? { claim } : {}),
+    ...(claim ? { claim: {
+      sessionIdHash: `health-${id}`,
+      ownerKind: 'chat',
+      ownerLabel: 'Health Fixture',
+      claimedAt: now,
+      ...claim,
+    } } : {}),
   } as any;
   saveTask(task);
   return task;

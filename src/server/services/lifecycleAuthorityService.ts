@@ -26,6 +26,8 @@ import {
   type LifecycleGuardrailOperation,
 } from './lifecycleGuardrailModel.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
+import { getJob } from '../repositories/mcpToolJobRepository.js';
+import { resolveTaskClaimLiveness } from './taskClaimLivenessService.js';
 
 /**
  * Read-only lifecycle truth model. It never reconciles, rotates, expires, touches, or writes
@@ -86,20 +88,17 @@ function clean(value: unknown) {
 
 function activeClaim(task: any, nowMs: number) {
   const claim = task?.claim;
-  const workspaceId = clean(claim?.workspaceId);
-  const ownershipEpochId = clean(claim?.ownershipEpochId);
-  const expiresAt = clean(claim?.expiresAt);
-  const expiresAtMs = Date.parse(expiresAt);
-  const active = Boolean(workspaceId && Number.isFinite(expiresAtMs) && expiresAtMs > nowMs);
+  const liveness = resolveTaskClaimLiveness(claim, new Date(nowMs));
   return {
-    present: Boolean(claim && workspaceId),
-    active,
-    expired: Boolean(claim && workspaceId && Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs),
-    workspaceId: workspaceId || null,
-    ownershipEpochId: ownershipEpochId || null,
+    present: Boolean(claim && liveness.workspaceId),
+    active: liveness.live,
+    expired: liveness.state === 'retention-expired',
+    workspaceId: liveness.workspaceId,
+    ownershipEpochId: liveness.ownershipEpochId,
     ownerKind: clean(claim?.ownerKind) || null,
     ownerLabel: clean(claim?.ownerLabel) || null,
-    expiresAt: expiresAt || null,
+    expiresAt: liveness.retentionExpiresAt,
+    liveness,
   };
 }
 
@@ -139,6 +138,10 @@ function pendingOperationsForSession(sessionId: string | null) {
   const checkpoint = getLatestExecutionCheckpoint(sessionId);
   return (checkpoint?.pendingOperations || [])
     .filter((entry) => entry.status === 'accepted' || entry.status === 'running')
+    .filter((entry) => {
+      const job = getJob(String(entry.operationId));
+      return !job || job.status === 'queued' || job.status === 'running';
+    })
     .map((entry) => ({
       operationId: String(entry.operationId),
       evidenceId: String(entry.evidenceId),
@@ -198,6 +201,19 @@ export function classifyLifecycleLiveWorkAuthority(
     workspaceId: session.workspaceId,
   })));
   const issues: LiveWorkAuthorityIssue[] = [];
+  if (claim.present && !claim.active && !claim.expired && claim.liveness.state === 'stale-recoverable') {
+    issues.push(liveWorkIssue('STALE_RETAINED_CLAIM', 'debt', 'Task claim is retained for WIP recovery but its execution liveness lease has expired.', ['restart', 'cleanup'], {
+      workspaceId: claim.workspaceId,
+      executionSessionIds: claim.liveness.activeExecutionSessionIds,
+      lastActivityAt: claim.liveness.lastMeaningfulActivityAt,
+      livenessExpiresAt: claim.liveness.livenessExpiresAt,
+      livenessWindowMs: claim.liveness.livenessWindowMs,
+      migrationDerived: claim.liveness.migrationDerived,
+      pendingOperationIds: claim.liveness.pendingOperationIds,
+      activeJobIds: claim.liveness.activeJobIds,
+      recoveryAction: 'reclaim-preserved-wip',
+    }));
+  }
   const candidateWorkspaceIds = new Set<string>();
   const explicitWorkspaceId = clean(options.workspaceId);
   if (explicitWorkspaceId) candidateWorkspaceIds.add(explicitWorkspaceId);

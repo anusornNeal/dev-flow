@@ -136,7 +136,13 @@ export interface TaskClaim {
   ownerKind: 'chat' | 'codex' | 'claude' | 'antigravity' | 'agent';
   ownerLabel: string;
   claimedAt: string;
-  expiresAt: string;
+  expiresAt: string; // Long retention/ownership intent; not proof that a worker is currently live.
+  liveness?: {
+    lastActivityAt: string;
+    expiresAt: string;
+    windowMs: number;
+    source: string;
+  };
   reservedPaths?: string[]; // Canonical runtime scope reserved beyond initial targetFiles.
 }
 

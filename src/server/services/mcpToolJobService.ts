@@ -252,6 +252,11 @@ const JOB_LEASE_MS = 30_000;
 const JOB_HEARTBEAT_MS = 10_000;
 const JOB_LOG_BATCH_BYTES = 32 * 1024;
 const JOB_LOG_FLUSH_MS = 75;
+const QUEUE_PRESSURE_RECHECK_MIN_MS = 250;
+const QUEUE_PRESSURE_RECHECK_MAX_MS = 2_000;
+let queuePressureRecheckTimer: NodeJS.Timeout | undefined;
+let queuePressureRecheckDelayMs = QUEUE_PRESSURE_RECHECK_MIN_MS;
+
 // Durable completion must remain bounded even when process teardown never acknowledges cancellation.
 const JOB_EXECUTION_DEADLINE_GRACE_MAX_MS = 5_000;
 const JOB_EXECUTION_DEADLINE_GRACE_MIN_MS = 100;
@@ -1740,13 +1745,47 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   };
 }
 
+function resetQueuePressureRecheck() {
+  if (queuePressureRecheckTimer) clearTimeout(queuePressureRecheckTimer);
+  queuePressureRecheckTimer = undefined;
+  queuePressureRecheckDelayMs = QUEUE_PRESSURE_RECHECK_MIN_MS;
+}
+
+function scheduleQueuePressureRecheck() {
+  if (queuePressureRecheckTimer || queue.length === 0) return;
+  const activeEntries = activeSchedulerEntries();
+  const blockedByExternalPressure = queue.some((entry, index) => {
+    const blocker = getBlockerForQueueEntry(entry, index, queue, activeEntries);
+    return blocker?.blockReason === 'live_pressure_saturated' || blocker?.blockReason === 'resource_budget_saturated';
+  });
+  if (!blockedByExternalPressure) {
+    queuePressureRecheckDelayMs = QUEUE_PRESSURE_RECHECK_MIN_MS;
+    return;
+  }
+
+  const delayMs = queuePressureRecheckDelayMs;
+  queuePressureRecheckTimer = setTimeout(() => {
+    queuePressureRecheckTimer = undefined;
+    queuePressureRecheckDelayMs = Math.min(QUEUE_PRESSURE_RECHECK_MAX_MS, delayMs * 2);
+    void processQueue();
+  }, delayMs);
+  queuePressureRecheckTimer.unref?.();
+}
+
 async function processQueue() {
+  const queuedBefore = queue.length;
   queueLifecycle.processQueue(queue, {
     activeEntries: activeSchedulerEntries,
     advanceWaitTelemetry: advanceQueueWaitTelemetry,
     finalizeWaitTelemetry: finalizeQueueWaitTelemetry,
     startJob,
   });
+  if (queue.length === 0) {
+    resetQueuePressureRecheck();
+    return;
+  }
+  if (queue.length < queuedBefore) queuePressureRecheckDelayMs = QUEUE_PRESSURE_RECHECK_MIN_MS;
+  scheduleQueuePressureRecheck();
 }
 
 function setJobActiveContext(jobId: string, cancelFn: () => unknown, leaseGeneration: number) {

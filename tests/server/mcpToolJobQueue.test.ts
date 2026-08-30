@@ -567,12 +567,23 @@ test('mcpToolJobService - waitForToolJob resolves when terminal state changes wi
   });
 
   try {
+    __resetQueueWaitTelemetryForTests();
     const job = enqueueToolJob(state, toolName, { localPath: root, label: 'wait' }, 'repo-read');
-    const waiting = waitForToolJob(job.jobId, 1500);
+    const waiters = [
+      waitForToolJob(job.jobId, 1500),
+      waitForToolJob(job.jobId, 1500),
+      waitForToolJob(job.jobId, 1500),
+    ];
     await waitUntil(() => starts === 1, 'Expected wait test runner to start');
+    const releasedAt = performance.now();
     blocker.resolve();
-    const status = await waiting;
-    assert.strictEqual(status?.status, 'succeeded');
+    const statuses = await Promise.all(waiters);
+    const waiterWakeMs = performance.now() - releasedAt;
+    assert.deepEqual(statuses.map((status) => status?.status), ['succeeded', 'succeeded', 'succeeded']);
+    assert.equal(waiterWakeMs < 500, true, `terminal waiters should wake promptly, observed ${waiterWakeMs.toFixed(1)}ms`);
+    const waiterTelemetry = getJobMetrics().metrics.phaseTelemetry.waiterResponse;
+    assert.equal(waiterTelemetry?.count >= 1, true);
+    assert.equal(waiterTelemetry?.p95Ms <= 500, true);
   } finally {
     blocker.resolve();
     __setToolJobTestRunner(toolName, null);

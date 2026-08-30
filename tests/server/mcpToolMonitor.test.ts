@@ -231,9 +231,11 @@ test('isolation diagnostics separate correctness and capacity waits without leak
           candidatePreparation: { count: 2, totalMs: 50, p50Ms: 20, p95Ms: 30 },
           execution: { count: 3, totalMs: 270, p50Ms: 90, p95Ms: 120 },
           responseHandoff: { count: 3, totalMs: 7, p50Ms: 2, p95Ms: 4 },
+          waiterResponse: { count: 2, totalMs: 11, p50Ms: 4, p95Ms: 7 },
         },
       },
       capacity: { verify: { active: 2, limit: 2, saturated: true } },
+      verificationCandidates: { pooled: 1, activeLeases: 2, creations: 3, hits: 7, activeConsumers: 2, maxConcurrentConsumers: 3 },
     } as any,
     { knownWorkspaces: 4, activeWorkspaces: 2, integrationRequired: 1, created: 5, reused: 3, cleaned: 1, cleanupBlocked: 2 } as any,
     { attempts: 4, successes: 2, conflicts: 1, aborts: 1, retries: 1, pendingConflicts: 1 } as any,
@@ -245,6 +247,11 @@ test('isolation diagnostics separate correctness and capacity waits without leak
   assert.equal(isolation.phases.candidatePreparation.p95Ms, 30);
   assert.equal(isolation.phases.execution.p95Ms, 120);
   assert.equal(isolation.phases.responseHandoff.p95Ms, 4);
+  assert.equal(isolation.phases.waiterResponse.p95Ms, 7);
+  assert.equal(isolation.closePath.dominantPhase, 'execution');
+  assert.equal(isolation.closePath.candidatePreparationCount, 2);
+  assert.equal(isolation.closePath.waiterResponseP95Ms, 7);
+  assert.equal(isolation.verificationCandidates.maxConcurrentConsumers, 3);
   assert.equal(isolation.capacity.saturated, true);
   assert.equal(isolation.workspaces.known, 4);
   assert.equal(isolation.integrations.conflicts, 1);

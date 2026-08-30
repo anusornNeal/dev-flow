@@ -115,6 +115,7 @@ const HIGH_RISK_PATHS = [
 
 const SAFE_MAPPABLE_HIGH_RISK_PATHS = [
   /(^|\/)src\/server\/contracts\//i,
+  /(^|\/)src\/server\/services\/(verificationPlannerService|projectCommandService)\.ts$/i,
 ];
 
 const LOW_RISK_PATHS = [

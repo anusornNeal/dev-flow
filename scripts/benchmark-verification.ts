@@ -86,7 +86,7 @@ try {
   startedAt = now();
   const coldSafeResult = runProjectCommand(state, {
     projectId: 'benchmark-devflow',
-    command: 'test-project-command',
+    command: 'test-command-service',
     responseMode: 'compact',
     forceFresh: true,
   });
@@ -95,7 +95,7 @@ try {
   startedAt = now();
   const warmSafeResult = runProjectCommand(state, {
     projectId: 'benchmark-devflow',
-    command: 'test-project-command',
+    command: 'test-command-service',
     responseMode: 'compact',
     forceFresh: true,
   });
@@ -397,7 +397,7 @@ try {
     after: {
       lanes: {
         fast: { command: 'typecheck', cold: coldTypecheck, warm: warmTypecheck },
-        safe: { command: 'test-project-command', cold: coldSafe, warm: warmSafe },
+        safe: { command: 'test-command-service', cold: coldSafe, warm: warmSafe },
         full: { command: 'verify', runs: full, enabled: process.argv.includes('--full') },
       },
       semanticAlias,

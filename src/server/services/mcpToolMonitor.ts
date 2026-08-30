@@ -616,6 +616,24 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
   const verifyCapacity = jobMetrics?.capacity?.verify || {};
   const verifyLimit = Number(verifyCapacity.limit ?? verifyCapacity.capacity ?? 0);
   const verifyActive = Number(verifyCapacity.active || 0);
+  const verificationCandidates = jobMetrics?.verificationCandidates || {};
+  const normalizedCandidates = {
+    pooled: Number(verificationCandidates.pooled || 0),
+    activeLeases: Number(verificationCandidates.activeLeases || 0),
+    creations: Number(verificationCandidates.creations || 0),
+    hits: Number(verificationCandidates.hits || 0),
+    activeConsumers: Number(verificationCandidates.activeConsumers || 0),
+    maxConcurrentConsumers: Number(verificationCandidates.maxConcurrentConsumers || 0),
+  };
+  const candidatePreparation = phaseTelemetry.candidatePreparation || emptyTiming;
+  const waiterResponse = phaseTelemetry.waiterResponse || emptyTiming;
+  const dominantPhase = [
+    ['admissionWait', phaseTelemetry.admissionWait || emptyTiming],
+    ['queueWait', phaseTelemetry.queueWait || emptyTiming],
+    ['candidatePreparation', candidatePreparation],
+    ['execution', phaseTelemetry.execution || emptyTiming],
+    ['waiterResponse', waiterResponse],
+  ].sort((left: any, right: any) => Number(right[1]?.p95Ms || 0) - Number(left[1]?.p95Ms || 0))[0]?.[0] || 'none';
   return {
     waits: {
       workspaceLockWait: waitTelemetry.workspaceLockWait || { count: 0, totalMs: 0, p50Ms: 0, p95Ms: 0 },
@@ -630,6 +648,7 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
       candidatePreparation: phaseTelemetry.candidatePreparation || emptyTiming,
       execution: phaseTelemetry.execution || emptyTiming,
       responseHandoff: phaseTelemetry.responseHandoff || emptyTiming,
+      waiterResponse,
     },
     capacity: { active: verifyActive, limit: verifyLimit, saturated: verifyCapacity.saturated === true || (verifyLimit > 0 && verifyActive >= verifyLimit) },
     workspaces: {
@@ -640,6 +659,15 @@ export function buildIsolationDiagnostics(jobMetrics: any, workspaceMetrics: any
     integrations: {
       attempts: Number(integrationMetrics?.attempts || 0), successes: Number(integrationMetrics?.successes || 0), conflicts: Number(integrationMetrics?.conflicts || 0),
       aborts: Number(integrationMetrics?.aborts || 0), retries: Number(integrationMetrics?.retries || 0), pendingConflicts: Number(integrationMetrics?.pendingConflicts || 0),
+    },
+    verificationCandidates: normalizedCandidates,
+    closePath: {
+      dominantPhase,
+      candidatePreparationCount: Number(candidatePreparation.count || 0),
+      waiterResponseP95Ms: Number(waiterResponse.p95Ms || 0),
+      verificationCandidateCreations: normalizedCandidates.creations,
+      verificationCandidateReuseHits: normalizedCandidates.hits,
+      maxConcurrentCandidateConsumers: normalizedCandidates.maxConcurrentConsumers,
     },
     activeResources,
   };

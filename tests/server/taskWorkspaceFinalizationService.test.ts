@@ -1024,6 +1024,14 @@ test('reopened prerequisite blocks terminal finalization while preserving depend
 });
 
 
+test('autonomous tail implementation fans independent post-integration checks concurrently and preserves planned result order', () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), 'src/server/services/taskWorkspaceHappyPathTailService.ts'), 'utf8');
+  assert.match(source, /Promise\.all\([\s\S]*checksToRun\.map/);
+  assert.doesNotMatch(source, /for \(const requirement of checksToRun\)/, 'post-integration checks must not be unconditionally serialized by the tail');
+  assert.match(source, /verificationResults\.find/);
+  assert.match(source, /verificationResults\.map/);
+});
+
 test('autonomous happy-path tail commits, finalizes, cleans up, and replays idempotently', async () => {
   const prepared = preparedAutonomousTailFixture('autonomous-happy');
   const beforeCommitCount = Number(git(prepared.root, ['rev-list', '--count', 'HEAD']).stdout);

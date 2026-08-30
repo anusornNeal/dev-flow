@@ -6,7 +6,7 @@ import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileS
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
 import { getRepoRevisionForRoot } from './repoRevisionService';
 import { getProjectCommandAdmissionPreflight, getProjectCommandDurableExecutionBudgetMs, getProjectCommandExecutionIdentity, prepareProjectCommandVerificationCandidateAsync, type ProjectCommandExecutionIdentity } from './projectCommandService';
-import { isVerificationCandidateCurrent } from './verificationCandidateService';
+import { getReusableVerificationCandidateDiagnostics, isVerificationCandidateCurrent } from './verificationCandidateService';
 import { getToolDefinitionByName } from '../contracts/devflowContract';
 import {
   buildQueueEntryDiagnostics,
@@ -171,6 +171,7 @@ type JobPhaseTelemetryState = {
   executionStartedAt?: number;
   executionCompletedAt?: number;
   responseHandoffMs: number;
+  waiterResponseMs?: number;
   workspaceLockWaitMs: number;
   capacityWaitMs: number;
   blockerReasons: Record<string, number>;
@@ -185,6 +186,7 @@ type JobPhaseTimings = {
   candidatePreparationMs: number;
   executionMs: number;
   responseHandoffMs: number;
+  waiterResponseMs?: number;
 };
 
 type VerificationEvidenceIntent = 'red-required' | 'red-deferred' | 'green' | 'focused';
@@ -497,6 +499,7 @@ function getJobPhaseTimings(state: JobPhaseTelemetryState, entry?: QueueEntry, n
     candidatePreparationMs,
     executionMs,
     responseHandoffMs: Math.max(0, state.responseHandoffMs),
+    ...(state.waiterResponseMs !== undefined ? { waiterResponseMs: Math.max(0, state.waiterResponseMs) } : {}),
   };
 }
 
@@ -523,6 +526,7 @@ function summarizeJobPhaseTelemetry() {
     candidatePreparation: summary(timings.map((entry) => entry.candidatePreparationMs).filter((value) => value > 0)),
     execution: summary(timings.map((entry) => entry.executionMs)),
     responseHandoff: summary(timings.map((entry) => entry.responseHandoffMs)),
+    waiterResponse: summary(timings.map((entry) => entry.waiterResponseMs).filter((value): value is number => value !== undefined)),
   });
   const byTool: Record<string, ReturnType<typeof summarizeTimings>> = {};
   for (const toolName of new Set(entries.map((entry) => entry.toolName))) {
@@ -944,6 +948,16 @@ function notifyJobWaiters(jobId: string) {
   if (!status || !isTerminalStatus(status.status)) return;
   const waiters = jobWaiters.get(jobId);
   if (!waiters) return;
+  const respondedAt = Date.now();
+  const terminalAt = Date.parse(String(status.completedAt || ''));
+  const phase = jobPhaseTelemetryById.get(jobId) || activeJobs.get(jobId)?.entry.phaseTelemetry;
+  if (phase) {
+    const waiterResponseMs = Number.isFinite(terminalAt) ? Math.max(0, respondedAt - terminalAt) : 0;
+    phase.waiterResponseMs = phase.waiterResponseMs === undefined
+      ? waiterResponseMs
+      : Math.min(phase.waiterResponseMs, waiterResponseMs);
+    rememberJobPhaseTelemetry(phase);
+  }
   jobWaiters.delete(jobId);
   for (const resolve of waiters) resolve(status);
 }
@@ -2177,7 +2191,8 @@ export function getJobMetrics() {
     queuedJobs: queue.map((entry, index) => buildQueueEntryDiagnostics(entry, index, queue, activeSchedulerEntries())),
     metrics: queueMetrics.metrics,
     capacity: queueMetrics.capacity,
-    recentJobs: queueMetrics.recentJobs
+    recentJobs: queueMetrics.recentJobs,
+    verificationCandidates: getReusableVerificationCandidateDiagnostics()
   };
 }
 

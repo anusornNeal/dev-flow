@@ -278,8 +278,7 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
         );
       }
 
-      const checks: TaskWorkspaceFinalizationCheck[] = [];
-      for (const requirement of checksToRun) {
+      const verificationResults = await Promise.all(checksToRun.map(async (requirement) => {
         const command = requirement.command;
         const targets = normalizeVerificationTargets(requirement.targets);
         const verification = await runPostIntegrationVerification({
@@ -289,49 +288,55 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
           repoRevision: expectedHead,
           requiredScope: postIntegration.requiredScope === 'broad-or-full' ? 'broad-or-full' : 'targeted',
         });
-        const after = getRepoRevisionForRoot(project.localPath);
-        if (after.head !== expectedHead || after.changedFiles.length > 0) {
-          return autonomousTailAttention(
-            'post-integration-verification',
-            'POST_INTEGRATION_REVISION_DRIFT',
-            'Integrated project state changed during autonomous post-integration verification.',
-            {
-              transitions,
-              command,
-              expectedHead,
-              observedHead: after.head,
-              changedFiles: after.changedFiles.map((entry) => entry.path),
+        return { requirement, command, targets, verification };
+      }));
+      const after = getRepoRevisionForRoot(project.localPath);
+      if (after.head !== expectedHead || after.changedFiles.length > 0) {
+        return autonomousTailAttention(
+          'post-integration-verification',
+          'POST_INTEGRATION_REVISION_DRIFT',
+          'Integrated project state changed during autonomous post-integration verification.',
+          {
+            transitions,
+            expectedHead,
+            observedHead: after.head,
+            changedFiles: after.changedFiles.map((entry) => entry.path),
+          },
+        );
+      }
+      const failedVerification = verificationResults.find(({ verification }) => (
+        !verification?.ok || verification?.status !== 'succeeded' || verification?.exitCode !== 0
+      ));
+      if (failedVerification) {
+        const { command, verification } = failedVerification;
+        return autonomousTailAttention(
+          'post-integration-verification',
+          'POST_INTEGRATION_VERIFICATION_FAILED',
+          `Post-integration verification '${command}' failed; autonomous tail stopped without guessing a repair.`,
+          {
+            transitions,
+            command,
+            operationId: operationId || null,
+            verification: {
+              status: verification?.status || 'failed',
+              exitCode: verification?.exitCode ?? null,
+              timedOut: verification?.timedOut === true,
             },
-          );
-        }
-        if (!verification?.ok || verification?.status !== 'succeeded' || verification?.exitCode !== 0) {
-          return autonomousTailAttention(
-            'post-integration-verification',
-            'POST_INTEGRATION_VERIFICATION_FAILED',
-            `Post-integration verification '${command}' failed; autonomous tail stopped without guessing a repair.`,
-            {
-              transitions,
-              command,
-              operationId: operationId || null,
-              verification: {
-                status: verification?.status || 'failed',
-                exitCode: verification?.exitCode ?? null,
-                timedOut: verification?.timedOut === true,
-              },
-            },
-          );
-        }
-        checks.push({
+          },
+        );
+      }
+      const checks: TaskWorkspaceFinalizationCheck[] = verificationResults.map(({ requirement, command, targets }) => {
+        transitions.push({ stage: 'post-integration-verification', status: 'passed', detail: command });
+        return {
           name: `autonomous post-integration: ${verificationRequirementLabel(requirement)}`,
           command,
           ...(targets.length ? { targets } : {}),
-          status: 'passed',
-          scope: postIntegration.requiredScope === 'broad-or-full' ? 'broad' : 'targeted',
+          status: 'passed' as const,
+          scope: postIntegration.requiredScope === 'broad-or-full' ? 'broad' as const : 'targeted' as const,
           repoRevision: expectedHead,
           summary: 'Autonomous tail ran the finalizer-required post-integration verification against the exact integrated HEAD.',
-        });
-        transitions.push({ stage: 'post-integration-verification', status: 'passed', detail: command });
-      }
+        };
+      });
       postIntegrationChecks = checks;
       continue;
     }

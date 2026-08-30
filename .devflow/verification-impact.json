@@ -2,14 +2,8 @@
   "rules": [
     {
       "id": "docs-text",
-      "patterns": [
-        "README.md",
-        "AGENTS.md",
-        "docs/**"
-      ],
-      "commands": [
-        "typecheck"
-      ],
+      "patterns": ["README.md", "AGENTS.md", "docs/**"],
+      "commands": ["typecheck"],
       "lane": "fast",
       "reason": "Documentation-only changes receive a lightweight repository sanity check."
     },
@@ -28,9 +22,7 @@
             "tests/server/devflowToolProfile.test.ts"
           ]
         },
-        {
-          "command": "typecheck"
-        }
+        { "command": "typecheck" }
       ],
       "lane": "safe",
       "reason": "MCP contract and tool-profile changes use focused transport/profile regressions plus typecheck while preserving SAFE risk semantics."
@@ -41,12 +33,8 @@
         "src/server/services/taskClaimService.ts",
         "tests/server/taskClaimService.test.ts"
       ],
-      "commands": [
-        "test-focused"
-      ],
-      "targets": [
-        "tests/server/taskClaimService.test.ts"
-      ],
+      "commands": ["test-focused"],
+      "targets": ["tests/server/taskClaimService.test.ts"],
       "lane": "fast",
       "reason": "Task-claim behavior is covered by its focused server regression suite."
     },
@@ -58,9 +46,7 @@
         "scripts/verify-start-all.ts",
         "src/lib/devFlowSupervisor.ts"
       ],
-      "commands": [
-        "test-start-all"
-      ],
+      "commands": ["test-start-all"],
       "lane": "fast",
       "reason": "Start-all and OpenAI tunnel lifecycle changes are covered by the focused supervisor/tunnel verifier."
     },
@@ -70,11 +56,132 @@
         "tests/server/projectCommandService.test.ts",
         "tests/server/projectCommandVerificationCandidate.test.ts"
       ],
-      "commands": [
-        "test-command-service"
-      ],
+      "commands": ["test-command-service"],
       "lane": "fast",
       "reason": "Project-command test changes are covered by the repository project-command preset."
+    },
+    {
+      "id": "mcp-durable-job-runtime",
+      "patterns": [
+        "src/server/services/mcpToolJobService.ts",
+        "src/server/services/mcpToolJobScheduler.ts",
+        "src/server/services/mcpToolJobQueueLifecycleService.ts",
+        "src/server/services/mcpToolJobRunnerRegistry.ts",
+        "tests/server/mcpToolJobQueue.test.ts",
+        "tests/server/mcpToolJobQueueWakeup.test.ts",
+        "tests/server/mcpToolJobScheduler.test.ts",
+        "tests/server/mcpToolJobRunnerRegistry.test.ts",
+        "tests/server/mcpToolJobVerificationCandidate.test.ts"
+      ],
+      "checks": [
+        {
+          "command": "test-focused",
+          "targets": [
+            "tests/server/mcpToolJobQueue.test.ts",
+            "tests/server/mcpToolJobQueueWakeup.test.ts",
+            "tests/server/mcpToolJobScheduler.test.ts",
+            "tests/server/mcpToolJobRunnerRegistry.test.ts",
+            "tests/server/mcpToolJobVerificationCandidate.test.ts"
+          ]
+        },
+        { "command": "typecheck" }
+      ],
+      "lane": "fast",
+      "reason": "Durable MCP queue, scheduler, runner, and verification-candidate lifecycle changes use their focused regression suites plus typecheck."
+    },
+    {
+      "id": "project-command-runtime-safe",
+      "patterns": ["src/server/services/projectCommandService.ts"],
+      "checks": [
+        {
+          "command": "test-focused",
+          "targets": [
+            "tests/server/projectCommandService.test.ts",
+            "tests/server/projectCommandVerificationCandidate.test.ts",
+            "tests/server/projectCommandVerificationLifecycle.test.ts"
+          ]
+        },
+        { "command": "typecheck" }
+      ],
+      "lane": "safe",
+      "reason": "Project-command execution is high-risk control-plane code, so focused lifecycle regressions are paired with broad typecheck under SAFE semantics."
+    },
+    {
+      "id": "verification-planner-runtime-safe",
+      "patterns": ["src/server/services/verificationPlannerService.ts"],
+      "checks": [
+        {
+          "command": "test-focused",
+          "targets": ["tests/server/verificationPlannerService.test.ts"]
+        },
+        { "command": "typecheck" }
+      ],
+      "lane": "safe",
+      "reason": "Verification planner changes remain SAFE and require focused planner regressions plus broad typecheck."
+    },
+    {
+      "id": "verification-candidate-runtime",
+      "patterns": [
+        "src/server/services/verificationCandidateService.ts",
+        "tests/server/verificationCandidateService.test.ts",
+        "tests/server/projectCommandVerificationCandidate.test.ts",
+        "tests/server/mcpToolJobVerificationCandidate.test.ts"
+      ],
+      "checks": [
+        {
+          "command": "test-focused",
+          "targets": [
+            "tests/server/verificationCandidateService.test.ts",
+            "tests/server/projectCommandVerificationCandidate.test.ts",
+            "tests/server/mcpToolJobVerificationCandidate.test.ts"
+          ]
+        },
+        { "command": "typecheck" }
+      ],
+      "lane": "fast",
+      "reason": "Verification-candidate materialization and lease behavior is covered by candidate lifecycle regressions plus typecheck."
+    },
+    {
+      "id": "task-finalization-tail-runtime",
+      "patterns": [
+        "src/server/services/taskWorkspaceFinalizationVerificationService.ts",
+        "src/server/services/taskWorkspaceHappyPathTailService.ts",
+        "src/server/services/taskCommitPlanService.ts",
+        "src/server/services/executionVerificationAuthorityService.ts",
+        "tests/server/taskWorkspaceFinalizationRequirement.test.ts",
+        "tests/server/taskWorkspaceFinalizationService.test.ts",
+        "tests/server/taskCommitPlanService.test.ts"
+      ],
+      "checks": [
+        {
+          "command": "test-focused",
+          "targets": [
+            "tests/server/taskWorkspaceFinalizationRequirement.test.ts",
+            "tests/server/taskWorkspaceFinalizationService.test.ts",
+            "tests/server/taskCommitPlanService.test.ts",
+            "tests/server/mcpToolJobRunnerRegistry.test.ts"
+          ]
+        },
+        { "command": "typecheck" }
+      ],
+      "lane": "fast",
+      "reason": "Commit-plan, finalization verification, execution authority, and autonomous-tail changes use focused lifecycle regressions plus typecheck."
+    },
+    {
+      "id": "mcp-monitor-runtime",
+      "patterns": [
+        "src/server/services/mcpToolMonitor.ts",
+        "tests/server/mcpToolMonitor.test.ts"
+      ],
+      "checks": [
+        {
+          "command": "test-focused",
+          "targets": ["tests/server/mcpToolMonitor.test.ts"]
+        },
+        { "command": "typecheck" }
+      ],
+      "lane": "fast",
+      "reason": "MCP performance diagnostics are covered by monitor regressions plus typecheck."
     }
   ]
 }

@@ -509,3 +509,40 @@ test('planner assigns stable required GREEN check identities to selected steps',
   assert.deepEqual(plan.steps.map((step: any) => step.checkId).sort(), ['green:eslint', 'green:tsc']);
   assert.equal(new Set(plan.steps.map((step: any) => step.checkId)).size, plan.steps.length);
 });
+
+test('repository impact map keeps MCP durable-job service changes on focused checks', () => {
+  const rules = loadProjectVerificationImpactRules(process.cwd());
+  const plan = planVerification({
+    changedFiles: ['src/server/services/mcpToolJobService.ts'],
+    resolvedCommands: [
+      { command: 'test-focused', semanticKey: 'focused', scope: 'targeted', cost: 'low', resourceKey: 'focused', acceptsTargets: true },
+      { command: 'typecheck', semanticKey: 'typecheck', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+      { command: 'test', semanticKey: 'full', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+    impactRules: rules,
+  });
+  assert.equal(plan.risk, 'medium');
+  assert.equal(plan.impact.mode, 'configured');
+  assert.deepEqual(plan.commands, ['test-focused', 'typecheck']);
+  const focused = plan.steps.find((step: any) => step.command === 'test-focused');
+  assert.ok(focused?.targets?.includes('tests/server/mcpToolJobQueue.test.ts'));
+  assert.ok(focused?.targets?.includes('tests/server/mcpToolJobVerificationCandidate.test.ts'));
+  assert.equal(plan.commands.includes('test'), false);
+});
+
+test('repository impact map stays conservative when mapped MCP work is mixed with an unknown file', () => {
+  const rules = loadProjectVerificationImpactRules(process.cwd());
+  const plan = planVerification({
+    changedFiles: ['src/server/services/mcpToolJobService.ts', 'scripts/unmapped-close-path-helper.ts'],
+    resolvedCommands: [
+      { command: 'test-focused', semanticKey: 'focused', scope: 'targeted', cost: 'low', resourceKey: 'focused', acceptsTargets: true },
+      { command: 'typecheck', semanticKey: 'typecheck', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+      { command: 'test', semanticKey: 'full', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+    impactRules: rules,
+  });
+  assert.equal(plan.impact.mode, 'fallback');
+  assert.deepEqual(plan.impact.unknownFiles, ['scripts/unmapped-close-path-helper.ts']);
+  assert.notDeepEqual(plan.commands, ['test-focused', 'typecheck']);
+});
+

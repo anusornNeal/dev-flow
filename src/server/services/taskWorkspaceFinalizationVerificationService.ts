@@ -30,6 +30,7 @@ export type TaskWorkspaceFinalizationCheck = {
 export type PostIntegrationRequirement = {
   required: boolean;
   reason: string;
+  reasonCodes: string[];
   repoRevision: string;
   requiredCommands: string[];
   missingCommands: string[];
@@ -177,7 +178,9 @@ export function evaluatePostIntegrationRequirement(
   const hasBroadEvidence = hasFullEvidence || revisionBound.some((check) => check.scope === 'broad');
   const broadEvidenceRequired = combinedPlan.requiresBroadVerify;
   const reusableCommands = new Set(
-    coverage?.status === 'covered' && coverage.reusable ? coverage.coveredCommands : [],
+    coverage && (coverage.status === 'covered' || coverage.status === 'stale')
+      ? coverage.coveredCommands
+      : [],
   );
   const requiredChecks: VerificationImpactCheck[] = combinedPlan.steps.map((step) => ({
     command: step.command,
@@ -190,8 +193,8 @@ export function evaluatePostIntegrationRequirement(
         return normalizeVerificationTargets(requirement.targets).length > 0
           || !reusableCommands.has(requirement.command);
       });
-  const reusableCoverageSatisfied = coverage?.status === 'covered'
-    && coverage.reusable
+  const reusableCoverageSatisfied = Boolean(coverage)
+    && (coverage?.status === 'covered' || coverage?.status === 'stale')
     && missingChecks.length === 0
     && (requiredChecks.length === 0 || requiredChecks.every((requirement) => {
       if (revisionBound.some((check) => verificationCheckMatchesRequirement(check, requirement))) return true;
@@ -220,21 +223,32 @@ export function evaluatePostIntegrationRequirement(
       && (reusableCoverageSatisfied || (broadEvidenceRequired ? hasBroadEvidence : revisionBound.length > 0)));
 
   let reason = 'Pre-integration evidence remains valid for the integrated state.';
+  const reasonCodes = new Set<string>();
   if (required && revisionAttempts.some((check) => check.status === 'failed') && missingChecks.length > 0) {
+    reasonCodes.add('RERUN_REQUIRED_CHECK_NON_PASSING');
     reason = `Post-integration verification was attempted at the integrated revision, but these requirements are still non-passing: ${missingCommands.join(', ')}.`;
   } else if (required && evidenceSatisfied && reusableCoverageSatisfied) {
+    reasonCodes.add('REUSED_EQUIVALENT_COVERAGE');
+    if (baseAdvanced) reasonCodes.add('BASE_ADVANCED_OUTSIDE_VERIFIED_INPUTS');
     reason = 'Reusable authoritative verification coverage remains valid for the integrated affected inputs, dependencies, command configuration, and environment.';
   } else if (required && baseAdvanced) {
+    reasonCodes.add('RERUN_BASE_ADVANCED_AFFECTED_STATE');
     reason = 'The target branch advanced after the workspace base revision and reusable coverage is incomplete, so combined-state verification must be revision-bound to the integrated HEAD.';
   } else if (required && combinedPlan.risk === 'high') {
+    reasonCodes.add('RERUN_HIGH_RISK_COMBINED_STATE');
     reason = 'High-risk combined changes require revision-bound post-integration verification.';
   } else if (required && planEscalated) {
+    reasonCodes.add('RERUN_COMBINED_PLAN_ESCALATED');
     reason = 'Combined-state impact escalated the verification plan after integration.';
   }
+  if (coverage?.status === 'stale' && missingChecks.length > 0) reasonCodes.add('RERUN_COVERAGE_IDENTITY_CHANGED');
+  if (required && broadEvidenceRequired && !hasBroadEvidence && !reusableCoverageSatisfied) reasonCodes.add('RERUN_BROAD_EVIDENCE_REQUIRED');
+  if (!required) reasonCodes.add('SOURCE_EVIDENCE_STILL_VALID');
 
   return {
     required: required && !evidenceSatisfied,
     reason,
+    reasonCodes: Array.from(reasonCodes),
     repoRevision: revision,
     requiredCommands,
     missingCommands,

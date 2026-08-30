@@ -1001,6 +1001,47 @@ test('verification candidate reuse amortizes sequential checks and restores the 
 });
 
 test('runProjectCommand executes a repository-defined YAML preset without package.json', () => {
+
+test('verification candidate reuse shares one materialization across concurrent compatible consumers', async () => {
+  await clearReusableVerificationCandidatesForTests();
+  const root = createProject('candidate-concurrent-reuse', { typecheck: 'node scripts/pass.mjs' });
+  fs.writeFileSync(path.join(root, 'scripts', 'pass.mjs'), 'process.exit(0);\n');
+  fs.writeFileSync(path.join(root, 'value.txt'), 'source\n');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'candidate concurrent reuse fixture']);
+
+  const state = stateFor(root);
+  const args = { projectId: 'project-command', command: 'typecheck', cacheResult: false, forceFresh: true };
+  const identity = getProjectCommandExecutionIdentity(state, args)!;
+  const candidates: any[] = [];
+  try {
+    candidates.push(...await Promise.all(Array.from({ length: 3 }, () => prepareProjectCommandVerificationCandidateAsync(state, args, {
+      expectedExecutionKey: identity.key,
+      reuseKey: 'candidate-concurrent-generation-1',
+    }))));
+    assert.equal(new Set(candidates.map((candidate) => candidate.candidateId)).size, 1, 'concurrent compatible consumers must share one immutable candidate');
+    assert.deepEqual(candidates.map((candidate) => candidate.reuseLease?.reused), [false, true, true]);
+    const diagnostics = getReusableVerificationCandidateDiagnostics() as any;
+    assert.equal(diagnostics.creations, 1);
+    assert.equal(diagnostics.hits, 2);
+    assert.equal(diagnostics.activeLeases, 3);
+    assert.equal(diagnostics.activeConsumers, 3);
+    assert.equal(diagnostics.maxConcurrentConsumers >= 3, true);
+  } finally {
+    await Promise.all(candidates.flatMap((candidate) => candidate?.reuseLease?.leaseId
+      ? [releaseReusableVerificationCandidateLeaseAsync(candidate.reuseLease.leaseId)]
+      : []));
+    await clearReusableVerificationCandidatesForTests();
+  }
+});
+
   const root = createConfigProject('yaml-custom', [
     'commands:',
     '  validate-skill:',

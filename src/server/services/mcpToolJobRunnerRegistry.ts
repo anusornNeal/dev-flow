@@ -205,6 +205,25 @@ export function resolveBuiltinToolJobBindingArgs(toolNameValue: string, args: an
   };
 }
 
+function verificationPermitDemand(state: AppState, args: Record<string, any>): VerificationPermitDemand {
+  const profile = describeProjectCommandResourceProfile(state, args);
+  const prediction = profile.prediction;
+  const vector = prediction.confidence === 'high' ? prediction.expected : prediction.upperBound;
+  return {
+    verificationClass: profile.descriptor.verificationClass,
+    sharedResources: [...profile.descriptor.sharedResources],
+    resourceDemand: {
+      profileKey: prediction.profileKey,
+      confidence: prediction.confidence,
+      sampleCount: prediction.sampleCount,
+      cpuRatio: vector.cpuRatio,
+      memoryBytes: vector.memoryBytes,
+      durationMs: prediction.expected.durationMs,
+      processCount: vector.processCount,
+    },
+  };
+}
+
 function recoveryPermitDemand(state: AppState, args: Record<string, any>): VerificationPermitDemand {
   const profile = describeProjectCommandResourceProfile(state, args);
   const prediction = profile.prediction;
@@ -246,13 +265,25 @@ export async function runBuiltinToolJob(input: BuiltinToolJobInput, context: Bui
       },
       async (request) => {
         logger.stdout(`[Autonomous Tail] Running post-integration verification '${request.command}' at ${request.repoRevision.slice(0, 12)}.\n`);
-        return await runProjectCommandAsync(state, {
+        const commandArgs = {
           projectId: request.projectId,
           command: request.command,
+          ...(request.targets?.length ? { targets: [...request.targets] } : {}),
           singleFlight: false,
           infrastructureRetryPolicy: 'resource-safe-once',
           responseMode: 'compact',
-        }, logger, setCancelFn);
+        };
+        const demand = verificationPermitDemand(state, commandArgs);
+        let verificationLease = await transitionAccess('verify', demand);
+        if (!verificationLease) verificationLease = await transitionAccess('verify', demand);
+        if (!verificationLease) throw new Error('Autonomous tail could not acquire scheduler verification capacity.');
+        try {
+          return await verificationLease.runWithPermit(demand, async () => (
+            await runProjectCommandAsync(state, commandArgs, logger, setCancelFn)
+          ));
+        } finally {
+          verificationLease.dispose();
+        }
       },
     );
   }

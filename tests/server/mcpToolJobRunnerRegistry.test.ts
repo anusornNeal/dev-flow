@@ -55,6 +55,17 @@ test('autonomous tail post-integration verification delegates cache eligibility 
   assert.doesNotMatch(tailBlock, /cacheResult\s*:\s*false/, 'tail must not blanket-disable reusable verification evidence');
 });
 
+test('autonomous tail post-integration children acquire scheduler verification permits without recovery-wide serialization', () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), 'src/server/services/mcpToolJobRunnerRegistry.ts'), 'utf8');
+  const start = source.indexOf("if (toolName === 'continue_task_execution_tail')");
+  const end = source.indexOf("if (toolName === 'run_project_command')", start + 1);
+  const tailBlock = source.slice(start, end);
+  assert.match(tailBlock, /transitionAccess\('verify'/);
+  assert.match(tailBlock, /runWithPermit/);
+  assert.doesNotMatch(tailBlock, /verification-recovery/, 'normal tail checks must retain command-specific resources rather than sharing the recovery mutex');
+});
+
+
 test('direct run_project_command retries proven infrastructure failure through a recovery capacity lease', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runner-infra-retry-'));
   fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });

@@ -168,3 +168,43 @@ test('automatic verification classifies timeout separately from ordinary command
   assert.equal(__classifyPostIntegrationCommandResultForTests({ ok: false, status: 'failed', timedOut: false, exitCode: 2 }), 'command-failed');
   assert.equal(__classifyPostIntegrationCommandResultForTests({ ok: true, status: 'succeeded', timedOut: false, exitCode: 0 }), null);
 });
+
+test('unrelated base advancement reuses authoritative command coverage with an explicit reason code', () => {
+  const checks = [{ command: 'typecheck' }, { command: 'lint' }];
+  const advancedIntegration = { ...integration, baseHeadBefore: 'advanced-base', baseRevision: 'workspace-base' } as any;
+  const requirement = __evaluatePostIntegrationRequirementForTests({
+    integration: advancedIntegration,
+    checks: [],
+    sourcePlan: plan(checks),
+    combinedPlan: plan(checks),
+    coverage: {
+      status: 'covered', policy: 'checks-passed', recordedAt: new Date().toISOString(), reusable: true,
+      coveredCommands: ['typecheck', 'lint'], staleCommands: [], staleDetails: [],
+    },
+  });
+  assert.equal(requirement.required, false);
+  assert.deepEqual(requirement.missingChecks, []);
+  assert.ok(requirement.reasonCodes.includes('REUSED_EQUIVALENT_COVERAGE'));
+  assert.ok(requirement.reasonCodes.includes('BASE_ADVANCED_OUTSIDE_VERIFIED_INPUTS'));
+});
+
+test('partial reusable coverage reruns only the missing command and explains the invalidation', () => {
+  const checks = [{ command: 'typecheck' }, { command: 'lint' }];
+  const advancedIntegration = { ...integration, baseHeadBefore: 'advanced-base', baseRevision: 'workspace-base' } as any;
+  const requirement = __evaluatePostIntegrationRequirementForTests({
+    integration: advancedIntegration,
+    checks: [],
+    sourcePlan: plan(checks),
+    combinedPlan: plan(checks),
+    coverage: {
+      status: 'stale', policy: 'checks-passed', recordedAt: new Date().toISOString(), reusable: false,
+      coveredCommands: ['typecheck'], staleCommands: ['lint'],
+      staleDetails: [{ command: 'lint', changedFields: ['dependencyFingerprint'] }],
+    },
+  });
+  assert.equal(requirement.required, true);
+  assert.deepEqual(requirement.missingChecks, [{ command: 'lint' }]);
+  assert.deepEqual(requirement.missingCommands, ['lint']);
+  assert.ok(requirement.reasonCodes.includes('RERUN_COVERAGE_IDENTITY_CHANGED'));
+});
+

@@ -305,6 +305,9 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
       httpRequest = tool.buildHttpRequest(args);
     }
     let { response, parsedBody, durationMs } = await executeHttpRequest(baseUrl, httpRequest as any, correlationId, toolName);
+    // For inline tools, the local API request duration is the execution slice. Capturing it lets
+    // performance telemetry distinguish backend/API work from MCP orchestration and response handling.
+    if (!isAsyncJob) executionDurationMs = Math.max(0, durationMs);
 
     if (isAsyncJob && response.ok && parsedBody && typeof parsedBody === 'object' && 'jobId' in parsedBody) {
       const admissionPacket = parsedBody as any;

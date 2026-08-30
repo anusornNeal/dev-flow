@@ -17,6 +17,17 @@ function codedError(code: string) {
   return Object.assign(new Error(code), { code });
 }
 
+function recoveryErrorCode(error: any) {
+  return String(
+    error?.code
+    || error?.error?.code
+    || error?.payload?.code
+    || error?.payload?.error?.code
+    || error?.body?.error?.code
+    || 'UNKNOWN_ERROR',
+  ).trim().toUpperCase() || 'UNKNOWN_ERROR';
+}
+
 export async function executeRecoveryAwareTool<TResult>(
   state: AppState,
   toolName: string,
@@ -49,6 +60,7 @@ export async function executeRecoveryAwareTool<TResult>(
       }
     },
     adapters: createDevFlowRecoveryAdapters(state, toolName),
+    classifyError: recoveryErrorCode,
   });
 
   if (recovery.ok) {
@@ -67,7 +79,7 @@ export async function executeRecoveryAwareTool<TResult>(
     } as TResult;
   }
 
-  if (thrownFailure && typeof thrownFailure === 'object' && String((thrownFailure as any).code || '') === String(recovery.error?.code || '')) {
+  if (thrownFailure && typeof thrownFailure === 'object' && recoveryErrorCode(thrownFailure) === String(recovery.error?.code || '')) {
     (thrownFailure as any).recoveryEngine = recovery.recovery;
     throw thrownFailure;
   }

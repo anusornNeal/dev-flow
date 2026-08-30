@@ -45,6 +45,43 @@ test('runner registry owns the complete built-in async dispatch surface', () => 
   assert.deepEqual(getBuiltinToolRunnerNames(), EXPECTED_RUNNERS);
 });
 
+test('search_local_files preserves invalid-query classification and stays healthy for a subsequent search', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-runner-search-classification-'));
+  fs.writeFileSync(path.join(root, 'fixture.txt'), 'needle one\nneedle two\n', 'utf8');
+  const project = {
+    id: `project-runner-search-${Date.now()}`,
+    name: 'Runner Search Classification',
+    repoUrl: `https://example.test/runner-search-${Date.now()}`,
+    localPath: root,
+  };
+  createProject(project);
+  const state = { projectsCache: [project] } as any;
+  const context = {
+    logger: { stdout: () => {}, stderr: () => {} },
+    setCancelFn: () => {},
+    transitionAccess: () => {},
+  };
+
+  await assert.rejects(
+    runBuiltinToolJob({
+      toolName: 'search_local_files',
+      state,
+      args: { projectId: project.id, query: '(', limit: 5 },
+    }, context),
+    (error: any) => error?.status === 400 && error?.payload?.code === 'SEARCH_QUERY_INVALID',
+  );
+
+  const result = await runBuiltinToolJob({
+    toolName: 'search_local_files',
+    state,
+    args: { projectId: project.id, query: 'needle', limit: 5 },
+  }, context) as any;
+
+  assert.equal(result.count, 2);
+  assert.equal(result.matches.length, 2);
+  assert.ok(result.backend === 'ripgrep' || result.backend === 'fallback');
+});
+
 test('autonomous tail post-integration verification delegates cache eligibility to canonical server policy', () => {
   const source = fs.readFileSync(path.resolve(process.cwd(), 'src/server/services/mcpToolJobRunnerRegistry.ts'), 'utf8');
   const start = source.indexOf("if (toolName === 'continue_task_execution_tail')");

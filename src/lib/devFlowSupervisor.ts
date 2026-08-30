@@ -9,6 +9,24 @@ export type DevFlowSupervisorMode = 'all' | 'server-only';
 export type DevFlowSupervisorProcessLabel = 'server' | 'tunnel';
 export type DevFlowSupervisorProcessStatus = 'starting' | 'running' | 'restarting' | 'stopped' | 'failed';
 export type DevFlowTunnelHealthStatus = 'unknown' | 'healthy' | 'degraded' | 'down';
+export type DevFlowSupervisorRecoveryKind = 'unexpected-crash' | 'guarded-restart';
+export type DevFlowSupervisorRecoveryStatus = 'recovering' | 'recovered' | 'restart-exhausted';
+
+export const MAX_SUPERVISOR_CRASH_STDERR_BYTES = 4096;
+
+export type DevFlowUnexpectedServerCrashEvidence = {
+  observedAt: string;
+  previousPid?: number;
+  runtimeOwnerInstanceId?: string;
+  exitCode?: number | null;
+  signal?: string | null;
+  restartAttempt: number;
+  recoveryStatus: DevFlowSupervisorRecoveryStatus;
+  nextRetryAt?: string;
+  recoveredAt?: string;
+  stderrTail?: string;
+  message?: string;
+};
 
 export type DevFlowTunnelHealthState = {
   status: DevFlowTunnelHealthStatus;
@@ -30,6 +48,8 @@ export type DevFlowSupervisorProcessState = {
   lastSignal?: string | null;
   restartAttempt: number;
   nextRetryAt?: string;
+  recoveryKind?: DevFlowSupervisorRecoveryKind;
+  recoveryStatus?: DevFlowSupervisorRecoveryStatus;
   message?: string;
 };
 
@@ -42,6 +62,7 @@ export type DevFlowSupervisorState = {
   updatedAt: string;
   processes: Partial<Record<DevFlowSupervisorProcessLabel, DevFlowSupervisorProcessState>>;
   tunnelHealth?: DevFlowTunnelHealthState;
+  lastUnexpectedServerCrash?: DevFlowUnexpectedServerCrashEvidence;
 };
 
 export type DevFlowSupervisorChildDiagnostic = {
@@ -51,6 +72,8 @@ export type DevFlowSupervisorChildDiagnostic = {
   pid?: number;
   restartAttempt: number;
   nextRetryAt?: string;
+  recoveryKind?: DevFlowSupervisorRecoveryKind;
+  recoveryStatus?: DevFlowSupervisorRecoveryStatus;
   lastExitAt?: string;
   lastExitCode?: number | null;
   lastSignal?: string | null;
@@ -83,6 +106,42 @@ function isTunnelHealthStatus(value: unknown): value is DevFlowTunnelHealthStatu
   return value === 'unknown' || value === 'healthy' || value === 'degraded' || value === 'down';
 }
 
+function isRecoveryKind(value: unknown): value is DevFlowSupervisorRecoveryKind {
+  return value === 'unexpected-crash' || value === 'guarded-restart';
+}
+
+function isRecoveryStatus(value: unknown): value is DevFlowSupervisorRecoveryStatus {
+  return value === 'recovering' || value === 'recovered' || value === 'restart-exhausted';
+}
+
+export function sanitizeSupervisorCrashStderr(value: string) {
+  const redacted = String(value || '')
+    .replace(/(authorization\s*:\s*)(?:bearer\s+)?[^\r\n]+/gi, '$1[REDACTED]')
+    .replace(/((?:api[_-]?key|runtime[_-]?api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s\r\n]+/gi, '$1[REDACTED]');
+  const bytes = Buffer.from(redacted, 'utf8');
+  if (bytes.length <= MAX_SUPERVISOR_CRASH_STDERR_BYTES) return redacted;
+  return bytes.subarray(bytes.length - MAX_SUPERVISOR_CRASH_STDERR_BYTES).toString('utf8');
+}
+
+function normalizeUnexpectedCrash(value: unknown): DevFlowUnexpectedServerCrashEvidence | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const input = value as Record<string, unknown>;
+  if (typeof input.observedAt !== 'string' || !isRecoveryStatus(input.recoveryStatus)) return undefined;
+  return {
+    observedAt: input.observedAt,
+    ...(Number.isInteger(input.previousPid) ? { previousPid: Number(input.previousPid) } : {}),
+    ...(typeof input.runtimeOwnerInstanceId === 'string' ? { runtimeOwnerInstanceId: input.runtimeOwnerInstanceId } : {}),
+    ...(input.exitCode === null || Number.isInteger(input.exitCode) ? { exitCode: input.exitCode as number | null } : {}),
+    ...(input.signal === null || typeof input.signal === 'string' ? { signal: input.signal as string | null } : {}),
+    restartAttempt: Number.isInteger(input.restartAttempt) && Number(input.restartAttempt) >= 0 ? Number(input.restartAttempt) : 0,
+    recoveryStatus: input.recoveryStatus,
+    ...(typeof input.nextRetryAt === 'string' ? { nextRetryAt: input.nextRetryAt } : {}),
+    ...(typeof input.recoveredAt === 'string' ? { recoveredAt: input.recoveredAt } : {}),
+    ...(typeof input.stderrTail === 'string' ? { stderrTail: sanitizeSupervisorCrashStderr(input.stderrTail) } : {}),
+    ...(typeof input.message === 'string' ? { message: input.message } : {}),
+  };
+}
+
 function normalizeTunnelHealth(value: unknown): DevFlowTunnelHealthState | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const input = value as Record<string, unknown>;
@@ -112,6 +171,8 @@ function normalizeProcessState(label: DevFlowSupervisorProcessLabel, value: unkn
     ...(input.lastSignal === null || typeof input.lastSignal === 'string' ? { lastSignal: input.lastSignal as string | null } : {}),
     restartAttempt: Number.isInteger(input.restartAttempt) && Number(input.restartAttempt) >= 0 ? Number(input.restartAttempt) : 0,
     ...(typeof input.nextRetryAt === 'string' ? { nextRetryAt: input.nextRetryAt } : {}),
+    ...(isRecoveryKind(input.recoveryKind) ? { recoveryKind: input.recoveryKind } : {}),
+    ...(isRecoveryStatus(input.recoveryStatus) ? { recoveryStatus: input.recoveryStatus } : {}),
     ...(typeof input.message === 'string' ? { message: input.message } : {}),
   };
 }
@@ -120,6 +181,7 @@ export function createDevFlowSupervisorState(input: {
   mode: DevFlowSupervisorMode;
   processLabels: DevFlowSupervisorProcessLabel[];
   now?: string;
+  previousState?: DevFlowSupervisorState | null;
 }): DevFlowSupervisorState {
   const now = input.now || new Date().toISOString();
   const processes: DevFlowSupervisorState['processes'] = {};
@@ -136,6 +198,9 @@ export function createDevFlowSupervisorState(input: {
     processes,
     ...(input.processLabels.includes('tunnel')
       ? { tunnelHealth: { status: 'unknown' as const, lastCheckedAt: now, message: 'OpenAI tunnel startup has not been confirmed yet.' } }
+      : {}),
+    ...(input.previousState?.lastUnexpectedServerCrash
+      ? { lastUnexpectedServerCrash: input.previousState.lastUnexpectedServerCrash }
       : {}),
   };
 }
@@ -158,6 +223,7 @@ export function readDevFlowSupervisorState(): DevFlowSupervisorState | null {
       if (normalized) processes[label] = normalized;
     }
     const tunnelHealth = normalizeTunnelHealth(parsed.tunnelHealth);
+    const lastUnexpectedServerCrash = normalizeUnexpectedCrash(parsed.lastUnexpectedServerCrash);
     return {
       version: DEVFLOW_SUPERVISOR_STATE_VERSION,
       supervisor: DEVFLOW_SUPERVISOR_NAME,
@@ -167,6 +233,7 @@ export function readDevFlowSupervisorState(): DevFlowSupervisorState | null {
       updatedAt: parsed.updatedAt,
       processes,
       ...(tunnelHealth ? { tunnelHealth } : {}),
+      ...(lastUnexpectedServerCrash ? { lastUnexpectedServerCrash } : {}),
     };
   } catch {
     return null;
@@ -205,6 +272,23 @@ export function updateDevFlowSupervisorProcess(
   });
 }
 
+export function updateDevFlowSupervisorUnexpectedCrash(
+  crash: DevFlowUnexpectedServerCrashEvidence,
+  now = new Date().toISOString(),
+) {
+  const current = readDevFlowSupervisorState();
+  if (!current) return null;
+  const safeCrash: DevFlowUnexpectedServerCrashEvidence = {
+    ...crash,
+    ...(crash.stderrTail ? { stderrTail: sanitizeSupervisorCrashStderr(crash.stderrTail) } : {}),
+  };
+  return writeDevFlowSupervisorState({
+    ...current,
+    lastUnexpectedServerCrash: safeCrash,
+    updatedAt: now,
+  });
+}
+
 export function updateDevFlowSupervisorTunnelHealth(
   tunnelHealth: DevFlowTunnelHealthState,
   now = new Date().toISOString(),
@@ -234,6 +318,8 @@ function childDiagnostic(
     ...(Number.isInteger(child.pid) ? { pid: child.pid } : {}),
     restartAttempt: child.restartAttempt,
     ...(child.nextRetryAt ? { nextRetryAt: child.nextRetryAt } : {}),
+    ...(child.recoveryKind ? { recoveryKind: child.recoveryKind } : {}),
+    ...(child.recoveryStatus ? { recoveryStatus: child.recoveryStatus } : {}),
     ...(child.lastExitAt ? { lastExitAt: child.lastExitAt } : {}),
     ...('lastExitCode' in child ? { lastExitCode: child.lastExitCode } : {}),
     ...('lastSignal' in child ? { lastSignal: child.lastSignal } : {}),
@@ -282,6 +368,8 @@ export function buildDevFlowSupervisorDiagnostics(state: DevFlowSupervisorState 
   else if (api.status === 'healthy' && tunnel.status === 'degraded') summary = 'api-healthy-tunnel-degraded';
   else if (api.status === 'healthy' && tunnel.status === 'restarting') summary = 'api-healthy-tunnel-restarting';
   else if (api.status === 'healthy' && tunnel.status === 'down') summary = 'api-healthy-tunnel-down';
+  else if (api.recoveryStatus === 'restart-exhausted' && tunnel.status === 'healthy') summary = 'api-restart-exhausted-tunnel-healthy';
+  else if (api.recoveryKind === 'unexpected-crash' && api.recoveryStatus === 'recovering' && tunnel.status === 'healthy') summary = 'api-recovering-tunnel-healthy';
   else if (api.status === 'down' && tunnel.status === 'healthy') summary = 'api-down-tunnel-healthy';
   else if (api.status === 'restarting' && tunnel.status === 'healthy') summary = 'api-restarting-tunnel-healthy';
 
@@ -296,5 +384,6 @@ export function buildDevFlowSupervisorDiagnostics(state: DevFlowSupervisorState 
     stateAgeMs: Math.max(0, Date.now() - Date.parse(state.updatedAt)),
     api,
     tunnel,
+    ...(state.lastUnexpectedServerCrash ? { lastUnexpectedServerCrash: state.lastUnexpectedServerCrash } : {}),
   };
 }

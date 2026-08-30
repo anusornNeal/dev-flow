@@ -125,6 +125,18 @@ The current state model separates:
 
 When the local API is healthy but tunnel state is degraded/down, diagnostics recommend `npm run tunnel:status` and tunnel-client diagnostics.
 
+## Unexpected API child recovery
+
+An unexpected DevFlow API child exit or spawn failure is recovered by `start-all` without replacing the supervisor or reconnecting the OpenAI Tunnel runtime. Recovery is intentionally server-only: the tunnel keeps targeting the same local `/mcp` endpoint while the replacement API child starts.
+
+The default bounded policy allows four consecutive recovery attempts with exponential delays of 250 ms, 500 ms, 1 s, and 2 s. Delay is capped at 4 s. A server child that remains alive for 30 seconds resets the consecutive-attempt sequence. Only one recovery timer may be pending, and intentional supervisor shutdown cancels pending recovery.
+
+The guarded `restart_devflow` exit code remains a separate path and never falls through into unexpected-crash recovery. Likewise, a failed replacement for a guarded restart fails that restart ticket rather than starting an unrelated crash loop.
+
+`.devflow/supervisor-state.json` retains bounded `lastUnexpectedServerCrash` evidence across supervisor reinitialization: observation time, previous server PID, runtime-owner instance id when known, exit code/signal, recovery attempt/outcome, and a capped/redacted stderr tail. Common credential-shaped values are removed before persistence. Diagnostics distinguish `unexpected-crash` recovery, `recovered`, and `restart-exhausted` from an intentional guarded restart.
+
+The supervisor does not replay durable MCP jobs after a crash. Existing durable-job recovery remains authoritative: interrupted work is classified from its persisted lease/result state after the API returns.
+
 ## Guarded API-only restart
 
 `restart_devflow` remains intentionally scoped to the API child.

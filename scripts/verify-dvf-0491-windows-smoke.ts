@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 const repoRoot = path.resolve(new URL('..', import.meta.url).pathname.replace(/^\/(?:([A-Za-z]:))/, '$1'));
 const supervisorArgs = ['--import', 'tsx', 'scripts/start-all.ts', '--server-only'];
@@ -168,6 +168,30 @@ async function main() {
     assert.equal(Number(afterDuplicates?.pid), primary.child.pid);
     assert.equal(Number(stateAfterDuplicates?.processes?.server?.pid), firstServerPid);
 
+    const killResult = spawnSync('taskkill.exe', ['/PID', String(firstServerPid), '/T', '/F'], {
+      stdio: 'ignore',
+      shell: false,
+      windowsHide: true,
+    });
+    assert.equal(killResult.status, 0, 'unexpected-crash smoke must terminate only the server child process tree');
+    const unexpectedRecoveredState = await waitFor(() => {
+      const state = readJson(supervisorStatePath);
+      const pid = Number(state?.processes?.server?.pid || 0);
+      return pid > 0
+        && pid !== firstServerPid
+        && state?.processes?.server?.recoveryStatus === 'recovered'
+        && Number(state?.lastUnexpectedServerCrash?.previousPid || 0) === firstServerPid
+        && state?.lastUnexpectedServerCrash?.recoveryStatus === 'recovered'
+        ? state
+        : null;
+    }, 20_000, 'automatic unexpected-crash server recovery');
+    const unexpectedRecoveryServerPid = Number(unexpectedRecoveredState.processes.server.pid);
+    await waitForPort(port, true, 10_000);
+    const ownerAfterUnexpectedRecovery = readJson(ownerPath);
+    assert.equal(ownerAfterUnexpectedRecovery?.instanceId, firstOwner.instanceId);
+    assert.equal(Number(ownerAfterUnexpectedRecovery?.pid), primary.child.pid);
+    assert.equal(primary.child.exitCode, null, 'supervisor must remain alive while replacing only the API child');
+
     const restartResponse = await fetch(`http://127.0.0.1:${port}/api/restart`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -182,7 +206,7 @@ async function main() {
     const restartedState = await waitFor(() => {
       const state = readJson(supervisorStatePath);
       const pid = Number(state?.processes?.server?.pid || 0);
-      return pid > 0 && pid !== firstServerPid ? state : null;
+      return pid > 0 && pid !== unexpectedRecoveryServerPid ? state : null;
     }, 20_000, 'replacement server PID');
     const replacementServerPid = Number(restartedState.processes.server.pid);
     await waitFor(() => {
@@ -238,6 +262,7 @@ async function main() {
       ok: true,
       supervisorPid: firstOwner.pid,
       firstServerPid,
+      unexpectedRecoveryServerPid,
       replacementServerPid,
       duplicateLaunches: 5,
       restartTicket,

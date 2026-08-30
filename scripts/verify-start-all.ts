@@ -16,6 +16,8 @@ const {
   buildStartAllPlan,
   resolveStartAllOptions,
   shouldRestartServerProcess,
+  planUnexpectedServerRecovery,
+  DEFAULT_UNEXPECTED_SERVER_RECOVERY_POLICY,
   waitForLocalApi,
 } = await import('./start-all');
 const {
@@ -76,6 +78,49 @@ assert.equal(shouldRestartServerProcess({
   shuttingDown: true,
   restartState: acceptedRestart,
 }), false);
+
+assert.deepEqual(DEFAULT_UNEXPECTED_SERVER_RECOVERY_POLICY, {
+  maxAttempts: 4,
+  baseDelayMs: 250,
+  maxDelayMs: 4000,
+  stableWindowMs: 30000,
+});
+assert.deepEqual(planUnexpectedServerRecovery({
+  exitCode: 1,
+  shuttingDown: false,
+  previousAttempt: 0,
+  uptimeMs: 1000,
+}), { action: 'restart', attempt: 1, delayMs: 250 });
+assert.deepEqual(planUnexpectedServerRecovery({
+  exitCode: 1,
+  shuttingDown: false,
+  previousAttempt: 1,
+  uptimeMs: 1000,
+}), { action: 'restart', attempt: 2, delayMs: 500 });
+assert.deepEqual(planUnexpectedServerRecovery({
+  exitCode: 1,
+  shuttingDown: false,
+  previousAttempt: 4,
+  uptimeMs: 1000,
+}), { action: 'exhausted', attempt: 4, delayMs: null });
+assert.deepEqual(planUnexpectedServerRecovery({
+  exitCode: 1,
+  shuttingDown: false,
+  previousAttempt: 3,
+  uptimeMs: 30000,
+}), { action: 'restart', attempt: 1, delayMs: 250 });
+assert.deepEqual(planUnexpectedServerRecovery({
+  exitCode: 1,
+  shuttingDown: true,
+  previousAttempt: 0,
+  uptimeMs: 1000,
+}), { action: 'ignore', attempt: 0, delayMs: null });
+assert.deepEqual(planUnexpectedServerRecovery({
+  exitCode: 75,
+  shuttingDown: false,
+  previousAttempt: 0,
+  uptimeMs: 1000,
+}), { action: 'ignore', attempt: 0, delayMs: null });
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-openai-tunnel-options-'));
 const tunnelEnv = {

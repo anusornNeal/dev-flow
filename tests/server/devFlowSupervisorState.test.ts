@@ -166,6 +166,93 @@ test('intentional shutdown dominates diagnostic summary', () => {
   assert.equal(diagnostics.summary, 'shutting-down');
 });
 
+test('unexpected server crash evidence survives supervisor reinitialization and redacts bounded stderr', () => {
+  resetState();
+  const initial = supervisor.createDevFlowSupervisorState({
+    mode: 'all',
+    processLabels: ['server', 'tunnel'],
+    now: '2026-08-30T07:59:00.000Z',
+  });
+  supervisor.writeDevFlowSupervisorState(initial);
+  supervisor.updateDevFlowSupervisorUnexpectedCrash({
+    observedAt: '2026-08-30T07:59:10.000Z',
+    previousPid: 4242,
+    runtimeOwnerInstanceId: 'owner-before-crash',
+    exitCode: 1,
+    signal: null,
+    restartAttempt: 1,
+    recoveryStatus: 'recovering',
+    stderrTail: `Authorization: Bearer secret-token\n${'x'.repeat(7000)}\nserver exploded`,
+  }, '2026-08-30T07:59:10.000Z');
+
+  const previous = supervisor.readDevFlowSupervisorState();
+  const next = supervisor.createDevFlowSupervisorState({
+    mode: 'all',
+    processLabels: ['server', 'tunnel'],
+    now: '2026-08-30T08:00:00.000Z',
+    previousState: previous,
+  });
+
+  assert.equal(next.lastUnexpectedServerCrash?.previousPid, 4242);
+  assert.equal(next.lastUnexpectedServerCrash?.runtimeOwnerInstanceId, 'owner-before-crash');
+  assert.equal(next.lastUnexpectedServerCrash?.recoveryStatus, 'recovering');
+  assert.ok(Buffer.byteLength(next.lastUnexpectedServerCrash?.stderrTail || '', 'utf8') <= supervisor.MAX_SUPERVISOR_CRASH_STDERR_BYTES);
+  assert.doesNotMatch(next.lastUnexpectedServerCrash?.stderrTail || '', /secret-token/);
+  assert.match(next.lastUnexpectedServerCrash?.stderrTail || '', /server exploded/);
+});
+
+test('supervisor diagnostics distinguish unexpected recovery, exhaustion, recovered state, and guarded restart', () => {
+  const base = {
+    version: 2 as const,
+    supervisor: 'start-all' as const,
+    mode: 'all' as const,
+    shuttingDown: false,
+    startedAt: '2026-08-30T07:59:00.000Z',
+    updatedAt: '2026-08-30T07:59:10.000Z',
+    tunnelHealth: { status: 'healthy' as const, lastCheckedAt: '2026-08-30T07:59:10.000Z' },
+  };
+
+  const recovering = supervisor.buildDevFlowSupervisorDiagnostics({
+    ...base,
+    processes: {
+      server: { label: 'server', status: 'restarting', restartAttempt: 2, recoveryKind: 'unexpected-crash', recoveryStatus: 'recovering' },
+      tunnel: { label: 'tunnel', status: 'running', restartAttempt: 0 },
+    },
+  });
+  assert.equal(recovering.api.recoveryKind, 'unexpected-crash');
+  assert.equal(recovering.api.recoveryStatus, 'recovering');
+  assert.equal(recovering.summary, 'api-recovering-tunnel-healthy');
+
+  const exhausted = supervisor.buildDevFlowSupervisorDiagnostics({
+    ...base,
+    processes: {
+      server: { label: 'server', status: 'failed', restartAttempt: 4, recoveryKind: 'unexpected-crash', recoveryStatus: 'restart-exhausted' },
+      tunnel: { label: 'tunnel', status: 'running', restartAttempt: 0 },
+    },
+  });
+  assert.equal(exhausted.summary, 'api-restart-exhausted-tunnel-healthy');
+
+  const recovered = supervisor.buildDevFlowSupervisorDiagnostics({
+    ...base,
+    processes: {
+      server: { label: 'server', status: 'running', pid: 5000, restartAttempt: 0, recoveryKind: 'unexpected-crash', recoveryStatus: 'recovered' },
+      tunnel: { label: 'tunnel', status: 'running', restartAttempt: 0 },
+    },
+  });
+  assert.equal(recovered.summary, 'both-healthy');
+  assert.equal(recovered.api.recoveryStatus, 'recovered');
+
+  const guarded = supervisor.buildDevFlowSupervisorDiagnostics({
+    ...base,
+    processes: {
+      server: { label: 'server', status: 'restarting', restartAttempt: 0, recoveryKind: 'guarded-restart', recoveryStatus: 'recovering' },
+      tunnel: { label: 'tunnel', status: 'running', restartAttempt: 0 },
+    },
+  });
+  assert.equal(guarded.api.recoveryKind, 'guarded-restart');
+  assert.equal(guarded.summary, 'api-restarting-tunnel-healthy');
+});
+
 test.after(() => {
   delete process.env.DEVFLOW_APP_ROOT;
   fs.rmSync(tempRoot, { recursive: true, force: true });

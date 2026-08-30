@@ -26,8 +26,11 @@ import {
   updateDevFlowSupervisorProcess,
   updateDevFlowSupervisorState,
   updateDevFlowSupervisorTunnelHealth,
+  updateDevFlowSupervisorUnexpectedCrash,
   writeDevFlowSupervisorState,
+  MAX_SUPERVISOR_CRASH_STDERR_BYTES,
   type DevFlowSupervisorProcessLabel,
+  type DevFlowSupervisorRecoveryKind,
 } from '../src/lib/devFlowSupervisor';
 import {
   loadPersistedOpenAiTunnelConfig,
@@ -67,6 +70,13 @@ const DEFAULT_PORT = 3000;
 const DEFAULT_BROWSER_DELAY_MS = 4000;
 const DEFAULT_TUNNEL_STARTUP_WAIT_MS = 30_000;
 const MAX_TUNNEL_STARTUP_WAIT_MS = 120_000;
+
+export const DEFAULT_UNEXPECTED_SERVER_RECOVERY_POLICY = Object.freeze({
+  maxAttempts: 4,
+  baseDelayMs: 250,
+  maxDelayMs: 4_000,
+  stableWindowMs: 30_000,
+});
 
 function parsePositiveInteger(value: string | undefined, fallback: number) {
   if (!value) return fallback;
@@ -176,20 +186,51 @@ export function shouldRestartServerProcess(input: {
     && input.restartState.supervisorToken === input.supervisorToken;
 }
 
+export function planUnexpectedServerRecovery(input: {
+  exitCode: number | null;
+  shuttingDown: boolean;
+  previousAttempt: number;
+  uptimeMs: number;
+}, policy = DEFAULT_UNEXPECTED_SERVER_RECOVERY_POLICY): {
+  action: 'restart' | 'exhausted' | 'ignore';
+  attempt: number;
+  delayMs: number | null;
+} {
+  if (input.shuttingDown || input.exitCode === DEVFLOW_RESTART_EXIT_CODE) {
+    return { action: 'ignore', attempt: Math.max(0, input.previousAttempt), delayMs: null };
+  }
+  const previousAttempt = input.uptimeMs >= policy.stableWindowMs ? 0 : Math.max(0, input.previousAttempt);
+  if (previousAttempt >= policy.maxAttempts) {
+    return { action: 'exhausted', attempt: previousAttempt, delayMs: null };
+  }
+  const attempt = previousAttempt + 1;
+  const delayMs = Math.min(policy.maxDelayMs, policy.baseDelayMs * (2 ** (attempt - 1)));
+  return { action: 'restart', attempt, delayMs };
+}
+
 function startProcess(processConfig: ManagedProcess, callbacks: {
-  onExit?: (child: ChildProcessWithoutNullStreams, code: number | null, signal: NodeJS.Signals | null) => void;
-  onError?: (child: ChildProcessWithoutNullStreams, error: Error) => void;
+  onExit?: (child: ChildProcessWithoutNullStreams, code: number | null, signal: NodeJS.Signals | null, stderrTail: string) => void;
+  onError?: (child: ChildProcessWithoutNullStreams, error: Error, stderrTail: string) => void;
 } = {}): ChildProcessWithoutNullStreams {
   console.log(`[start-all] Starting ${processConfig.label}: ${processConfig.command} ${processConfig.args.join(' ')}`);
   const child = spawn(processConfig.command, processConfig.args, {
     env: { ...process.env, ...(processConfig.env || {}) },
     shell: false,
   });
+  let stderrTail = '';
 
   child.stdout.on('data', (chunk) => process.stdout.write(`[${processConfig.label}] ${String(chunk)}`));
-  child.stderr.on('data', (chunk) => process.stderr.write(`[${processConfig.label}] ${String(chunk)}`));
-  child.on('exit', (code, signal) => callbacks.onExit?.(child, code, signal));
-  child.on('error', (error) => callbacks.onError?.(child, error));
+  child.stderr.on('data', (chunk) => {
+    const text = String(chunk);
+    process.stderr.write(`[${processConfig.label}] ${text}`);
+    const bytes = Buffer.from(stderrTail + text, 'utf8');
+    const maxBufferedBytes = MAX_SUPERVISOR_CRASH_STDERR_BYTES * 2;
+    stderrTail = bytes.length <= maxBufferedBytes
+      ? bytes.toString('utf8')
+      : bytes.subarray(bytes.length - maxBufferedBytes).toString('utf8');
+  });
+  child.on('exit', (code, signal) => callbacks.onExit?.(child, code, signal, stderrTail));
+  child.on('error', (error) => callbacks.onError?.(child, error, stderrTail));
   return child;
 }
 
@@ -397,19 +438,125 @@ export async function startAll(mode: StartAllMode = 'all') {
   const children = new Map<DevFlowSupervisorProcessLabel, ChildProcessWithoutNullStreams>();
   let shuttingDown = false;
   let shutdownPromise: Promise<void> | null = null;
+  let serverRestartTimer: NodeJS.Timeout | null = null;
+  let serverStableTimer: NodeJS.Timeout | null = null;
+  let serverStartedAtMs = 0;
+  let unexpectedRestartAttempt = 0;
 
+  const previousSupervisorState = readDevFlowSupervisorState();
   writeDevFlowSupervisorState(createDevFlowSupervisorState({
     mode,
     processLabels: mode === 'all' ? ['server', 'tunnel'] : ['server'],
+    previousState: previousSupervisorState,
   }));
 
-  let launchServer: () => ChildProcessWithoutNullStreams;
-  launchServer = () => {
+  const clearServerStableTimer = () => {
+    if (serverStableTimer) clearTimeout(serverStableTimer);
+    serverStableTimer = null;
+  };
+
+  let launchServer: (context?: { recoveryKind?: DevFlowSupervisorRecoveryKind; attempt?: number }) => ChildProcessWithoutNullStreams;
+
+  const scheduleUnexpectedServerRecovery = (input: {
+    previousPid?: number;
+    exitCode: number | null;
+    signal: NodeJS.Signals | null;
+    stderrTail: string;
+    errorMessage?: string;
+  }) => {
+    if (serverRestartTimer || shuttingDown) return false;
+    const recovery = planUnexpectedServerRecovery({
+      exitCode: input.exitCode,
+      shuttingDown,
+      previousAttempt: unexpectedRestartAttempt,
+      uptimeMs: serverStartedAtMs > 0 ? Math.max(0, Date.now() - serverStartedAtMs) : 0,
+    });
+    if (recovery.action === 'ignore') return false;
+
+    const now = new Date().toISOString();
+    const detail = input.errorMessage || (input.signal ? 'signal ' + input.signal : 'code ' + (input.exitCode ?? 'unknown'));
+    if (recovery.action === 'exhausted') {
+      lifecycleStatus = 'failed';
+      unexpectedRestartAttempt = recovery.attempt;
+      updateDevFlowSupervisorProcess('server', {
+        status: 'failed',
+        pid: undefined,
+        lastExitAt: now,
+        lastExitCode: input.exitCode,
+        lastSignal: input.signal,
+        restartAttempt: recovery.attempt,
+        nextRetryAt: undefined,
+        recoveryKind: 'unexpected-crash',
+        recoveryStatus: 'restart-exhausted',
+        message: 'DevFlow server unexpected-crash recovery exhausted after ' + recovery.attempt + ' attempt(s); last failure: ' + detail + '.',
+      }, now);
+      updateDevFlowSupervisorUnexpectedCrash({
+        observedAt: now,
+        ...(input.previousPid ? { previousPid: input.previousPid } : {}),
+        runtimeOwnerInstanceId: ownership.owner.instanceId,
+        exitCode: input.exitCode,
+        signal: input.signal,
+        restartAttempt: recovery.attempt,
+        recoveryStatus: 'restart-exhausted',
+        stderrTail: input.stderrTail,
+        message: 'Unexpected API recovery exhausted after ' + recovery.attempt + ' attempt(s): ' + detail + '.',
+      }, now);
+      return true;
+    }
+
+    unexpectedRestartAttempt = recovery.attempt;
+    lifecycleStatus = 'starting';
+    const delayMs = recovery.delayMs ?? 0;
+    const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
+    updateDevFlowSupervisorProcess('server', {
+      status: 'restarting',
+      pid: undefined,
+      lastExitAt: now,
+      lastExitCode: input.exitCode,
+      lastSignal: input.signal,
+      restartAttempt: recovery.attempt,
+      nextRetryAt,
+      recoveryKind: 'unexpected-crash',
+      recoveryStatus: 'recovering',
+      message: 'DevFlow server exited unexpectedly (' + detail + '); retry ' + recovery.attempt + '/' + DEFAULT_UNEXPECTED_SERVER_RECOVERY_POLICY.maxAttempts + ' in ' + delayMs + 'ms while preserving the OpenAI tunnel runtime.',
+    }, now);
+    updateDevFlowSupervisorUnexpectedCrash({
+      observedAt: now,
+      ...(input.previousPid ? { previousPid: input.previousPid } : {}),
+      runtimeOwnerInstanceId: ownership.owner.instanceId,
+      exitCode: input.exitCode,
+      signal: input.signal,
+      restartAttempt: recovery.attempt,
+      recoveryStatus: 'recovering',
+      nextRetryAt,
+      stderrTail: input.stderrTail,
+      message: 'Unexpected API exit (' + detail + '); bounded server-only recovery scheduled.',
+    }, now);
+
+    serverRestartTimer = setTimeout(() => {
+      serverRestartTimer = null;
+      if (shuttingDown) return;
+      try {
+        launchServer({ recoveryKind: 'unexpected-crash', attempt: recovery.attempt });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        scheduleUnexpectedServerRecovery({
+          exitCode: null,
+          signal: null,
+          stderrTail: message,
+          errorMessage: 'relaunch failed: ' + message,
+        });
+      }
+    }, delayMs);
+    return true;
+  };
+  launchServer = (context = {}) => {
     const processConfig = plan.processes[0];
     const child = startProcess(processConfig, {
-      onExit: (exitedChild, code, signal) => {
+      onExit: (exitedChild, code, signal, stderrTail) => {
         if (children.get('server') !== exitedChild) return;
         children.delete('server');
+        clearServerStableTimer();
         const detail = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
         const restartState = readDevFlowRestartState();
         const supervisorToken = processConfig.env?.[DEVFLOW_RESTART_SUPERVISOR_TOKEN_ENV];
@@ -421,6 +568,7 @@ export async function startAll(mode: StartAllMode = 'all') {
           shuttingDown,
           restartState,
         })) {
+          unexpectedRestartAttempt = 0;
           lifecycleStatus = 'starting';
           updateDevFlowSupervisorProcess('server', {
             status: 'restarting',
@@ -428,10 +576,14 @@ export async function startAll(mode: StartAllMode = 'all') {
             lastExitAt: new Date().toISOString(),
             lastExitCode: code,
             lastSignal: signal,
+            restartAttempt: 0,
+            nextRetryAt: undefined,
+            recoveryKind: 'guarded-restart',
+            recoveryStatus: 'recovering',
             message: `Restart ticket ${restartState!.ticket} accepted; relaunching DevFlow server while preserving the OpenAI tunnel runtime.`,
           });
           try {
-            const replacement = launchServer();
+            const replacement = launchServer({ recoveryKind: 'guarded-restart', attempt: 0 });
             if (!replacement.pid) {
               lifecycleStatus = 'failed';
               markDevFlowRestartFailed(restartState!.ticket, 'Restart supervisor could not resolve the replacement server process id.');
@@ -446,6 +598,35 @@ export async function startAll(mode: StartAllMode = 'all') {
           return;
         }
 
+        if (
+          !shuttingDown
+          && restartState?.status === 'restarting'
+          && restartState.replacementPid === exitedChild.pid
+        ) {
+          lifecycleStatus = 'failed';
+          updateDevFlowSupervisorProcess('server', {
+            status: 'failed',
+            pid: undefined,
+            lastExitAt: new Date().toISOString(),
+            lastExitCode: code,
+            lastSignal: signal,
+            restartAttempt: 0,
+            nextRetryAt: undefined,
+            recoveryKind: 'guarded-restart',
+            recoveryStatus: 'restart-exhausted',
+            message: `Replacement DevFlow server exited with ${detail} before becoming healthy.`,
+          });
+          markDevFlowRestartFailed(restartState.ticket, `Replacement DevFlow server exited with ${detail} before becoming healthy.`);
+          return;
+        }
+
+        if (!shuttingDown && scheduleUnexpectedServerRecovery({
+          previousPid: exitedChild.pid,
+          exitCode: code,
+          signal,
+          stderrTail,
+        })) return;
+
         lifecycleStatus = shuttingDown ? 'stopping' : 'failed';
         updateDevFlowSupervisorProcess('server', {
           status: shuttingDown ? 'stopped' : 'failed',
@@ -453,6 +634,10 @@ export async function startAll(mode: StartAllMode = 'all') {
           lastExitAt: new Date().toISOString(),
           lastExitCode: code,
           lastSignal: signal,
+          restartAttempt: 0,
+          nextRetryAt: undefined,
+          recoveryKind: undefined,
+          recoveryStatus: undefined,
           message: shuttingDown ? 'DevFlow server stopped during intentional supervisor shutdown.' : `DevFlow server exited with ${detail}.`,
         });
 
@@ -462,36 +647,100 @@ export async function startAll(mode: StartAllMode = 'all') {
           markDevFlowRestartFailed(restartState.ticket, `Replacement DevFlow server exited with ${detail} before becoming healthy.`);
         }
       },
-      onError: (failedChild, error) => {
+      onError: (failedChild, error, stderrTail) => {
         if (children.get('server') !== failedChild) return;
         children.delete('server');
-        lifecycleStatus = shuttingDown ? 'stopping' : 'failed';
-        updateDevFlowSupervisorProcess('server', {
-          status: shuttingDown ? 'stopped' : 'failed',
-          pid: undefined,
-          message: `DevFlow server failed to start: ${error.message}`,
-        });
+        clearServerStableTimer();
         const restartState = readDevFlowRestartState();
         if (
           !shuttingDown
           && restartState?.status === 'restarting'
           && restartState.replacementPid === failedChild.pid
         ) {
+          lifecycleStatus = 'failed';
+          updateDevFlowSupervisorProcess('server', {
+            status: 'failed',
+            pid: undefined,
+            restartAttempt: 0,
+            recoveryKind: 'guarded-restart',
+            recoveryStatus: 'restart-exhausted',
+            message: `Replacement DevFlow server failed to start: ${error.message}`,
+          });
           markDevFlowRestartFailed(restartState.ticket, `Replacement DevFlow server failed to start: ${error.message}`);
+          return;
         }
+        if (!shuttingDown && scheduleUnexpectedServerRecovery({
+          previousPid: failedChild.pid,
+          exitCode: null,
+          signal: null,
+          stderrTail: stderrTail + '\n' + error.message,
+          errorMessage: 'spawn error: ' + error.message,
+        })) return;
+
+        lifecycleStatus = shuttingDown ? 'stopping' : 'failed';
+        updateDevFlowSupervisorProcess('server', {
+          status: shuttingDown ? 'stopped' : 'failed',
+          pid: undefined,
+          restartAttempt: 0,
+          recoveryKind: undefined,
+          recoveryStatus: undefined,
+          message: shuttingDown ? 'DevFlow server stopped during intentional supervisor shutdown.' : `DevFlow server failed to start: ${error.message}`,
+        });
       },
     });
 
     children.set('server', child);
+    serverStartedAtMs = Date.now();
+    const isUnexpectedRecovery = context.recoveryKind === 'unexpected-crash';
     updateDevFlowSupervisorProcess('server', {
-      status: child.pid ? 'running' : 'starting',
+      status: isUnexpectedRecovery ? 'restarting' : child.pid ? 'running' : 'starting',
       ...(child.pid ? { pid: child.pid } : { pid: undefined }),
       startedAt: new Date().toISOString(),
-      restartAttempt: 0,
+      restartAttempt: context.attempt ?? 0,
       nextRetryAt: undefined,
-      message: child.pid ? 'DevFlow server child process is running.' : 'DevFlow server child process is starting.',
+      recoveryKind: context.recoveryKind,
+      recoveryStatus: context.recoveryKind ? (isUnexpectedRecovery ? 'recovering' : 'recovered') : undefined,
+      message: isUnexpectedRecovery
+        ? 'Replacement DevFlow API child started; waiting for local API readiness without reconnecting the OpenAI tunnel runtime.'
+        : child.pid ? 'DevFlow server child process is running.' : 'DevFlow server child process is starting.',
     });
-    if (child.pid) lifecycleStatus = 'running';
+    if (child.pid) {
+      lifecycleStatus = isUnexpectedRecovery ? 'starting' : 'running';
+      clearServerStableTimer();
+      serverStableTimer = setTimeout(() => {
+        if (children.get('server') !== child || child.exitCode !== null || shuttingDown) return;
+        unexpectedRestartAttempt = 0;
+        updateDevFlowSupervisorProcess('server', {
+          restartAttempt: 0,
+          nextRetryAt: undefined,
+        });
+      }, DEFAULT_UNEXPECTED_SERVER_RECOVERY_POLICY.stableWindowMs);
+      serverStableTimer.unref?.();
+
+      if (isUnexpectedRecovery) {
+        void waitForLocalApi(plan.appUrl, Math.min(10_000, options.tunnelStartupWaitMs)).then((readiness) => {
+          if (!readiness.ok || children.get('server') !== child || shuttingDown) return;
+          lifecycleStatus = 'running';
+          const recoveredAt = new Date().toISOString();
+          updateDevFlowSupervisorProcess('server', {
+            status: 'running',
+            recoveryKind: 'unexpected-crash',
+            recoveryStatus: 'recovered',
+            message: 'DevFlow API recovered after an unexpected child exit; the existing OpenAI tunnel runtime was preserved.',
+          }, recoveredAt);
+          const currentCrash = readDevFlowSupervisorState()?.lastUnexpectedServerCrash;
+          if (currentCrash) {
+            updateDevFlowSupervisorUnexpectedCrash({
+              ...currentCrash,
+              recoveryStatus: 'recovered',
+              recoveredAt,
+              nextRetryAt: undefined,
+              message: 'DevFlow API recovered automatically after the unexpected child exit.',
+            }, recoveredAt);
+          }
+        }).catch(() => {});
+      }
+    }
     return child;
   };
 
@@ -523,6 +772,9 @@ export async function startAll(mode: StartAllMode = 'all') {
     shutdownPromise = (async () => {
       if (shuttingDown) return;
       shuttingDown = true;
+      if (serverRestartTimer) clearTimeout(serverRestartTimer);
+      serverRestartTimer = null;
+      clearServerStableTimer();
       lifecycleStatus = 'stopping';
       updateDevFlowSupervisorState({ shuttingDown: true });
 

@@ -54,8 +54,7 @@ function evaluateLatencyBasis(tool: ToolSummary) {
   const rawP95DurationMs = nonNegativeMetric(tool.p95DurationMs) ?? 0;
   const logicalOperationP95Ms = nonNegativeMetric(tool.logicalOperationP95Ms);
   const executionP95Ms = nonNegativeMetric(tool.executionP95Ms);
-  const hasReliableExecutionDelta = tool.toolName === 'run_project_command'
-    && logicalOperationP95Ms !== null
+  const hasReliableExecutionDelta = logicalOperationP95Ms !== null
     && logicalOperationP95Ms > 0
     && executionP95Ms !== null
     && executionP95Ms > 0

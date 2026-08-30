@@ -1494,6 +1494,9 @@ test('mcpToolJobService - phase telemetry separates queue blockers from executio
     const queued: any = getToolJobStatus(second.jobId);
     assert.equal(queued.status, 'queued');
     assert.equal(typeof queued.phaseTimings.admissionWaitMs, 'number');
+    assert.equal(typeof queued.phaseTimings.admissionResourceMs, 'number');
+    assert.equal(typeof queued.phaseTimings.admissionPolicyMs, 'number');
+    assert.equal(typeof queued.phaseTimings.admissionPersistenceMs, 'number');
     assert.equal(queued.phaseTimings.queueWaitMs > 0, true);
     assert.equal(queued.phaseTimings.workspaceLockWaitMs > 0, true);
     assert.equal(queued.phaseTimings.capacityWaitMs, 0);
@@ -1525,6 +1528,9 @@ test('mcpToolJobService - phase telemetry separates queue blockers from executio
     assert.equal(metrics.metrics.phaseTelemetry.workspaceLockWait.p95Ms > 0, true);
     assert.equal(metrics.metrics.phaseTelemetry.execution.p95Ms > 0, true);
     assert.equal(metrics.metrics.phaseTelemetry.admissionWait.maxMs >= metrics.metrics.phaseTelemetry.admissionWait.p95Ms, true);
+    assert.equal(metrics.metrics.phaseTelemetry.admissionResource.count >= 1, true);
+    assert.equal(metrics.metrics.phaseTelemetry.admissionPolicy.count >= 1, true);
+    assert.equal(metrics.metrics.phaseTelemetry.admissionPersistence.count >= 1, true);
     assert.equal(metrics.metrics.phaseTelemetry.byTool[toolName].queueWait.count >= 1, true);
     assert.equal(metrics.metrics.phaseTelemetry.byTool[toolName].execution.maxMs >= metrics.metrics.phaseTelemetry.byTool[toolName].execution.p95Ms, true);
 

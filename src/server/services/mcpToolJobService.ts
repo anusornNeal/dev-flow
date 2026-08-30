@@ -231,6 +231,9 @@ type JobPhaseTelemetryState = {
   toolName: string;
   resourceScope: FinalizedQueueWaitTelemetry['resourceScope'];
   admissionWaitMs: number;
+  admissionResourceMs: number;
+  admissionPolicyMs: number;
+  admissionPersistenceMs: number;
   enqueuedAt: number;
   queueCompletedAt?: number;
   candidatePreparationStartedAt?: number;
@@ -247,6 +250,9 @@ type JobPhaseTelemetryState = {
 
 type JobPhaseTimings = {
   admissionWaitMs: number;
+  admissionResourceMs: number;
+  admissionPolicyMs: number;
+  admissionPersistenceMs: number;
   queueWaitMs: number;
   workspaceLockWaitMs: number;
   capacityWaitMs: number;
@@ -560,6 +566,9 @@ function getJobPhaseTimings(state: JobPhaseTelemetryState, entry?: QueueEntry, n
     : 0;
   return {
     admissionWaitMs: Math.max(0, state.admissionWaitMs),
+    admissionResourceMs: Math.max(0, state.admissionResourceMs),
+    admissionPolicyMs: Math.max(0, state.admissionPolicyMs),
+    admissionPersistenceMs: Math.max(0, state.admissionPersistenceMs),
     queueWaitMs,
     workspaceLockWaitMs,
     capacityWaitMs,
@@ -587,6 +596,9 @@ function summarizeJobPhaseTelemetry() {
   });
   const summarizeTimings = (timings: JobPhaseTimings[]) => ({
     admissionWait: summary(timings.map((entry) => entry.admissionWaitMs)),
+    admissionResource: summary(timings.map((entry) => entry.admissionResourceMs)),
+    admissionPolicy: summary(timings.map((entry) => entry.admissionPolicyMs)),
+    admissionPersistence: summary(timings.map((entry) => entry.admissionPersistenceMs)),
     queueWait: summary(timings.map((entry) => entry.queueWaitMs)),
     workspaceLockWait: summary(timings.map((entry) => entry.workspaceLockWaitMs).filter((value) => value > 0)),
     capacityWait: summary(timings.map((entry) => entry.capacityWaitMs).filter((value) => value > 0)),
@@ -1296,6 +1308,9 @@ function enqueueRecoveredJob(state: AppState, job: McpToolJob) {
     toolName: job.toolName,
     resourceScope: resourceScopeFor(job.resourceKey),
     admissionWaitMs: 0,
+    admissionResourceMs: 0,
+    admissionPolicyMs: 0,
+    admissionPersistenceMs: 0,
     enqueuedAt,
     responseHandoffMs: 0,
     workspaceLockWaitMs: 0,
@@ -1632,9 +1647,12 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
       : cleanArgs;
   }
 
+  const admissionResourceStartedAt = Date.now();
   const admissionBindingArgs = resolveBuiltinToolJobBindingArgs(toolName, jobArgs);
   const resourceKey = resolveAdmissionResourceKey(state, admissionBindingArgs, kind);
   const schedulerProfile = getSchedulerProfile(state, toolName, admissionBindingArgs, kind, resourceKey);
+  const admissionResourceMs = Math.max(0, Date.now() - admissionResourceStartedAt);
+  const admissionPolicyStartedAt = Date.now();
 
   const admissionExecutionFreshness = admissionPreflight?.cachedResult
     ? taskExecutionFreshnessForArgs(jobArgs)
@@ -1674,6 +1692,9 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
       resourceScope: resourceScopeFor(resourceKey),
       toolName,
       admissionWaitMs: Math.max(0, completedAt - admissionStartedAt),
+      admissionResourceMs,
+      admissionPolicyMs: Math.max(0, completedAt - admissionPolicyStartedAt),
+      admissionPersistenceMs: 0,
       enqueuedAt: completedAt,
       queueCompletedAt: completedAt,
       executionStartedAt: completedAt,
@@ -1738,6 +1759,7 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   let job;
   let verification: VerificationQueuePolicy | undefined;
   let superseding: SupersedingVerification | undefined;
+  let admissionPersistenceMs = 0;
   try {
     verification = verificationPolicyFor(jobArgs, schedulerProfile.accessMode, resourceKey);
     if (verification) {
@@ -1748,8 +1770,10 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
         enforceVerificationBackpressure(verification, resourceKey);
       }
     }
+    const admissionPersistenceStartedAt = Date.now();
     job = createAcceptedDurableToolJob(jobId, toolName, jobArgs, resourceKey, { eagerArtifacts: toolName !== 'search_local_files' });
     jobArgs = job.args;
+    admissionPersistenceMs = Math.max(0, Date.now() - admissionPersistenceStartedAt);
     if (verification && superseding) {
       terminalizeIncomingSupersededJob(jobId, verification, superseding);
       return {
@@ -1772,6 +1796,9 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
     resourceScope: resourceScopeFor(resourceKey),
     toolName,
     admissionWaitMs: Math.max(0, enqueuedAt - admissionStartedAt),
+    admissionResourceMs,
+    admissionPolicyMs: Math.max(0, enqueuedAt - admissionPolicyStartedAt - admissionPersistenceMs),
+    admissionPersistenceMs,
     enqueuedAt,
     responseHandoffMs: 0,
     workspaceLockWaitMs: 0,

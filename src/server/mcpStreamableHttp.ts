@@ -57,7 +57,7 @@ export interface McpStreamableHttpSessionOptions {
 export const NOOP_MCP_STREAMABLE_HTTP_LIFECYCLE_HOOKS: McpStreamableHttpLifecycleHooks = {};
 
 const DEFAULT_SESSION_IDLE_TTL_MS = 60 * 60 * 1000;
-const DEFAULT_MAX_SESSIONS = 64;
+const DEFAULT_MAX_SESSIONS = 256;
 
 type SessionEntry = {
   sessionId: string;

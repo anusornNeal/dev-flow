@@ -93,6 +93,7 @@ async function startServer() {
   app.use('/mcp', express.json({ limit: '1mb' }));
   const reusableMcpHttpHandler = createReusableMcpHttpHandler(apiBaseUrl, undefined, undefined, {
     idleTtlMs: Number(process.env.DEVFLOW_MCP_SESSION_IDLE_TTL_MS),
+    maxSessions: Number(process.env.DEVFLOW_MCP_MAX_SESSIONS),
     requestHooks: (_req, res) => res.locals.mcpTransportTracker?.hooks,
     requestTraceContext: (_req, res) => ({
       correlationId: res.locals.mcpTransportCorrelationId,

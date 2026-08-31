@@ -376,6 +376,7 @@ test('production MCP route records transport timings and diagnostics expose the 
   assert.match(serverSource, /classifyMcpTransportOperation/);
   assert.match(serverSource, /tracker\.complete/);
   assert.match(serverSource, /DEVFLOW_MCP_SESSION_IDLE_TTL_MS/);
+  assert.match(serverSource, /DEVFLOW_MCP_MAX_SESSIONS/);
   assert.match(serverSource, /onSessionLifecycle:\s*recordMcpStreamableHttpSessionLifecycle/);
   assert.match(diagnosticsSource, /getMcpTransportSummary/);
   assert.match(diagnosticsSource, /mcpTransport/);

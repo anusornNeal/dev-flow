@@ -389,6 +389,38 @@ test('active GET streams are protected from TTL pruning until interruption compl
   });
 });
 
+test('default session capacity tolerates 65 idle ChatGPT-style sessions without eviction', async () => {
+  const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];
+  const initialize = (baseUrl: string, index: number) => fetch(`${baseUrl}/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: `default-capacity-${index}`, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: `default-capacity-${index}`, version: '1.0.0' } },
+    }),
+  });
+
+  await withMcpServer(async (baseUrl) => {
+    const sessionIds: string[] = [];
+    for (let index = 0; index < 65; index += 1) {
+      const response = await initialize(baseUrl, index);
+      assert.equal(response.status, 200);
+      sessionIds.push(response.headers.get('mcp-session-id') || '');
+      await response.body?.cancel();
+    }
+
+    assert.equal(lifecycle.filter((event) => event.kind === 'capacity-evicted').length, 0);
+    const oldest = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', 'mcp-session-id': sessionIds[0], 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(oldest.status, 200, 'the oldest idle session should remain reusable at 65 sessions');
+    await oldest.body?.cancel();
+  }, undefined, {
+    onSessionLifecycle: (event) => lifecycle.push(event),
+  });
+});
+
 test('capacity pressure evicts only eligible idle sessions and lifecycle telemetry contains no session ids', async () => {
   let fakeNow = 1_000;
   const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];

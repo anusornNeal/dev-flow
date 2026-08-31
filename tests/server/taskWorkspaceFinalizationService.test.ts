@@ -14,6 +14,7 @@ const { createProject } = await import('../../src/server/repositories/projectRep
 const { saveTask, getTask } = await import('../../src/server/repositories/taskRepository.js');
 const { createOrReuseSessionWorkspace, resetSessionWorkspaceRuntimeForTests, acquireSessionWorkspace, releaseSessionWorkspace } = await import('../../src/server/services/sessionWorkspaceService.js');
 const {
+  cancelExecutionSession,
   createExecutionSession,
   getExecutionOwnershipState,
   getExecutionSessionState,
@@ -328,6 +329,68 @@ test('already-committed task skips duplicate commit and proceeds directly to fin
 
   const result = finalizeTaskWorkspace(f.state, { taskId: f.task.id, workspaceId: f.workspace.workspaceId, checks });
   assert.equal(result.status, 'completed', JSON.stringify(result));
+});
+
+test('evidence-recorded finalization resumes after the originating execution is cancelled and replay stays idempotent', () => {
+  const f = preparedFinalizationFixture('cancelled-execution-resume');
+  __setTaskFinalizationFaultBoundaryForTests('after-evidence');
+  let interrupted: any;
+  try {
+    interrupted = finalizeTaskWorkspace(f.state, { taskId: f.task.id, workspaceId: f.workspace.workspaceId, checks });
+  } finally {
+    __setTaskFinalizationFaultBoundaryForTests(null);
+  }
+  assert.equal(interrupted.status, 'continuation', JSON.stringify(interrupted));
+  assert.equal(interrupted.operation?.phase, 'evidence-recorded');
+  cancelExecutionSession(f.execution.id);
+
+  const resumed = finalizeTaskWorkspace(f.state, {
+    taskId: f.task.id,
+    workspaceId: f.workspace.workspaceId,
+    operationId: interrupted.operation.id,
+  });
+  assert.equal(resumed.status, 'completed', JSON.stringify(resumed));
+  assert.equal(resumed.operation?.id, interrupted.operation.id);
+  assert.equal(getTask(f.task.id)?.status, 'done');
+
+  const replay = finalizeTaskWorkspace(f.state, {
+    taskId: f.task.id,
+    workspaceId: f.workspace.workspaceId,
+    operationId: interrupted.operation.id,
+  });
+  assert.equal(replay.status, 'completed');
+  assert.equal(replay.operation?.id, interrupted.operation.id);
+});
+
+test('frozen finalization retry fails closed when a replacement execution supersedes the cancelled origin', () => {
+  const f = preparedFinalizationFixture('cancelled-execution-superseded');
+  __setTaskFinalizationFaultBoundaryForTests('after-evidence');
+  let interrupted: any;
+  try {
+    interrupted = finalizeTaskWorkspace(f.state, { taskId: f.task.id, workspaceId: f.workspace.workspaceId, checks });
+  } finally {
+    __setTaskFinalizationFaultBoundaryForTests(null);
+  }
+  cancelExecutionSession(f.execution.id);
+  const replacement = createExecutionSession({
+    projectId: f.task.projectId,
+    taskId: f.task.id,
+    workspaceId: f.workspace.workspaceId,
+    branch: f.workspace.branch,
+    repoRoot: f.workspace.root,
+  });
+  try {
+    assert.throws(
+      () => finalizeTaskWorkspace(f.state, {
+        taskId: f.task.id,
+        workspaceId: f.workspace.workspaceId,
+        operationId: interrupted.operation.id,
+      }),
+      (error: any) => error?.code === 'FINALIZATION_OPERATION_SUPERSEDED_BY_EXECUTION',
+    );
+  } finally {
+    cancelExecutionSession(replacement.id);
+  }
 });
 
 test('detached finalization consumes exact already-integrated evidence and skips cleanup when the workspace root is unavailable', () => {

@@ -2,6 +2,14 @@ import { createHash } from 'node:crypto';
 import type { AppState } from '../types';
 import { getProject } from '../repositories/projectRepository.js';
 import { getTaskByIdentifier, getTasks, getTasksByProjectId } from '../repositories/taskRepository.js';
+import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
+import {
+  getLatestTaskFinalizationOperation,
+  getTaskFinalizationOperation,
+  type TaskFinalizationOperationRecord,
+} from '../repositories/taskFinalizationOperationRepository.js';
+import { getSessionWorkspaceMetadataForRecovery } from './sessionWorkspaceService.js';
+import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 import { createApiError } from './api.js';
 import { reconcileExecutionLifecycleStage } from './executionLifecycleReconciliationService.js';
 import { getProjectRulesContext } from './projectRulesService.js';
@@ -16,6 +24,7 @@ import {
 import {
   getTaskExecutionMutationBinding,
   getExecutionOwnershipState,
+  getExecutionSessionOwnershipEpoch,
   getExecutionSessionState,
   getExecutionVerificationBatchLiveOperations,
   getExecutionVerificationBatchState,
@@ -255,6 +264,98 @@ function resolveTaskWithoutBinding(args: Record<string, any>) {
   const taskId = boundedString(args?.taskId);
   return taskId ? getTaskByIdentifier(taskId, 'full') : undefined;
 }
+function assertDurableFinalizationResumeGuard(args: Record<string, any>): TaskFinalizationOperationRecord | null {
+  const operationId = boundedString(args?.operationId);
+  if (!operationId) return null;
+  const taskId = boundedString(args?.taskId);
+  const workspaceId = boundedString(args?.workspaceId);
+  if (!taskId || !workspaceId) {
+    throw createApiError(409, 'FINALIZATION_RESUME_IDENTITY_REQUIRED', 'Exact durable finalization resume requires taskId, workspaceId, and operationId.');
+  }
+  const task = getTaskByIdentifier(taskId, 'full');
+  if (!task) throw createApiError(404, 'TASK_NOT_FOUND', `Task '${taskId}' was not found.`, { affectedId: taskId });
+  const operation = getTaskFinalizationOperation(operationId);
+  if (!operation) {
+    throw createApiError(404, 'FINALIZATION_OPERATION_NOT_FOUND', `Finalization operation '${operationId}' was not found.`, { affectedId: operationId });
+  }
+  if (operation.taskId !== task.id || operation.projectId !== task.projectId || operation.workspaceId !== workspaceId) {
+    throw createApiError(409, 'FINALIZATION_OPERATION_SELECTOR_MISMATCH', 'Requested finalization operation does not match the selected task/workspace.', {
+      affectedId: operation.id,
+      details: { operationTaskId: operation.taskId, taskId: task.id, operationWorkspaceId: operation.workspaceId, workspaceId },
+    });
+  }
+  if (operation.status === 'completed') return operation;
+
+  const taskBranch = boundedString(task.branch);
+  if (taskBranch && taskBranch !== operation.baseBranch) {
+    throw createApiError(409, 'TASK_WORKSPACE_BRANCH_AUTHORITY_MISMATCH', `Task '${task.displayId || task.id}' targets '${taskBranch}', but finalization is frozen to '${operation.baseBranch}'.`, {
+      affectedId: task.id,
+      details: { taskBranch, workspaceBaseBranch: operation.baseBranch, workspaceId },
+    });
+  }
+  const latest = getLatestTaskFinalizationOperation(task.id, workspaceId);
+  if (latest && latest.id !== operation.id && latest.status !== 'completed') {
+    throw createApiError(409, 'FINALIZATION_OPERATION_IDENTITY_CHANGED', 'Another incomplete finalization operation supersedes the requested frozen operation.', {
+      affectedId: latest.id,
+      details: { existingOperationId: latest.id, requestedOperationId: operation.id },
+    });
+  }
+
+  const sessions = listExecutionSessionsForTask(task.id);
+  const sourceExecution = operation.executionSessionId
+    ? sessions.find((entry) => entry.id === operation.executionSessionId) || null
+    : null;
+  if (operation.executionSessionId && (!sourceExecution
+    || sourceExecution.taskId !== task.id
+    || sourceExecution.projectId !== task.projectId
+    || sourceExecution.workspaceId !== workspaceId)) {
+    throw createApiError(409, 'FINALIZATION_OPERATION_EXECUTION_MISMATCH', 'Frozen finalization execution identity no longer matches the selected task/workspace.', {
+      affectedId: operation.id,
+      details: { executionSessionId: operation.executionSessionId, workspaceId },
+    });
+  }
+  if (operation.ownershipEpochId && sourceExecution) {
+    const observedEpoch = getExecutionSessionOwnershipEpoch(sourceExecution.id).ownershipEpochId;
+    if (observedEpoch !== operation.ownershipEpochId) {
+      throw createApiError(409, 'FINALIZATION_OPERATION_OWNERSHIP_MISMATCH', 'Frozen finalization ownership epoch no longer matches the originating execution.', {
+        affectedId: operation.id,
+        details: { expectedOwnershipEpochId: operation.ownershipEpochId, observedOwnershipEpochId: observedEpoch },
+      });
+    }
+  }
+  const conflictingActive = sessions.filter((entry) => entry.status === 'active' && entry.id !== operation.executionSessionId);
+  if (conflictingActive.length > 0) {
+    throw createApiError(409, 'FINALIZATION_OPERATION_SUPERSEDED_BY_EXECUTION', 'A live execution supersedes the frozen finalization authority.', {
+      affectedId: operation.id,
+      details: { executionSessionIds: conflictingActive.map((entry) => entry.id), workspaceId },
+    });
+  }
+
+  const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId);
+  if (metadata) {
+    if (metadata.projectId !== operation.projectId || metadata.baseBranch !== operation.baseBranch) {
+      throw createApiError(409, 'FINALIZATION_OPERATION_WORKSPACE_MISMATCH', 'Finalization workspace/project/base binding changed after the operation was frozen.', {
+        affectedId: operation.id,
+        details: { workspaceId, baseBranch: operation.baseBranch },
+      });
+    }
+    const inspection = inspectWorkspaceRecovery(workspaceId);
+    if (inspection.dirtyFiles.length > 0) {
+      throw createApiError(409, 'FINALIZATION_OPERATION_WORKSPACE_DIRTY', 'Frozen finalization cannot resume while the managed workspace has dirty files.', {
+        affectedId: operation.id,
+        details: { workspaceId, dirtyFiles: inspection.dirtyFiles },
+      });
+    }
+    const observedSourceHead = String(inspection.sourceHead || '').trim();
+    if (operation.phase === 'frozen' && observedSourceHead && observedSourceHead !== operation.sourceHead) {
+      throw createApiError(409, 'FINALIZATION_OPERATION_SOURCE_CHANGED', 'Workspace source HEAD changed after finalization identity was frozen.', {
+        affectedId: operation.id,
+        details: { expectedSourceHead: operation.sourceHead, observedSourceHead },
+      });
+    }
+  }
+  return operation;
+}
 
 function buildPolicyInput(toolName: string, args: Record<string, any>, binding: ReturnType<typeof getTaskExecutionMutationBinding> | null): HarnessPolicyInput {
   const task = binding?.task || resolveTaskWithoutBinding(args);
@@ -385,12 +486,23 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
     || boundedString(args?.harnessPolicyFingerprint)
     || boundedString(args?.harnessOperationId),
   );
+  let durableFinalizationResume: TaskFinalizationOperationRecord | null = null;
+  if (toolName === 'finalize_task_workspace' && boundedString(args?.operationId)) {
+    try {
+      durableFinalizationResume = assertDurableFinalizationResumeGuard(args);
+    } catch (error: any) {
+      const policy = evaluateHarnessPolicy(buildPolicyInput(toolName, args, null));
+      return blockedDecision(toolName, action, operationId, policy, null, error?.payload?.code || error?.code || 'FINALIZATION_RESUME_AUTHORITY_REQUIRED', [String(error?.message || 'Frozen finalization resume authority could not be proven.')]);
+    }
+  }
   let binding: ReturnType<typeof getTaskExecutionMutationBinding> | null = null;
   try {
     binding = getTaskExecutionMutationBinding(args);
   } catch (error: any) {
-    const policy = evaluateHarnessPolicy(buildPolicyInput(toolName, args, null));
-    return blockedDecision(toolName, action, operationId, policy, null, error?.code || 'EXECUTION_BINDING_REQUIRED', [String(error?.message || 'Execution binding could not be proven.')]);
+    if (!durableFinalizationResume) {
+      const policy = evaluateHarnessPolicy(buildPolicyInput(toolName, args, null));
+      return blockedDecision(toolName, action, operationId, policy, null, error?.code || 'EXECUTION_BINDING_REQUIRED', [String(error?.message || 'Execution binding could not be proven.')]);
+    }
   }
 
   if (action !== 'restart' && !binding && !explicitExecutionIntent) {
@@ -437,7 +549,7 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
       recovery,
     );
   }
-  if (action !== 'restart' && !binding) {
+  if (action !== 'restart' && !binding && !durableFinalizationResume) {
     return blockedDecision(toolName, action, operationId, policy, null, 'MANAGED_WORKSPACE_REQUIRED', ['Lifecycle-affecting execution requires an actively claimed task-bound managed workspace.']);
   }
   if (binding && !pathsLookSafe(args)) {
@@ -507,7 +619,7 @@ export function preflightHarnessExecutionGuard(_state: AppState, toolNameValue: 
     action,
     effects,
     toolName,
-    reasonCode: 'HARNESS_EXECUTION_ALLOWED',
+    reasonCode: durableFinalizationResume && !binding ? 'HARNESS_DURABLE_FINALIZATION_RESUME_ALLOWED' : 'HARNESS_EXECUTION_ALLOWED',
     guidance,
     policy: compactPolicy(policy),
     execution: executionIdentity(binding),

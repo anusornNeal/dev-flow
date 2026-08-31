@@ -5,6 +5,7 @@ import { getProject } from '../repositories/projectRepository.js';
 import { listExecutionSessionsForTask } from '../repositories/executionSessionRepository.js';
 import {
   createTaskFinalizationOperation,
+  getLatestTaskFinalizationOperation,
   getTaskFinalizationOperation,
   updateTaskFinalizationOperation,
   type TaskFinalizationOperationRecord,
@@ -341,14 +342,53 @@ export function assertOperationStillBound(
   task: any,
   metadata: ReturnType<typeof getSessionWorkspaceMetadataForRecovery>,
 ) {
-  assertTaskFinalizationBranchAuthority(task, operation.baseBranch, operation.workspaceId);
-
   if (operation.taskId !== task.id || operation.projectId !== task.projectId) {
     throw createApiError(409, 'FINALIZATION_OPERATION_TASK_MISMATCH', 'Finalization operation is bound to another task/project.', {
       affectedId: operation.id,
       details: { operationTaskId: operation.taskId, taskId: task.id },
     });
   }
+  if (operation.status === 'completed') return;
+
+  assertTaskFinalizationBranchAuthority(task, operation.baseBranch, operation.workspaceId);
+  const latest = getLatestTaskFinalizationOperation(task.id, operation.workspaceId);
+  if (latest && latest.id !== operation.id && latest.status !== 'completed') {
+    throw createApiError(409, 'FINALIZATION_OPERATION_IDENTITY_CHANGED', 'Another incomplete finalization operation supersedes the requested frozen operation.', {
+      affectedId: latest.id,
+      details: { existingOperationId: latest.id, requestedOperationId: operation.id },
+    });
+  }
+
+  const sessions = listExecutionSessionsForTask(task.id);
+  const sourceExecution = operation.executionSessionId
+    ? sessions.find((entry) => entry.id === operation.executionSessionId) || null
+    : null;
+  if (operation.executionSessionId && (!sourceExecution
+    || sourceExecution.taskId !== task.id
+    || sourceExecution.projectId !== task.projectId
+    || sourceExecution.workspaceId !== operation.workspaceId)) {
+    throw createApiError(409, 'FINALIZATION_OPERATION_EXECUTION_MISMATCH', 'Frozen finalization execution identity no longer matches the selected task/workspace.', {
+      affectedId: operation.id,
+      details: { executionSessionId: operation.executionSessionId, workspaceId: operation.workspaceId },
+    });
+  }
+  if (operation.ownershipEpochId && sourceExecution) {
+    const observedEpoch = getExecutionSessionOwnershipEpoch(sourceExecution.id).ownershipEpochId;
+    if (observedEpoch !== operation.ownershipEpochId) {
+      throw createApiError(409, 'FINALIZATION_OPERATION_OWNERSHIP_MISMATCH', 'Frozen finalization ownership epoch no longer matches the originating execution.', {
+        affectedId: operation.id,
+        details: { expectedOwnershipEpochId: operation.ownershipEpochId, observedOwnershipEpochId: observedEpoch },
+      });
+    }
+  }
+  const conflictingActive = sessions.filter((entry) => entry.status === 'active' && entry.id !== operation.executionSessionId);
+  if (conflictingActive.length > 0) {
+    throw createApiError(409, 'FINALIZATION_OPERATION_SUPERSEDED_BY_EXECUTION', 'A live execution supersedes the frozen finalization authority.', {
+      affectedId: operation.id,
+      details: { executionSessionIds: conflictingActive.map((entry) => entry.id), workspaceId: operation.workspaceId },
+    });
+  }
+
   if (metadata) {
     if (metadata.projectId !== operation.projectId || metadata.baseBranch !== operation.baseBranch) {
       throw createApiError(
@@ -361,8 +401,14 @@ export function assertOperationStillBound(
         },
       );
     }
+    const inspection = inspectWorkspaceRecovery(operation.workspaceId);
+    if (inspection.dirtyFiles.length > 0) {
+      throw createApiError(409, 'FINALIZATION_OPERATION_WORKSPACE_DIRTY', 'Frozen finalization cannot resume while the managed workspace has dirty files.', {
+        affectedId: operation.id,
+        details: { workspaceId: operation.workspaceId, dirtyFiles: inspection.dirtyFiles },
+      });
+    }
     if (operation.phase === 'frozen') {
-      const inspection = inspectWorkspaceRecovery(operation.workspaceId);
       const observedSourceHead = String(inspection.sourceHead || '').trim();
       if (observedSourceHead && observedSourceHead !== operation.sourceHead) {
         const project = getProject(operation.projectId);

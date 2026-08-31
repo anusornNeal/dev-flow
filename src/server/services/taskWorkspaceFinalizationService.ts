@@ -347,9 +347,10 @@ export function finalizeTaskWorkspace(_state: AppState, input: TaskWorkspaceFina
         return operationContinuation(_state, operation, 'POST_INTEGRATION_FINALIZATION_REQUIRED', 'Finalization authority was frozen durably; retry the same operation.', { task });
       }
     } else {
-      operation = updateOperation(operation, { retryCount: operation.retryCount + 1, failure: null });
       assertOperationStillBound(operation, task, isDetachedIntegratedOperation(operation) ? null : getSessionWorkspaceMetadataForRecovery(workspaceId));
-    }    if (effectiveCompletedChecklistIds.length > 0) {
+      operation = updateOperation(operation, { retryCount: operation.retryCount + 1, failure: null });
+    }
+    if (effectiveCompletedChecklistIds.length > 0) {
       const persistedTaskProjection = projectChecklistCompletion(task, effectiveCompletedChecklistIds);
       const checklistChanged = Array.isArray(task.checklist) && Array.isArray(persistedTaskProjection.checklist)
         && task.checklist.some((item: any, index: number) => Boolean(item?.completed) !== Boolean(persistedTaskProjection.checklist[index]?.completed));

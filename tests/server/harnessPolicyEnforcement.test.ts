@@ -14,12 +14,14 @@ executeAllMigrations();
 const { createProject } = await import('../../src/server/repositories/projectRepository.js');
 const { saveTask } = await import('../../src/server/repositories/taskRepository.js');
 const { claimTaskForSession, releaseTaskClaim } = await import('../../src/server/services/taskClaimService.js');
-const { cleanupSessionWorkspace, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
+const { cleanupSessionWorkspace, getSessionWorkspaceMetadataForRecovery, resetSessionWorkspaceRuntimeForTests } = await import('../../src/server/services/sessionWorkspaceService.js');
 const executionSessions = await import('../../src/server/services/executionSessionService.js');
 const { reconcileExecutionLifecycleStage } = await import('../../src/server/services/executionLifecycleReconciliationService.js');
 const { assertHarnessExecutionAllowed, getHarnessExecutionEffects, preflightHarnessExecutionGuard, recordHarnessExecutionOutcome } = await import('../../src/server/services/harnessExecutionGuardService.js');
 const { getBuiltinToolJobRecoveryPolicy } = await import('../../src/server/services/mcpToolJobRunnerRegistry.js');
 const { finalizeTaskWorkspace } = await import('../../src/server/services/taskWorkspaceFinalizationService.js');
+const { createTaskFinalizationOperation } = await import('../../src/server/repositories/taskFinalizationOperationRepository.js');
+const { evaluateExecutionContinuation } = await import('../../src/server/services/executionContinuationService.js');
 
 function git(root: string, args: string[]) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
@@ -49,6 +51,78 @@ test('lightweight reads bypass the lifecycle guard', () => {
   assert.equal(decision.allowed, true);
   assert.equal(decision.reasonCode, 'LIGHTWEIGHT_UNGUARDED');
   assert.equal(decision.policy, null);
+});
+
+test('exact durable finalization retry survives execution cancellation without relaxing new finalization binding', () => {
+  resetSessionWorkspaceRuntimeForTests();
+  const repoRoot = createRepo('durable-finalization-resume');
+  const project = { id: 'project-harness-durable-finalization', name: 'Harness Durable Finalization', repoUrl: 'https://example.com/harness-durable-finalization', localPath: repoRoot };
+  createProject(project);
+  const now = new Date().toISOString();
+  const task = {
+    id: 'task-harness-durable-finalization', displayId: 'DVF-HARNESS-DURABLE', title: 'Durable finalization resume fixture',
+    description: 'Frozen finalization authority outlives the originating execution session.', projectId: project.id,
+    status: 'todo', priority: 'high', category: 'backend', tags: [], targetFiles: ['value.txt'],
+    checklist: [], logs: [], bugs: [], images: [], createdAt: now, updatedAt: now,
+  } as any;
+  saveTask(task);
+  const state = { projectsCache: [project], countersCache: {}, skillsRegistry: [] } as any;
+  const claimSessionId = 'harness-durable-resume-session';
+  const claimed = claimTaskForSession(task.id, { sessionId: claimSessionId, ownerKind: 'chat', ownerLabel: 'Durable resume' });
+  const workspaceId = claimed.claim.workspaceId;
+  const session = executionSessions.getActiveTaskExecutionSessionForWorkspace(workspaceId)!;
+  const metadata = getSessionWorkspaceMetadataForRecovery(workspaceId)!;
+  const ownershipEpochId = executionSessions.getExecutionSessionOwnershipEpoch(session.id).ownershipEpochId;
+  const operation = createTaskFinalizationOperation({
+    id: 'finalize-harness-durable-resume',
+    projectId: project.id,
+    taskId: task.id,
+    workspaceId,
+    executionSessionId: session.id,
+    ownershipEpochId,
+    sourceHead: git(metadata.root, ['rev-parse', 'HEAD']),
+    baseRevision: metadata.baseRevision,
+    baseBranch: metadata.baseBranch,
+    candidateId: null,
+    candidateRepoRevision: null,
+    ownedFingerprint: null,
+    phase: 'evidence-recorded',
+    status: 'active',
+    verification: { submittedChecks: [], completedChecklistIds: [] },
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  executionSessions.cancelExecutionSession(session.id);
+  const continuation = evaluateExecutionContinuation(state, session.id, {
+    workspaceId,
+    repoRoot: metadata.root,
+    boardLoopRequested: true,
+  });
+  assert.equal(continuation.nextAction?.action, 'retry-finalization');
+  assert.equal((continuation.nextAction as any)?.operationId, operation.id);
+  assert.equal(continuation.blocked, false);
+  try {
+    const newFinalization = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id });
+    assert.equal(newFinalization.allowed, false, 'new finalization still requires live execution binding');
+
+    const retry = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id, operationId: operation.id });
+    assert.equal(retry.allowed, true);
+    assert.equal(retry.execution, null);
+    assert.equal(retry.reasonCode, 'HARNESS_DURABLE_FINALIZATION_RESUME_ALLOWED');
+
+    const replacement = executionSessions.createExecutionSession({ projectId: project.id, taskId: task.id, workspaceId, branch: metadata.branch, repoRoot: metadata.root });
+    try {
+      const superseded = preflightHarnessExecutionGuard(state, 'finalize_task_workspace', { workspaceId, taskId: task.id, operationId: operation.id });
+      assert.equal(superseded.allowed, false);
+      assert.equal(superseded.reasonCode, 'FINALIZATION_OPERATION_SUPERSEDED_BY_EXECUTION');
+    } finally {
+      executionSessions.cancelExecutionSession(replacement.id);
+    }
+  } finally {
+    releaseTaskClaim(task.id, { sessionId: claimSessionId, nextStatus: 'todo' });
+    cleanupSessionWorkspace(workspaceId);
+  }
 });
 
 test('execution guard composes policy, ownership, lifecycle, retry identity, and restart safety', () => {

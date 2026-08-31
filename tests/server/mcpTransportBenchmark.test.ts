@@ -40,7 +40,8 @@ test('transport benchmark returns machine-readable cold/warm MCP and SSE metrics
   }
 
   assert.equal(result.comparison.baseline, 'streamableHttpBaseline');
-  assert.equal(result.comparison.candidate, 'streamableHttp');
+  assert.equal(result.comparison.candidate, 'streamableHttp');  assert.deepEqual(result.protocols.streamableHttpBaseline.asyncWorkloads, [], 'stateless latency baseline should not repeat async delay workloads');
+
   assert.equal(typeof result.comparison.warm.callTool.p50DeltaMs, 'number');
   assert.equal(typeof result.comparison.warm.callTool.p95DeltaMs, 'number');
   assert.equal(result.fallbackComparison.baseline, 'legacySse');

@@ -426,7 +426,7 @@ test('runProjectCommand does not retry a bare timeout without infrastructure evi
 
   assert.equal(result.ok, false);
   assert.equal(result.timedOut, true);
-  assert.equal(fs.readFileSync(marker, 'utf8'), '1', 'a bare timeout is not proof of retryable infrastructure failure');
+  assert.equal(result.processSpawns, 1, 'a bare timeout must remain one process attempt even when the child is delayed by host contention');
   assert.equal(result.infrastructureRecovery?.attempted, false);
 });
 

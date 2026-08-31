@@ -96,6 +96,23 @@ async function measure<T>(operation: () => Promise<T>) {
   return { value, durationMs: performance.now() - startedAt };
 }
 
+export async function runAsyncBenchmarkWorkloads(durations: readonly number[], call: (durationMs: number) => Promise<any>) {
+  return Promise.all(durations.map(async (durationMs) => {
+    const asyncCall = await measure(() => call(durationMs));
+    const structured = (asyncCall.value as any)?.structuredContent;
+    const completedWithoutFollowUp = structured?.completedAfterMs === durationMs;
+    return { durationMs, endToEndMs: round(asyncCall.durationMs), completedWithoutFollowUp, completionMode: completedWithoutFollowUp ? 'request-stream' as const : 'durable-handoff' as const };
+  }));
+}
+
+export async function runConcurrentAsyncProtocolPhases<TStreamable, TSse>(
+  runStreamableHttp: () => Promise<TStreamable>,
+  runLegacySse: () => Promise<TSse>,
+) {
+  const [streamableHttp, legacySse] = await Promise.all([runStreamableHttp(), runLegacySse()]);
+  return { streamableHttp, legacySse };
+}
+
 function positiveSampleCount(value: number | undefined, fallback: number, label: string) {
   const resolved = value ?? fallback;
   if (!Number.isInteger(resolved) || resolved <= 0 || resolved > 1000) {
@@ -351,6 +368,24 @@ async function startBenchmarkServer() {
   };
 }
 
+async function benchmarkAsyncProtocol(transport: 'streamable-http' | 'legacy-sse') {
+  const fixture = await startBenchmarkServer();
+  const createClient = transport === 'streamable-http' ? streamableClient : sseClient;
+  const current = createClient(fixture.baseUrl, `async-${transport}`);
+  try {
+    await current.client.connect(current.transport);
+    await current.client.listTools();
+    await current.client.callTool({ name: BENCHMARK_TOOL_NAME, arguments: BENCHMARK_TOOL_ARGS });
+    return await runAsyncBenchmarkWorkloads(ASYNC_BENCHMARK_DURATIONS_MS, (durationMs) => current.client.callTool({
+      name: 'run_project_command',
+      arguments: { projectId: 'benchmark-project', command: `benchmark-delay-${durationMs}` },
+    }));
+  } finally {
+    await current.client.close().catch(() => {});
+    await fixture.close();
+  }
+}
+
 function streamableClient(baseUrl: string, label: string) {
   const client = new Client({ name: `benchmark-mcp-${label}`, version: '1.0.0' });
   const transport = new StreamableHTTPClientTransport(new URL('/mcp', baseUrl));
@@ -416,20 +451,6 @@ async function benchmarkProtocol(
       const called = await measure(() => warm.client.callTool({ name: BENCHMARK_TOOL_NAME, arguments: BENCHMARK_TOOL_ARGS }));
       warmCallSamples.push(called.durationMs);
       callPayload ??= called.value;
-    }
-    for (const durationMs of ASYNC_BENCHMARK_DURATIONS_MS) {
-      const asyncCall = await measure(() => warm.client.callTool({
-        name: 'run_project_command',
-        arguments: { projectId: 'benchmark-project', command: `benchmark-delay-${durationMs}` },
-      }));
-      const structured = (asyncCall.value as any)?.structuredContent;
-      const completedWithoutFollowUp = structured?.completedAfterMs === durationMs;
-      asyncWorkloads.push({
-        durationMs,
-        endToEndMs: round(asyncCall.durationMs),
-        completedWithoutFollowUp,
-        completionMode: completedWithoutFollowUp ? 'request-stream' : 'durable-handoff',
-      });
     }
   } finally {
     await warm.client.close().catch(() => {});
@@ -501,8 +522,14 @@ export async function runMcpTransportBenchmark(options: BenchmarkOptions = {}) {
 
   try {
     const streamableHttpBaseline = await benchmarkProtocol(fixture.baseUrl, 'streamable-http-stateless-baseline', coldSamples, warmSamples);
-    const streamableHttp = await benchmarkProtocol(fixture.baseUrl, 'streamable-http', coldSamples, warmSamples);
-    const legacySse = await benchmarkProtocol(fixture.baseUrl, 'legacy-sse', coldSamples, warmSamples);
+    const streamableHttpSync = await benchmarkProtocol(fixture.baseUrl, 'streamable-http', coldSamples, warmSamples);
+    const legacySseSync = await benchmarkProtocol(fixture.baseUrl, 'legacy-sse', coldSamples, warmSamples);
+    const asyncPhases = await runConcurrentAsyncProtocolPhases(
+      () => benchmarkAsyncProtocol('streamable-http'),
+      () => benchmarkAsyncProtocol('legacy-sse'),
+    );
+    const streamableHttp = { ...streamableHttpSync, asyncWorkloads: asyncPhases.streamableHttp };
+    const legacySse = { ...legacySseSync, asyncWorkloads: asyncPhases.legacySse };
     const warmListBudget = warmRegressionBudget(streamableHttp.warm.listTools, streamableHttpBaseline.warm.listTools);
     const warmCallBudget = warmRegressionBudget(streamableHttp.warm.callTool, streamableHttpBaseline.warm.callTool);
     const sseSyncAttempts = [userExperienceBudget(

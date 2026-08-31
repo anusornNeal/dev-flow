@@ -18,7 +18,7 @@
     "test": "tsx scripts/verify.ts",
     "test:agent-runs": "tsx scripts/verify-agent-runs.ts",
     "test:absolute-paths": "tsx scripts/verify-absolute-paths.ts",
-    "test:gateway": "tsx tests/server/jiraAuthoringBundle.test.ts && tsx tests/server/compositeAuthoringService.test.ts && tsx tests/server/lockAndIdempotency.test.ts && tsx tests/server/adversarialLockAndIdempotency.test.ts",
+    "test:gateway": "tsx --test --test-concurrency=1 tests/server/jiraAuthoringBundle.test.ts tests/server/compositeAuthoringService.test.ts tests/server/lockAndIdempotency.test.ts tests/server/adversarialLockAndIdempotency.test.ts",
     "test:settings-security": "tsx --test tests/server/settingsSecurity.test.ts",
     "test:backup-integrity": "tsx --test tests/server/backupIntegrity.test.ts",
     "test:context-budget": "tsx --test tests/server/contextBudgetPlanner.test.ts && tsx --test tests/server/projectStartContext.test.ts && tsx --test tests/server/repoInspectionIndex.test.ts",

@@ -7,6 +7,7 @@ import db from '../../db/index';
 import { getDevFlowDataDir, getDevFlowDbPath, resolveFromDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { getCredentialVaultDiagnostics } from '../services/credentialVaultService';
 import { createVerifiedBackupSnapshot, getRecoveryStatus, runLatestRestoreDrill, verifyBackupFile } from '../services/backupIntegrityService';
+import { stageDatabaseImport } from '../services/databaseImportService';
 
 function persistSettingsOrRespond(res: express.Response, settings: Partial<Parameters<typeof saveSettings>[0]>) {
   try {
@@ -154,6 +155,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
   });
 
   app.post('/api/import', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+    let tempFile = '';
     try {
       if (!Buffer.isBuffer(req.body)) {
         return res.status(400).json({ error: 'Invalid file payload' });
@@ -165,7 +167,7 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
       }
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const tempFile = path.join(dataDir, `devflow-import-temp-${timestamp}.db`);
+      tempFile = path.join(dataDir, `devflow-import-temp-${timestamp}.db`);
       const targetDbFile = getDevFlowDbPath();
 
       // 1. Save uploaded file to temp path
@@ -186,28 +188,23 @@ export function registerSettingsRoutes(app: express.Express, deps: ApiRouteDeps)
         safetyBackupPath = safetySnapshot.dbPath;
       }
 
-      // 4. Safely replace current DB
-      // Close active connection to release locks
-      try { db.close(); } catch (e) { /* ignore */ }
-      
-      fs.copyFileSync(tempFile, targetDbFile);
-      
-      // Remove stale WAL and SHM files
-      const walFile = targetDbFile + '-wal';
-      const shmFile = targetDbFile + '-shm';
-      if (fs.existsSync(walFile)) fs.unlinkSync(walFile);
-      if (fs.existsSync(shmFile)) fs.unlinkSync(shmFile);
-
-      // Clean up temp file
-      if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+      // 4. Stage the verified file and install it during the next startup.
+      // The current server remains on its live connection until it exits, so
+      // no old connection can recreate a WAL beside the imported main file.
+      const pendingPath = stageDatabaseImport({ sourcePath: tempFile, dataDir });
+      tempFile = '';
 
       res.json({
         success: true,
         restartRequired: true,
         safetyBackupPath,
-        counts
+        counts,
+        pendingPath,
       });
     } catch (error: any) {
+      if (tempFile && fs.existsSync(tempFile)) {
+        try { fs.unlinkSync(tempFile); } catch {}
+      }
       console.error('Import failed:', error);
       res.status(500).json({ error: error.message ?? 'Import failed' });
     }

@@ -10,6 +10,7 @@ import { initSkillsRepository } from './repositories/skillsRepository.js';
 import type { AppState } from './types.js';
 import { resolveFromDevFlowAppRoot } from '../lib/devFlowPaths.js';
 import { taskHasLifecycleOwnership } from './services/taskClaimService.js';
+import { applyPendingDatabaseImport } from './services/databaseImportService.js';
 
 export const AGENT_LOG_FILE = resolveFromDevFlowAppRoot('logs', 'agent-trigger.log');
 
@@ -68,6 +69,10 @@ export interface BootstrapResult {
 }
 
 export function bootstrap(): BootstrapResult {
+  const imported = applyPendingDatabaseImport();
+  if (imported) {
+    console.log(`[backup] Applied staged database import from ${imported.pendingPath}.`);
+  }
   executeAllMigrations();
   initSkillsRepository();
   const state = createAppState();

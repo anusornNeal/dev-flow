@@ -21,7 +21,7 @@ test('performance SLO evaluation flags a sampled p95 regression and keeps sparse
   assert.equal(result.dominant?.toolName, 'get_repo_context_bundle');
 });
 
-test('run_project_command evaluates orchestration overhead instead of legitimate command execution time', () => {test('inline local reads evaluate orchestration overhead when execution telemetry is available', () => {
+test('inline local reads evaluate orchestration overhead when execution telemetry is available', () => {
   const result = evaluatePerformanceSlo([
     {
       toolName: 'read_local_file',
@@ -43,7 +43,7 @@ test('run_project_command evaluates orchestration overhead instead of legitimate
   assert.equal(read.latencyBasis, 'orchestration-overhead');
 });
 
-
+test('run_project_command evaluates orchestration overhead instead of legitimate command execution time', () => {
   const result = evaluatePerformanceSlo([
     {
       toolName: 'run_project_command',

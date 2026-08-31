@@ -83,6 +83,29 @@ test('session lifecycle diagnostics expose bounded aggregate counts and timestam
   assert.doesNotMatch(JSON.stringify(summary.sessions), /sessionId|clientId|secret/i);
 });
 
+test('session lifecycle diagnostics distinguish explicit client termination without storing identifiers', () => {
+  clearMcpTransportRecords();
+  const now = 25_000;
+  recordMcpStreamableHttpSessionLifecycle({
+    kind: 'client-terminated',
+    timestamp: now,
+    activeSessions: 0,
+    idleSessions: 0,
+    correlationId: 'terminate-corr',
+    outcome: 'success',
+    statusCode: 200,
+  });
+
+  const summary = getMcpTransportSummary({ now: now + 10, windowMs: 1_000 });
+  assert.equal(summary.sessions.clientTerminated, 1);
+  const trace = queryMcpTransportTrace({ lifecycleEvent: 'client-terminated' });
+  assert.equal(trace.returned, 1);
+  assert.equal(trace.records[0].lifecycleEvent, 'client-terminated');
+  assert.equal(trace.records[0].outcome, 'success');
+  assert.equal(trace.records[0].statusCode, 200);
+  assert.doesNotMatch(JSON.stringify({ summary: summary.sessions, records: trace.records }), /sessionId|clientId|secret/i);
+});
+
 test('transport monitor retention is bounded', () => {
   clearMcpTransportRecords();
   for (let index = 0; index < 550; index += 1) {

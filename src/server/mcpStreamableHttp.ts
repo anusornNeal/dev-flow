@@ -23,6 +23,7 @@ export type McpStreamableHttpSessionLifecycleKind =
   | 'ttl-expired'
   | 'error-closed'
   | 'capacity-evicted'
+  | 'client-terminated'
   | 'stale-session-404';
 
 // Trace metadata intentionally excludes protocol session identifiers.
@@ -172,7 +173,7 @@ export function createReusableMcpHttpHandler(
 
   const closeSession = async (
     entry: SessionEntry,
-    reason: Extract<McpStreamableHttpSessionLifecycleKind, 'ttl-expired' | 'error-closed' | 'capacity-evicted'>,
+    reason: Extract<McpStreamableHttpSessionLifecycleKind, 'ttl-expired' | 'error-closed' | 'capacity-evicted' | 'client-terminated'>,
     requestHooks: McpStreamableHttpLifecycleHooks = hooks,
     traceMetadata: McpStreamableHttpLifecycleMetadata = {},
   ) => {
@@ -220,11 +221,11 @@ export function createReusableMcpHttpHandler(
 
   return async (req: any, res: any, next?: (error?: unknown) => void) => {
     const method = String(req.method || '').toUpperCase();
-    if (method !== 'POST' && method !== 'GET') {
-      res.setHeader('Allow', 'GET, POST');
+    if (method !== 'POST' && method !== 'GET' && method !== 'DELETE') {
+      res.setHeader('Allow', 'GET, POST, DELETE');
       return res.status(405).json({
         jsonrpc: '2.0',
-        error: { code: -32000, message: 'Method Not Allowed: DevFlow MCP accepts GET and POST requests.' },
+        error: { code: -32000, message: 'Method Not Allowed: DevFlow MCP accepts GET, POST, and DELETE requests.' },
         id: null,
       });
     }
@@ -254,12 +255,17 @@ export function createReusableMcpHttpHandler(
     await pruneIdleSessions(requestHooks, requestTraceContext);
     const requestedSessionId = requestSessionId(req);
     let entry = requestedSessionId ? sessions.get(requestedSessionId) : undefined;
-    if (method === 'GET' && !requestedSessionId) {
+    if ((method === 'GET' || method === 'DELETE') && !requestedSessionId) {
       res.status(400);
       finishRequestLifecycle('error', 400);
       return res.json({
         jsonrpc: '2.0',
-        error: { code: -32000, message: 'MCP session id is required to open the Streamable HTTP GET stream.' },
+        error: {
+          code: -32000,
+          message: method === 'DELETE'
+            ? 'MCP session id is required to terminate a Streamable HTTP session.'
+            : 'MCP session id is required to open the Streamable HTTP GET stream.',
+        },
         id: null,
       });
     }
@@ -272,6 +278,16 @@ export function createReusableMcpHttpHandler(
         error: { code: -32001, message: 'MCP session not found or expired. Reinitialize a fresh session.' },
         id: null,
       });
+    }
+    if (method === 'DELETE') {
+      await closeSession(entry!, 'client-terminated', requestHooks, {
+        ...requestTraceContext,
+        outcome: 'success',
+        statusCode: 200,
+      });
+      res.status(200);
+      finishRequestLifecycle('success', 200);
+      return res.end();
     }
 
     const isNewSession = !entry;

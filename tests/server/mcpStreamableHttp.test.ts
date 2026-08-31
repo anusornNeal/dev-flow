@@ -171,9 +171,28 @@ test('unsupported /mcp methods return 405 and advertise GET plus POST', async ()
   await withMcpServer(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/mcp`, { method: 'PUT' });
     assert.equal(response.status, 405);
-    assert.equal(response.headers.get('allow'), 'GET, POST');
+    assert.equal(response.headers.get('allow'), 'GET, POST, DELETE');
     await response.body?.cancel();
   });
+});
+
+test('DELETE /mcp requires a live session id and never creates replacement sessions', async () => {
+  const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];
+  await withMcpServer(async (baseUrl) => {
+    const missing = await fetch(`${baseUrl}/mcp`, { method: 'DELETE' });
+    assert.equal(missing.status, 400);
+    await missing.body?.cancel();
+
+    const stale = await fetch(`${baseUrl}/mcp`, {
+      method: 'DELETE',
+      headers: { 'mcp-session-id': randomUUID(), 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(stale.status, 404);
+    await stale.body?.cancel();
+
+    assert.equal(lifecycle.filter((event) => event.kind === 'created').length, 0);
+    assert.equal(lifecycle.filter((event) => event.kind === 'stale-session-404').length, 1);
+  }, undefined, { onSessionLifecycle: (event) => lifecycle.push(event) });
 });
 
 test('optional lifecycle timing hook keeps the active session open after initialize', async () => {
@@ -224,6 +243,45 @@ test('official Streamable HTTP client reuses one server session across list and 
       await client.close();
     }
   });
+});
+
+test('official Streamable HTTP client can explicitly terminate exactly its reusable server session', async () => {
+  const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];
+  const timing: Array<{ phase: string; durationMs: number; outcome: string }> = [];
+  await withMcpServer(async (baseUrl) => {
+    const { client, transport } = createClient(baseUrl, 'devflow-session-terminate');
+    await client.connect(transport);
+    await client.listTools();
+    const sessionId = String((transport as any).sessionId || '');
+    assert.match(sessionId, /^[0-9a-f-]{20,}$/i);
+
+    await transport.terminateSession();
+
+    const stale = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessionId,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'after-terminate', method: 'tools/list', params: {} }),
+    });
+    assert.equal(stale.status, 404);
+    await stale.body?.cancel();
+
+    const repeatedDelete = await fetch(`${baseUrl}/mcp`, {
+      method: 'DELETE',
+      headers: { 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(repeatedDelete.status, 404);
+    await repeatedDelete.body?.cancel();
+    await client.close();
+  }, { onTiming: (event) => timing.push(event) }, {
+    onSessionLifecycle: (event) => lifecycle.push(event),
+  });
+
+  assert.equal(lifecycle.filter((event) => event.kind === 'client-terminated').length, 1);
+  assert.equal(timing.filter((event) => event.phase === 'close').length, 1, 'explicit termination must close the transport at most once');
 });
 
 test('repeated calls reuse one MCP server and transport lifecycle for the active session', async () => {
@@ -467,6 +525,96 @@ test('capacity pressure evicts only eligible idle sessions and lifecycle telemet
     idleTtlMs: 60 * 60 * 1000,
     maxSessions: 2,
     now: () => fakeNow,
+    onSessionLifecycle: (event) => lifecycle.push(event),
+  });
+});
+
+test('explicit termination reclaims small-capacity sessions without avoidable capacity eviction', async () => {
+  const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];
+  const initialize = (baseUrl: string, index: number) => fetch(`${baseUrl}/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: `terminate-churn-${index}`, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: `terminate-churn-${index}`, version: '1.0.0' } },
+    }),
+  });
+
+  await withMcpServer(async (baseUrl) => {
+    for (let index = 0; index < 8; index += 1) {
+      const initialized = await initialize(baseUrl, index);
+      assert.equal(initialized.status, 200);
+      const sessionId = initialized.headers.get('mcp-session-id') || '';
+      assert.match(sessionId, /^[0-9a-f-]{20,}$/i);
+      await initialized.body?.cancel();
+
+      const used = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          'mcp-session-id': sessionId,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: `terminate-use-${index}`, method: 'tools/list', params: {} }),
+      });
+      assert.equal(used.status, 200);
+      await used.body?.cancel();
+
+      const terminated = await fetch(`${baseUrl}/mcp`, {
+        method: 'DELETE',
+        headers: { 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' },
+      });
+      assert.equal(terminated.status, 200);
+      await terminated.body?.cancel();
+    }
+  }, undefined, {
+    maxSessions: 2,
+    onSessionLifecycle: (event) => lifecycle.push(event),
+  });
+
+  assert.equal(lifecycle.filter((event) => event.kind === 'client-terminated').length, 8);
+  assert.equal(lifecycle.filter((event) => event.kind === 'capacity-evicted').length, 0);
+});
+
+test('capacity admission fails safely when every retained session is in flight', async () => {
+  const lifecycle: streamableHttpModule.McpStreamableHttpSessionLifecycleEvent[] = [];
+  const initialize = (baseUrl: string, name: string) => fetch(`${baseUrl}/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: name, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name, version: '1.0.0' } },
+    }),
+  });
+
+  await withMcpServer(async (baseUrl) => {
+    const first = await initialize(baseUrl, 'all-active-first');
+    const second = await initialize(baseUrl, 'all-active-second');
+    const firstId = first.headers.get('mcp-session-id') || '';
+    const secondId = second.headers.get('mcp-session-id') || '';
+    await first.body?.cancel();
+    await second.body?.cancel();
+
+    const firstStream = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', 'mcp-session-id': firstId, 'mcp-protocol-version': '2025-06-18' },
+    });
+    const secondStream = await fetch(`${baseUrl}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', 'mcp-session-id': secondId, 'mcp-protocol-version': '2025-06-18' },
+    });
+    assert.equal(firstStream.status, 200);
+    assert.equal(secondStream.status, 200);
+
+    const rejected = await initialize(baseUrl, 'all-active-third');
+    assert.equal(rejected.status, 503);
+    await rejected.body?.cancel();
+    assert.equal(lifecycle.filter((event) => event.kind === 'capacity-evicted').length, 0);
+
+    await firstStream.body?.cancel();
+    await secondStream.body?.cancel();
+  }, undefined, {
+    maxSessions: 2,
     onSessionLifecycle: (event) => lifecycle.push(event),
   });
 });

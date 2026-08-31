@@ -95,6 +95,7 @@ const sessionLifecycleDiagnostics = {
   ttlExpired: 0,
   errorClosed: 0,
   capacityEvicted: 0,
+  clientTerminated: 0,
   staleSession404: 0,
   lastMcpRequestAt: 0,
   lastLifecycleEventAt: 0,
@@ -109,6 +110,7 @@ const TRACE_LIFECYCLE_EVENTS = new Set<McpTransportTraceLifecycleEvent>([
   'ttl-expired',
   'error-closed',
   'capacity-evicted',
+  'client-terminated',
   'stale-session-404',
   'sse-connect',
   'sse-disconnect',
@@ -123,6 +125,7 @@ function resetSessionLifecycleDiagnostics() {
   sessionLifecycleDiagnostics.ttlExpired = 0;
   sessionLifecycleDiagnostics.errorClosed = 0;
   sessionLifecycleDiagnostics.capacityEvicted = 0;
+  sessionLifecycleDiagnostics.clientTerminated = 0;
   sessionLifecycleDiagnostics.staleSession404 = 0;
   sessionLifecycleDiagnostics.lastMcpRequestAt = 0;
   sessionLifecycleDiagnostics.lastLifecycleEventAt = 0;
@@ -231,6 +234,7 @@ export function recordMcpStreamableHttpSessionLifecycle(event: McpStreamableHttp
   if (event.kind === 'ttl-expired') sessionLifecycleDiagnostics.ttlExpired += 1;
   if (event.kind === 'error-closed') sessionLifecycleDiagnostics.errorClosed += 1;
   if (event.kind === 'capacity-evicted') sessionLifecycleDiagnostics.capacityEvicted += 1;
+  if (event.kind === 'client-terminated') sessionLifecycleDiagnostics.clientTerminated += 1;
   if (event.kind === 'stale-session-404') sessionLifecycleDiagnostics.staleSession404 += 1;
   const metadata = event as McpStreamableHttpSessionLifecycleEvent & {
     correlationId?: string | null;
@@ -574,6 +578,7 @@ export function getMcpTransportSummary(options?: { now?: number; windowMs?: numb
       ttlExpired: sessionLifecycleDiagnostics.ttlExpired,
       errorClosed: sessionLifecycleDiagnostics.errorClosed,
       capacityEvicted: sessionLifecycleDiagnostics.capacityEvicted,
+      clientTerminated: sessionLifecycleDiagnostics.clientTerminated,
       staleSession404: sessionLifecycleDiagnostics.staleSession404,
       lastMcpRequestAt: sessionLifecycleDiagnostics.lastMcpRequestAt > 0
         ? new Date(sessionLifecycleDiagnostics.lastMcpRequestAt).toISOString()

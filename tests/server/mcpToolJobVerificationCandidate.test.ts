@@ -54,6 +54,7 @@ function makeVerificationRepo(name: string) {
   const root = path.join(tempRoot, name);
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
   fs.writeFileSync(path.join(root, 'src', 'value.txt'), 'candidate-a\n', 'utf8');
   fs.writeFileSync(path.join(root, 'scripts', 'read.mjs'), [
     "import fs from 'node:fs';",
@@ -64,6 +65,14 @@ function makeVerificationRepo(name: string) {
     type: 'module',
     scripts: { test: 'node scripts/read.mjs' },
   }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
+    'commands:',
+    '  configured-check:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/read.mjs',
+    '',
+  ].join('\n'), 'utf8');
   git(root, ['init']);
   git(root, ['config', 'user.name', 'DevFlow Test']);
   git(root, ['config', 'user.email', 'devflow@example.com']);
@@ -143,8 +152,8 @@ async function waitUntil(predicate: () => boolean, message: string, timeoutMs = 
   assert.fail(message);
 }
 
-async function waitForStatus(jobId: string, status: string) {
-  await waitUntil(() => getToolJobStatus(jobId)?.status === status, `Expected ${jobId} to reach ${status}`);
+async function waitForStatus(jobId: string, status: string, timeoutMs = 8_000) {
+  await waitUntil(() => getToolJobStatus(jobId)?.status === status, `Expected ${jobId} to reach ${status}`, timeoutMs);
   return getToolJobStatus(jobId);
 }
 
@@ -188,6 +197,39 @@ test('fresh cached run_project_command completes durable job before candidate cr
   const result = readJobResult(job.jobId) as any;
   assert.equal(result?.result?.cache?.hit, true);
   assert.equal(result?.result?.processSpawns, 0);
+});
+
+test('task-bound default verification preset automatically binds a candidate before authoritative GREEN recording', async () => {
+  const fixture = makeTaskBoundVerificationFixture('task-default-verification');
+  const verify = enqueueToolJob(fixture.state, 'run_project_command', {
+    projectId: fixture.projectId,
+    workspaceId: fixture.workspace.workspaceId,
+    command: 'configured-check',
+    cacheResult: false,
+    forceFresh: true,
+    singleFlight: false,
+    verificationSeriesKey: `series-default-${randomUUID()}`,
+    verificationCandidateKey: 'default',
+    verificationGeneration: 1,
+    verificationEvidenceIntent: 'green',
+  }, 'repo-command');
+
+  await waitForStatus(verify.jobId, 'succeeded', 20_000);
+  const persisted = getJob(verify.jobId);
+  const candidateId = String(persisted?.args?.__verificationCandidate?.candidateId || '');
+  assert.match(candidateId, /^vc_[a-f0-9]{24}$/);
+  assert.equal(
+    persisted?.args?.__verificationCandidate?.executionIdentity?.key,
+    persisted?.args?.__projectCommandAdmissionIdentity?.key,
+  );
+  const result = readJobResult(verify.jobId) as any;
+  assert.equal(result?.result?.ok, true);
+  assert.equal(result?.result?.verificationBinding?.recorderAccepted, true);
+  assert.equal(result?.result?.verificationBinding?.authoritative, true);
+  assert.equal(result?.result?.verificationBinding?.verificationFresh, true);
+  assert.notEqual(result?.result?.verificationBinding?.reasonCode, 'EXECUTION_VERIFICATION_CANDIDATE_REQUIRED');
+  assert.equal(executionSessions.getExecutionOwnershipState(fixture.session.id, { repoRoot: fixture.workspace.root }).verificationFresh, true);
+  assert.equal(resolveVerificationCandidate(candidateId).candidateId, candidateId, 'reusable candidate stays available for compatible sequential checks');
 });
 
 test('task-bound current GREEN becomes authoritative only after execution freshness is bound', async () => {

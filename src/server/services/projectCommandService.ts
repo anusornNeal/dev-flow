@@ -669,7 +669,7 @@ function accessForResolvedCommand(resolvedCommand: ResolvedCommand): ProjectComm
   if (resolvedCommand.source === 'package-json') {
     return resolvedCommand.command === 'build' ? 'write' : 'verify';
   }
-  return resolvedCommand.category === 'test' ? 'verify' : 'write';
+  return resolvedCommand.category === 'build' ? 'write' : 'verify';
 }
 
 function verificationClassFor(scope: ProjectCommandScope, cost: ProjectCommandCost): ProjectCommandVerificationClass {

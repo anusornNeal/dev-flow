@@ -26,8 +26,34 @@ function fixture() {
   fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
   fs.writeFileSync(path.join(root, 'src', 'value.ts'), 'export const value = 1;\n');
-  fs.writeFileSync(path.join(root, 'scripts', 'green-a.mjs'), "await new Promise((r) => setTimeout(r, 800)); process.stdout.write('a passed\\n');\n");
-  fs.writeFileSync(path.join(root, 'scripts', 'green-b.mjs'), "await new Promise((r) => setTimeout(r, 800)); process.stderr.write('b failed\\n'); process.exit(2);\n");
+  fs.writeFileSync(path.join(root, 'scripts', 'green-a.mjs'), [
+    "import fs from 'node:fs';",
+    `const self = ${JSON.stringify(path.join(tempRoot, 'green-a.started'))};`,
+    `const peer = ${JSON.stringify(path.join(tempRoot, 'green-b.started'))};`,
+    `const done = ${JSON.stringify(path.join(tempRoot, 'green-a.done'))};`,
+    "fs.writeFileSync(self, 'started');",
+    "const deadline = Date.now() + 5_000;",
+    "while (!fs.existsSync(peer) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));",
+    "if (!fs.existsSync(peer)) { process.stderr.write('green-a did not overlap green-b\\n'); process.exit(9); }",
+    "fs.writeFileSync(done, 'done');",
+    "process.stdout.write('a passed\\n');",
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'scripts', 'green-b.mjs'), [
+    "import fs from 'node:fs';",
+    `const self = ${JSON.stringify(path.join(tempRoot, 'green-b.started'))};`,
+    `const peer = ${JSON.stringify(path.join(tempRoot, 'green-a.started'))};`,
+    `const peerDone = ${JSON.stringify(path.join(tempRoot, 'green-a.done'))};`,
+    "fs.writeFileSync(self, 'started');",
+    "const deadline = Date.now() + 5_000;",
+    "while (!fs.existsSync(peer) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));",
+    "if (!fs.existsSync(peer)) { process.stderr.write('green-b did not overlap green-a\\n'); process.exit(9); }",
+    "while (!fs.existsSync(peerDone) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));",
+    "if (!fs.existsSync(peerDone)) { process.stderr.write('green-a did not complete after overlap\\n'); process.exit(10); }",
+    "process.stderr.write('b failed\\n');",
+    "process.exit(2);",
+    '',
+  ].join('\n'));
   fs.writeFileSync(path.join(root, '.devflow', 'commands.yaml'), [
     'commands:',
     '  green-a:',
@@ -81,8 +107,8 @@ test('parallel GREEN joins every launched check against one frozen candidate bef
     1,
     'every GREEN command must run against one frozen candidate',
   );
-  const summedMs = result.verification.reduce((sum: number, entry: any) => sum + Number(entry.durationMs || 0), 0);
-  assert.equal(Number(result.verificationPerformance?.wallMs || 0) < summedMs * 0.8, true, 'independent checks should fan out materially faster than serial sum');
+  assert.equal(fs.existsSync(path.join(tempRoot, 'green-a.started')), true, 'green-a must start');
+  assert.equal(fs.existsSync(path.join(tempRoot, 'green-b.started')), true, 'green-b must start');
 });
 
 after(() => {

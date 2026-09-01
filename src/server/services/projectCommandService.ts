@@ -228,6 +228,7 @@ export interface RunProjectCommandResult {
     totalMs?: number;
   };
   status: CommandStatus;
+  failureClass?: 'product' | 'timeout' | 'infrastructure';
   command: string;
   cwd: string;
   exitCode: number | null;
@@ -1473,6 +1474,18 @@ export function isVerificationInfrastructureFailure(result: Pick<RunProjectComma
   return INFRASTRUCTURE_FAILURE_OUTPUT.test(`${result.stderr || ''}\n${result.stdout || ''}`.slice(0, 12_000));
 }
 
+function withVerificationFailureClass(result: RunProjectCommandResult): RunProjectCommandResult {
+  if (result.ok) return result;
+  return {
+    ...result,
+    failureClass: isVerificationInfrastructureFailure(result)
+      ? 'infrastructure'
+      : result.timedOut
+        ? 'timeout'
+        : 'product',
+  };
+}
+
 export function buildProjectCommandInfrastructureRecovery(state: AppState, args: Record<string, any>) {
   if (resolveInfrastructureRetryPolicy(args) !== 'resource-safe-once' || args.recoveryProfile) return null;
   const root = resolveProjectRoot(state, args);
@@ -1991,6 +2004,8 @@ function commandCacheContext(
     reusePolicy,
     ...(reusePolicy === 'exact-revision' ? { repoRevision: executionIdentity.repoRevision } : {}),
     semanticKey: executionIdentity.semanticKey,
+    coverageScope: scopeForResolvedCommand(root, resolvedCommand.command, resolvedCommand),
+    targets: [...(executionIdentity.targets || [])],
     commandConfigFingerprint: executionIdentity.commandConfigFingerprint || '',
     affectedInputFingerprint: executionIdentity.affectedInputFingerprint || '',
     dependencyFingerprint: executionIdentity.dependencyFingerprint || '',
@@ -2203,7 +2218,11 @@ export function runProjectCommand(state: AppState, args: Record<string, any>): R
     finalizedResult.status,
     timeoutMs,
   );
-  const completed = rememberSuccessfulCommandResult(cacheContext, { ...finalizedResult, resourceProfile }, args);
+  const completed = rememberSuccessfulCommandResult(
+    cacheContext,
+    withVerificationFailureClass({ ...finalizedResult, resourceProfile }),
+    args,
+  );
   if (!args.recoveryProfile && isVerificationInfrastructureFailure(completed)) {
     const recovery = buildProjectCommandInfrastructureRecovery(state, args);
     if (recovery) {
@@ -2493,7 +2512,10 @@ export async function runProjectCommandAsync(state: AppState, args: Record<strin
           },
         } : {}),
       }, sourceRoot, suppliedCandidate, executionIdentity);
-      resolve(attachNoInfrastructureRecoveryAudit(rememberSuccessfulCommandResult(cacheContext, candidateResult, args), args));
+      resolve(attachNoInfrastructureRecoveryAudit(
+        rememberSuccessfulCommandResult(cacheContext, withVerificationFailureClass(candidateResult), args),
+        args,
+      ));
     };
 
     timeoutId = setTimeout(() => {

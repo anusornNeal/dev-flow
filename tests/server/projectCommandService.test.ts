@@ -1265,6 +1265,91 @@ test('runProjectCommand automatically reuses deterministic static verification a
   assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
 });
 
+test('verification cache keeps coverage scope in the reusable evidence identity', () => {
+  const root = createConfigProject('coverage-scope-cache', [
+    'commands:',
+    '  focused:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/counter.mjs',
+    '    category: test',
+    '    reusePolicy: exact-revision',
+    '  broad:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/counter.mjs',
+    '    category: verification',
+    '    reusePolicy: exact-revision',
+    '',
+  ].join('\n'));
+  const counterPath = path.join(tempRoot, 'coverage-scope-cache-counter.txt');
+  fs.writeFileSync(path.join(root, 'scripts', 'counter.mjs'), [
+    "import fs from 'node:fs';",
+    `const counterPath = ${JSON.stringify(counterPath)};`,
+    "const next = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) + 1 : 1;",
+    "fs.writeFileSync(counterPath, String(next), 'utf8');",
+  ].join('\n'), 'utf8');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'coverage scope fixture']);
+
+  const state = stateFor(root);
+  const focusedDescriptor = describeProjectCommand(state, { projectId: 'project-command', command: 'focused' });
+  const broadDescriptor = describeProjectCommand(state, { projectId: 'project-command', command: 'broad' });
+  assert.equal(focusedDescriptor.semanticKey, broadDescriptor.semanticKey, 'fixture must isolate coverage scope from command semantics');
+  assert.equal(focusedDescriptor.scope, 'targeted');
+  assert.equal(broadDescriptor.scope, 'broad');
+
+  const focused = runProjectCommand(state, { projectId: 'project-command', command: 'focused' });
+  const broad = runProjectCommand(state, { projectId: 'project-command', command: 'broad' });
+
+  assert.equal(focused.cache?.hit, false);
+  assert.equal(broad.cache?.hit, false, 'targeted GREEN must not satisfy a broader coverage request');
+  assert.equal(broad.processSpawns, 1);
+  assert.equal(fs.readFileSync(counterPath, 'utf8'), '2');
+});
+
+test('verification failures expose product, timeout, and infrastructure classes without conflating them', () => {
+  const root = createConfigProject('verification-failure-classes', [
+    'commands:',
+    '  product-fail:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/product-fail.mjs',
+    '    category: test',
+    '  timeout-fail:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/timeout.mjs',
+    '    category: test',
+    '    timeoutMs: 25',
+    '  infra-fail:',
+    '    executable: node',
+    '    args:',
+    '      - scripts/infra-fail.mjs',
+    '    category: test',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'scripts', 'product-fail.mjs'), "process.stderr.write('assertion mismatch\\n'); process.exit(1);\n");
+  fs.writeFileSync(path.join(root, 'scripts', 'timeout.mjs'), 'setTimeout(() => process.exit(0), 2000);\n');
+  fs.writeFileSync(path.join(root, 'scripts', 'infra-fail.mjs'), "process.stderr.write('OutOfMemoryError: Java heap space\\n'); process.exit(1);\n");
+  const state = stateFor(root);
+
+  const product = runProjectCommand(state, { projectId: 'project-command', command: 'product-fail', infrastructureRetryPolicy: 'none' });
+  const timeout = runProjectCommand(state, { projectId: 'project-command', command: 'timeout-fail', infrastructureRetryPolicy: 'none' });
+  const infrastructure = runProjectCommand(state, { projectId: 'project-command', command: 'infra-fail', infrastructureRetryPolicy: 'none' });
+
+  assert.equal(product.failureClass, 'product');
+  assert.equal(timeout.failureClass, 'timeout');
+  assert.equal(infrastructure.failureClass, 'infrastructure');
+});
+
 test('equivalent static package aliases reuse one semantic verification result', () => {
   const root = createProject('semantic-cache-alias', {
     typecheck: 'node scripts/shared.mjs',

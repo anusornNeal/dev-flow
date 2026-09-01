@@ -9,6 +9,8 @@ export type CommandResultReuseIdentity = {
   reusePolicy: 'exact-revision' | 'effective-input';
   repoRevision?: string;
   semanticKey: string;
+  coverageScope?: 'targeted' | 'broad' | 'full';
+  targets?: string[];
   commandConfigFingerprint: string;
   affectedInputFingerprint: string;
   dependencyFingerprint: string;
@@ -111,6 +113,8 @@ export function classifyCommandResultCacheMiss(identity: CommandResultReuseIdent
   if (candidates.length === 0) return 'NO_REUSABLE_ENTRY';
   const dimensions: Array<[keyof CommandResultReuseIdentity, string]> = [
     ['semanticKey', 'SEMANTIC_KEY_CHANGED'],
+    ['coverageScope', 'COVERAGE_SCOPE_CHANGED'],
+    ['targets', 'TARGETS_CHANGED'],
     ['cwd', 'SEMANTIC_KEY_CHANGED'],
     ['commandConfigFingerprint', 'COMMAND_CONFIG_CHANGED'],
     ['affectedInputFingerprint', 'AFFECTED_INPUT_CHANGED'],
@@ -122,17 +126,21 @@ export function classifyCommandResultCacheMiss(identity: CommandResultReuseIdent
     ['maxOutputBytes', 'RESPONSE_SHAPING_CHANGED'],
     ['responseMode', 'RESPONSE_SHAPING_CHANGED'],
   ];
+  const dimensionMatches = (candidate: CommandResultReuseIdentity, key: keyof CommandResultReuseIdentity) => {
+    if (key === 'targets') return JSON.stringify(candidate.targets) === JSON.stringify(identity.targets);
+    return candidate[key] === identity[key];
+  };
   let best = candidates[0];
   let bestMismatchCount = Number.POSITIVE_INFINITY;
   for (const candidate of candidates) {
-    const mismatchCount = dimensions.reduce((count, [key]) => count + (candidate[key] === identity[key] ? 0 : 1), 0);
+    const mismatchCount = dimensions.reduce((count, [key]) => count + (dimensionMatches(candidate, key) ? 0 : 1), 0);
     if (mismatchCount < bestMismatchCount) {
       best = candidate;
       bestMismatchCount = mismatchCount;
     }
   }
   for (const [key, reason] of dimensions) {
-    if (best[key] !== identity[key]) return reason;
+    if (!dimensionMatches(best, key)) return reason;
   }
   return evictionCount > 0 ? 'ENTRY_EVICTED' : 'NO_REUSABLE_ENTRY';
 }

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { getProject } from '../repositories/projectRepository.js';
 import { getExecutionSessionById, listExecutionSessionsForTask, listExecutionSessionsForWorkspace, queryExecutionSessions } from '../repositories/executionSessionRepository.js';
+import { getTaskFinalizationOperation } from '../repositories/taskFinalizationOperationRepository.js';
 import { getTaskByIdentifier, getTasksByProjectId, saveTask } from '../repositories/taskRepository.js';
 import {
   createOrReuseSessionWorkspace,
@@ -1228,6 +1229,25 @@ export function terminalizeTaskExecutionForFinalization(
       return { task: current, executionSessionId: session.id, idempotent: true };
     }
     if (session.status !== 'active') {
+      const operationId = String(input.operationId || '').trim();
+      const frozenOperation = operationId ? getTaskFinalizationOperation(operationId) : null;
+      const cancelledFrozenOrigin = session.status === 'cancelled'
+        && frozenOperation?.status === 'active'
+        && frozenOperation.phase === 'evidence-recorded'
+        && frozenOperation.taskId === current.id
+        && frozenOperation.workspaceId === cleanWorkspaceId
+        && frozenOperation.executionSessionId === session.id
+        && String(frozenOperation.ownershipEpochId || '').trim() === actualEpoch
+        && String(frozenOperation.integration?.baseHeadAfter || '').trim() === repoRevision;
+      if (cancelledFrozenOrigin) {
+        recordExecutionReconciliationEvidence(session.id, 'workspace-finalization-frozen-cancelled-origin', {
+          workspaceId: cleanWorkspaceId,
+          repoRevision,
+          status: session.status,
+          operationId,
+        });
+        return { task: current, executionSessionId: session.id, idempotent: true };
+      }
       throw createApiError(409, 'TASK_FINALIZATION_EXECUTION_TERMINAL_INVALID', `Execution '${session.id}' is terminal (${session.status}) and cannot satisfy successful finalization.`, {
         affectedId: current.id,
         details: { executionSessionId: session.id, status: session.status },

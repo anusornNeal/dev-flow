@@ -386,7 +386,7 @@ test('frozen finalization retry fails closed when a replacement execution supers
         workspaceId: f.workspace.workspaceId,
         operationId: interrupted.operation.id,
       }),
-      (error: any) => error?.code === 'FINALIZATION_OPERATION_SUPERSEDED_BY_EXECUTION',
+      (error: any) => error?.payload?.code === 'FINALIZATION_OPERATION_SUPERSEDED_BY_EXECUTION' || error?.code === 'FINALIZATION_OPERATION_SUPERSEDED_BY_EXECUTION',
     );
   } finally {
     cancelExecutionSession(replacement.id);

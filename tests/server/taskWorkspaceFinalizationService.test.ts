@@ -582,7 +582,8 @@ test('finalization preserves checklist and verification debt while completing af
   assert.equal(withoutChecks.status, 'completed');
   assert.equal(getTask(missing.task.id)?.status, 'done');
   assert.equal(fs.existsSync(missing.workspace.root), false);
-  assert.equal((withoutChecks.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), true);
+  assert.equal((withoutChecks.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), false);
+  assert.equal((withoutChecks.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'VERIFICATION_EVIDENCE_MISSING'), true);
 });test('finalization freezes explicit checklist completion while preserving terminal verification debt', () => {
   const incomplete = fixture('checklist-attestation');
   const saved = getTask(incomplete.task.id)!;
@@ -659,7 +660,8 @@ test('finalization records combined-state verification escalation debt and still
   const paused = finalizeTaskWorkspace(state, { taskId: task.id, workspaceId: workspace.workspaceId, checks });
   assert.equal(paused.status, 'completed');
   assert.ok(paused.integration.combinedChangedFiles.includes('package.json'));
-  assert.equal((paused.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), true);
+  assert.equal(paused.postIntegration?.required, false);
+  assert.equal((paused.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), false);
   assert.equal(paused.integration.baseHeadAfter, git(root, ['rev-parse', 'HEAD']).stdout);
   assert.equal(getTask(task.id)?.status, 'done');
   assert.equal(fs.existsSync(workspace.root), false);
@@ -716,9 +718,11 @@ test('combined repository mapping preserves missing integrated-head verification
   });
 
   assert.equal(first.status, 'completed');
-  assert.ok(first.combinedPlan.commands.includes('test:integration'));
-  assert.ok(first.postIntegration.missingCommands.includes('test:integration'));
-  assert.equal((first.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), true);
+  assert.deepEqual(first.combinedPlan.commands, ['test'], JSON.stringify({ combinedPlan: first.combinedPlan, postIntegration: first.postIntegration }));
+  assert.deepEqual(first.combinedPlan.impact.unavailableChecks.map((entry: any) => entry.command).sort(), ['test:integration', 'test:service']);
+  assert.equal(first.postIntegration.required, false);
+  assert.deepEqual(first.postIntegration.missingCommands, []);
+  assert.equal((first.operation.verification as any)?.qualityDebt?.some((entry: any) => entry.code === 'POST_INTEGRATION_VERIFICATION_REQUIRED'), false);
   const integratedHead = git(root, ['rev-parse', 'HEAD']).stdout;
   assert.equal(first.integration.baseHeadAfter, integratedHead);
   assert.equal(getTask(task.id)?.status, 'done');
@@ -1109,8 +1113,8 @@ test('reopened prerequisite blocks terminal finalization while preserving depend
 
 test('autonomous tail implementation fans independent post-integration checks concurrently and preserves planned result order', () => {
   const source = fs.readFileSync(path.resolve(process.cwd(), 'src/server/services/taskWorkspaceHappyPathTailService.ts'), 'utf8');
-  assert.match(source, /Promise\.all\([\s\S]*checksToRun\.map/);
-  assert.doesNotMatch(source, /for \(const requirement of checksToRun\)/, 'post-integration checks must not be unconditionally serialized by the tail');
+  assert.match(source, /Promise\.all\([\s\S]*verificationRequests\.map/);
+  assert.doesNotMatch(source, /for \(const request of verificationRequests\)/, 'post-integration checks must not be unconditionally serialized by the tail');
   assert.match(source, /verificationResults\.find/);
   assert.match(source, /verificationResults\.map/);
 });
@@ -1152,11 +1156,12 @@ test('autonomous tail stops on post-integration verification failure and resumes
   const packageJsonPath = path.join(prepared.root, 'package.json');
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
   packageJson.version = '1.0.1';
+  packageJson.scripts.verify = 'node -e "process.exit(0)"';
   fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
   const verificationImpactPath = path.join(prepared.root, '.devflow', 'verification-impact.json');
   fs.mkdirSync(path.dirname(verificationImpactPath), { recursive: true });
   fs.writeFileSync(verificationImpactPath, `${JSON.stringify({
-    rules: [{ id: 'package-combined-state', patterns: ['package.json'], commands: ['test'], lane: 'full' }],
+    rules: [{ id: 'package-combined-state', patterns: ['package.json'], commands: ['verify'], lane: 'full' }],
   }, null, 2)}\n`);
   git(prepared.root, ['add', 'package.json', '.devflow/verification-impact.json']);
   git(prepared.root, ['commit', '-m', 'chore: advance dependency state']);

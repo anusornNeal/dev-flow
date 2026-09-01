@@ -74,7 +74,7 @@ export const emergencyToolDefinitions: DevFlowToolDefinition[] = [
   },
   {
     name: 'cleanup_orphan_executions',
-    description: 'Dry-run or apply a bounded operator-authorized cleanup of active execution sessions proven orphaned from task claims. Apply reclassifies transactionally, cancels only uniquely bound claimless sessions with no pending operation, preserves task/workspace/Git state, records audit evidence, and replays one stable operationId without sweeping later batches.',
+    description: 'Dry-run or apply a bounded operator-authorized cleanup of active execution sessions proven orphaned from task claims. Default mode fails closed on missing or ambiguous workspace authority. destructiveAck=true explicitly permits cancellation only when task/workspace authority is already missing or stale, no live claim or durable operation remains, and no recoverable WIP can be observed. Git state is never deleted by this tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -84,6 +84,7 @@ export const emergencyToolDefinitions: DevFlowToolDefinition[] = [
         actorLabel: { type: 'string', minLength: 1, maxLength: 100 },
         reason: { type: 'string', minLength: 1, maxLength: 500, description: 'Human/operator reason persisted with cleanup evidence.' },
         limit: { type: 'number', minimum: 1, maximum: 100, description: 'Maximum active executions classified in this bounded operation. Defaults to 100.' },
+        destructiveAck: { type: 'boolean', description: 'Explicit destructive authorization for stale execution rows whose task/workspace authority is already missing. Default false; never bypasses live claims, durable operations, cross-project identity, or recoverable WIP.' },
       },
       required: ['projectId', 'operationId', 'mode', 'actorLabel', 'reason'],
     },

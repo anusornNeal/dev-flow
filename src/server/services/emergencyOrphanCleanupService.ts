@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { withDbTransaction } from '../../db/index.js';
 import { getProject } from '../repositories/projectRepository.js';
 import { getTask, getTasksByProjectId } from '../repositories/taskRepository.js';
+import { getJob } from '../repositories/mcpToolJobRepository.js';
 import {
   getExecutionSessionEvidenceById,
   listExecutionSessionsForTask,
@@ -11,9 +12,11 @@ import {
   type ExecutionSessionRecord,
 } from '../repositories/executionSessionRepository.js';
 import { createApiError } from './api.js';
+import { getLatestExecutionCheckpoint } from './executionCheckpointService.js';
 import { cancelExecutionSession, recordExecutionReconciliationEvidence } from './executionSessionService.js';
 import { classifyLifecycleLiveWorkAuthority } from './lifecycleAuthorityService.js';
 import { resolveTaskClaimLiveness } from './taskClaimLivenessService.js';
+import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
 
 export type EmergencyOrphanCleanupMode = 'dry-run' | 'apply';
 
@@ -24,10 +27,12 @@ export interface EmergencyOrphanCleanupInput {
   actorLabel: string;
   reason: string;
   limit?: number;
+  destructiveAck?: boolean;
 }
 
 export type EmergencyOrphanCleanupReasonCode =
   | 'SAFE_ORPHAN'
+  | 'DESTRUCTIVE_STALE_ORPHAN'
   | 'TASK_ID_MISSING'
   | 'WORKSPACE_ID_MISSING'
   | 'TASK_NOT_FOUND'
@@ -132,11 +137,53 @@ function skipped(
   };
 }
 
+function safeCandidate(
+  session: ExecutionSessionRecord,
+  reasonCode: 'SAFE_ORPHAN' | 'DESTRUCTIVE_STALE_ORPHAN',
+  reason: string,
+  extras: Partial<Pick<EmergencyOrphanCleanupCandidate, 'pendingOperationIds' | 'activeTaskExecutionIds' | 'activeWorkspaceExecutionIds'>> = {},
+): EmergencyOrphanCleanupCandidate {
+  return {
+    executionSessionId: session.id,
+    taskId: session.taskId,
+    workspaceId: session.workspaceId,
+    classification: 'safe',
+    reasonCode,
+    reason,
+    pendingOperationIds: extras.pendingOperationIds || [],
+    activeTaskExecutionIds: extras.activeTaskExecutionIds || [],
+    activeWorkspaceExecutionIds: extras.activeWorkspaceExecutionIds || [],
+  };
+}
+
+function livePendingOperationIds(sessionId: string) {
+  const checkpoint = getLatestExecutionCheckpoint(sessionId);
+  return (checkpoint?.pendingOperations || [])
+    .filter((entry) => entry.status === 'accepted' || entry.status === 'running')
+    .filter((entry) => {
+      const job = getJob(String(entry.operationId));
+      return !job || job.status === 'queued' || job.status === 'running';
+    })
+    .map((entry) => String(entry.operationId));
+}
+
+function isMissingStaleWorkspace(workspaceId: string) {
+  try {
+    const inspection = inspectWorkspaceRecovery(workspaceId);
+    return inspection.disposition === 'stale-registry'
+      && inspection.dirtyFiles.length === 0
+      && inspection.uniqueCommits.length === 0;
+  } catch {
+    return false;
+  }
+}
+
 function classifySession(
   session: ExecutionSessionRecord,
   projectId: string,
   projectTasks: Map<string, any>,
   nowMs: number,
+  destructiveAck: boolean,
 ): EmergencyOrphanCleanupCandidate {
   if (!session.taskId) return skipped(session, 'TASK_ID_MISSING', 'Active execution has no task identity.');
   if (!session.workspaceId) return skipped(session, 'WORKSPACE_ID_MISSING', 'Active execution has no workspace identity.');
@@ -146,6 +193,15 @@ function classifySession(
     const globalTask = getTask(session.taskId);
     if (globalTask && globalTask.projectId !== projectId) {
       return skipped(session, 'TASK_PROJECT_MISMATCH', 'Execution task belongs to a different project.');
+    }
+    if (destructiveAck) {
+      const pendingOperationIds = livePendingOperationIds(session.id);
+      if (pendingOperationIds.length > 0) {
+        return skipped(session, 'PENDING_OPERATION', 'Deleted-task execution still has accepted/running durable work.', { pendingOperationIds });
+      }
+      if (isMissingStaleWorkspace(session.workspaceId)) {
+        return safeCandidate(session, 'DESTRUCTIVE_STALE_ORPHAN', 'Explicit destructive cleanup accepted deleted-task execution whose managed workspace is already missing/stale and has no recoverable WIP.');
+      }
     }
     return skipped(session, 'TASK_NOT_FOUND', 'Execution task identity no longer resolves.');
   }
@@ -164,18 +220,36 @@ function classifySession(
     ? listExecutionSessionsForWorkspace(session.workspaceId).filter((entry) => entry.status === 'active').map((entry) => entry.id).slice(0, 20)
     : [];
 
+  const destructiveHardReasons = new Set([
+    'WORKSPACE_AUTHORITY_INVALID',
+    'MULTIPLE_ACTIVE_EXECUTIONS',
+    'TASK_ACTIVE_ACROSS_WORKSPACES',
+  ]);
+  const destructiveMissingWorkspaceAuthority = destructiveAck
+    && !authority.claim.active
+    && authority.durableOperations.count === 0
+    && authority.execution.activeSessionIds.length > 0
+    && authority.workspaces.length > 0
+    && authority.workspaces.every((entry) => entry.disposition === 'stale-registry'
+      && entry.dirtyFiles.length === 0
+      && entry.uniqueCommits.length === 0)
+    && authority.hardReasonCodes.every((code) => destructiveHardReasons.has(code));
+  if (destructiveMissingWorkspaceAuthority) {
+    return safeCandidate(
+      session,
+      'DESTRUCTIVE_STALE_ORPHAN',
+      'Explicit destructive cleanup accepted claimless execution authority whose managed workspaces are already missing/stale and have no durable operation or recoverable WIP.',
+      { activeTaskExecutionIds, activeWorkspaceExecutionIds },
+    );
+  }
+
   if (authority.classification === 'safe-orphan') {
-    return {
-      executionSessionId: session.id,
-      taskId: session.taskId,
-      workspaceId: session.workspaceId,
-      classification: 'safe',
-      reasonCode: 'SAFE_ORPHAN',
-      reason: 'Canonical live-work authority classified this unique claimless execution as a safe orphan.',
-      pendingOperationIds: [],
-      activeTaskExecutionIds,
-      activeWorkspaceExecutionIds,
-    };
+    return safeCandidate(
+      session,
+      'SAFE_ORPHAN',
+      'Canonical live-work authority classified this unique claimless execution as a safe orphan.',
+      { activeTaskExecutionIds, activeWorkspaceExecutionIds },
+    );
   }
   if (authority.classification === 'live-durable-operation') {
     return skipped(session, 'PENDING_OPERATION', 'Canonical authority found accepted/running durable work.', {
@@ -218,13 +292,14 @@ function normalizedInput(input: EmergencyOrphanCleanupInput) {
   const actorLabel = clean(input?.actorLabel, 100);
   const reason = clean(input?.reason, 500);
   const limit = boundedLimit(input?.limit);
+  const destructiveAck = input?.destructiveAck === true;
   if (!projectId) throw createApiError(400, 'PROJECT_ID_REQUIRED', 'projectId is required for emergency orphan cleanup.');
   if (!operationId) throw createApiError(400, 'EMERGENCY_ORPHAN_CLEANUP_OPERATION_ID_REQUIRED', 'operationId is required for idempotent orphan cleanup.');
   if (!mode) throw createApiError(400, 'EMERGENCY_ORPHAN_CLEANUP_MODE_INVALID', "mode must be 'dry-run' or 'apply'.");
   if (!actorLabel) throw createApiError(400, 'EMERGENCY_ORPHAN_CLEANUP_ACTOR_REQUIRED', 'actorLabel is required for emergency orphan cleanup.');
   if (!reason) throw createApiError(400, 'EMERGENCY_ORPHAN_CLEANUP_REASON_REQUIRED', 'Operator reason is required for emergency orphan cleanup.');
   if (!getProject(projectId)) throw createApiError(404, 'PROJECT_NOT_FOUND', `Project '${projectId}' was not found.`, { affectedId: projectId });
-  return { projectId, operationId, mode, actorLabel, reason, limit } as const;
+  return { projectId, operationId, mode, actorLabel, reason, limit, destructiveAck } as const;
 }
 
 function replayResult(normalized: ReturnType<typeof normalizedInput>): EmergencyOrphanCleanupResult | null {
@@ -259,7 +334,7 @@ function classifyProject(normalized: ReturnType<typeof normalizedInput>) {
     if (offset === 0) beforeActiveCount = page.total;
     if (page.sessions.length === 0) break;
     for (const session of page.sessions) {
-      const candidate = classifySession(session, normalized.projectId, tasks, nowMs);
+      const candidate = classifySession(session, normalized.projectId, tasks, nowMs, normalized.destructiveAck);
       candidates.push(candidate);
       if (candidate.classification === 'safe') safeCount += 1;
       if (safeCount >= normalized.limit) break;

@@ -401,6 +401,35 @@ test('long-lived deterministic cleanup soak converges 200 cycles without safe-or
   console.log(`[lifecycle-soak] cycles=${cycleCount} pendingPreserved=${pendingPreservedCount} responseLossReplays=${replayCount} cleanupOverheadMs=${cleanupOverheadMs}`);
 });
 
+test('explicit destructive cleanup cancels only stale missing-workspace authority, including duplicate executions and deleted tasks', () => {
+  const duplicateTask = seedTask('destructive-duplicate', { status: 'done' });
+  const workspaceA = managedWorkspace(duplicateTask, 'destructive-duplicate-a');
+  const execA = seedExecution('destructive-duplicate-a', duplicateTask.id, workspaceA.workspaceId);
+  const missingWorkspaceId = `ws-destructive-missing-${seq}`;
+  const execB = seedExecution('destructive-duplicate-b', duplicateTask.id, missingWorkspaceId);
+  fs.rmSync(workspaceA.root, { recursive: true, force: true });
+
+  const deletedTask = seedTask('destructive-deleted-task', { status: 'done' });
+  const deletedWorkspace = managedWorkspace(deletedTask, 'destructive-deleted-task');
+  const deletedExec = seedExecution('destructive-deleted-task', deletedTask.id, deletedWorkspace.workspaceId);
+  fs.rmSync(deletedWorkspace.root, { recursive: true, force: true });
+  db.prepare('DELETE FROM tasks WHERE id = ?').run(deletedTask.id);
+
+  const normal = cleanupOrphanExecutions({ ...applyInput('destructive-normal'), mode: 'dry-run' });
+  assert.equal(normal.safeCount, 0);
+  assert.equal(normal.candidates.find((entry: any) => entry.executionSessionId === execA.id)?.reasonCode, 'INVALID_WORKSPACE_AUTHORITY');
+  assert.equal(normal.candidates.find((entry: any) => entry.executionSessionId === deletedExec.id)?.reasonCode, 'TASK_NOT_FOUND');
+
+  const result = cleanupOrphanExecutions({ ...applyInput('destructive-apply'), destructiveAck: true } as any);
+  assert.equal(result.cancelledCount, 3);
+  assert.equal(result.safeCount, 3);
+  for (const execution of [execA, execB, deletedExec]) {
+    assert.equal(getExecutionSessionById(execution.id)?.status, 'cancelled', execution.id);
+    const evidence = listExecutionSessionEvidence(execution.id);
+    assert.equal(evidence.some((entry: any) => entry.kind === 'lifecycle-reconciliation' && entry.metadata?.reasonCode === 'emergency-orphan-cleanup'), true);
+  }
+});
+
 test('apply is transactional: injected failure rolls back cancellation and audit evidence', () => {
   const taskA = seedTask('atomic-a');
   const taskB = seedTask('atomic-b');

@@ -24,6 +24,7 @@ export interface SchedulerQueueEntry {
   sharedResources?: string[];
   verificationPermitId?: string;
   verificationDemand?: VerificationResourceDemand;
+  schedulerLeaseReserved?: boolean;
 }
 
 export type BackgroundPipelineJobDisposition = {
@@ -520,29 +521,45 @@ export function releaseVerificationProcessPermit(permit: VerificationProcessPerm
   return true;
 }
 
-export function incrementScheduledResource(entry: SchedulerQueueEntry) {
+export function incrementScheduledResource(entry: SchedulerQueueEntry): SchedulerBlocker | null {
+  if (entry.schedulerLeaseReserved) return null;
   const stats = getResourceStats(entry.resourceKey);
   stats.accessCount[entry.accessMode] += 1;
   stats.costCount[entry.costClass] += 1;
   if (entry.costClass === 'verify') {
-    const reservation = tryAcquireVerificationProcessPermit({
-      jobId: entry.jobId,
-      verificationClass: verificationClassForEntry(entry),
-      sharedResources: entry.sharedResources,
-      resourceDemand: entry.verificationDemand,
-    });
-    if (!reservation.permit) {
-      stats.accessCount[entry.accessMode] = Math.max(0, stats.accessCount[entry.accessMode] - 1);
-      stats.costCount[entry.costClass] = Math.max(0, stats.costCount[entry.costClass] - 1);
-      const activeCount = stats.accessCount.read + stats.accessCount.verify + stats.accessCount.write;
-      if (activeCount === 0) activeResources.delete(entry.resourceKey);
-      throw new Error(`Scheduler admitted verification without an available process permit for ${entry.jobId}.`);
+    if (entry.verificationPermitId) {
+      const activePermit = activeVerificationPermits.get(entry.verificationPermitId);
+      if (!activePermit || activePermit.jobId !== entry.jobId) {
+        stats.accessCount[entry.accessMode] = Math.max(0, stats.accessCount[entry.accessMode] - 1);
+        stats.costCount[entry.costClass] = Math.max(0, stats.costCount[entry.costClass] - 1);
+        const activeCount = stats.accessCount.read + stats.accessCount.verify + stats.accessCount.write;
+        if (activeCount === 0) activeResources.delete(entry.resourceKey);
+        throw new Error(`Scheduler verification permit ownership is invalid for ${entry.jobId}.`);
+      }
+    } else {
+      const reservation = tryAcquireVerificationProcessPermit({
+        jobId: entry.jobId,
+        verificationClass: verificationClassForEntry(entry),
+        sharedResources: entry.sharedResources,
+        resourceDemand: entry.verificationDemand,
+      });
+      if (!reservation.permit) {
+        stats.accessCount[entry.accessMode] = Math.max(0, stats.accessCount[entry.accessMode] - 1);
+        stats.costCount[entry.costClass] = Math.max(0, stats.costCount[entry.costClass] - 1);
+        const activeCount = stats.accessCount.read + stats.accessCount.verify + stats.accessCount.write;
+        if (activeCount === 0) activeResources.delete(entry.resourceKey);
+        return reservation.blocker;
+      }
+      entry.verificationPermitId = reservation.permit.id;
     }
-    entry.verificationPermitId = reservation.permit.id;
   }
+  entry.schedulerLeaseReserved = true;
+  return null;
 }
 
 export function decrementScheduledResource(entry: SchedulerQueueEntry, observation?: { actualDurationMs?: number }) {
+  if (!entry.schedulerLeaseReserved) return false;
+  entry.schedulerLeaseReserved = false;
   const stats = getResourceStats(entry.resourceKey);
   stats.accessCount[entry.accessMode] = Math.max(0, stats.accessCount[entry.accessMode] - 1);
   stats.costCount[entry.costClass] = Math.max(0, stats.costCount[entry.costClass] - 1);
@@ -553,6 +570,7 @@ export function decrementScheduledResource(entry: SchedulerQueueEntry, observati
   }
   const activeCount = stats.accessCount.read + stats.accessCount.verify + stats.accessCount.write;
   if (activeCount === 0) activeResources.delete(entry.resourceKey);
+  return true;
 }
 
 export function transitionScheduledResource(
@@ -649,6 +667,7 @@ export function selectNextRunnableQueueIndex(
   queue: SchedulerQueueEntry[],
   activeEntries: SchedulerQueueEntry[],
   now = Date.now(),
+  excludedJobIds?: ReadonlySet<string>,
 ) {
   const candidates = queue
     .map((entry, index) => ({
@@ -656,7 +675,7 @@ export function selectNextRunnableQueueIndex(
       entry,
       effectivePriority: Math.max(0, (entry.schedulerPriority ?? 0) - Math.floor(Math.max(0, now - entry.enqueuedAt) / PRIORITY_AGING_MS)),
     }))
-    .filter(({ entry, index }) => !getBlockerForQueueEntry(entry, index, queue, activeEntries, now))
+    .filter(({ entry, index }) => !excludedJobIds?.has(entry.jobId) && !getBlockerForQueueEntry(entry, index, queue, activeEntries, now))
     .sort((left, right) => left.effectivePriority - right.effectivePriority || left.entry.enqueuedAt - right.entry.enqueuedAt || left.index - right.index);
   return candidates[0]?.index ?? -1;
 }

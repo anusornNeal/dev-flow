@@ -53,7 +53,13 @@ export function createMcpToolJobQueueLifecycle() {
 
   return {
     markScheduled(entry: SchedulerQueueEntry) {
-      incrementScheduledResource(entry);
+      return incrementScheduledResource(entry);
+    },
+
+    abandonScheduled(entry: SchedulerQueueEntry) {
+      const released = decrementScheduledResource(entry);
+      if (released) notifyCapacityWaiters();
+      return released;
     },
 
     waitForCapacityChange() {
@@ -87,6 +93,7 @@ export function createMcpToolJobQueueLifecycle() {
     },
 
     processQueue<TEntry extends SchedulerQueueEntry>(queue: TEntry[], callbacks: ProcessQueueCallbacks<TEntry>) {
+      const reservationBlockedJobIds = new Set<string>();
       while (queue.length > 0) {
         const activeEntries = callbacks.activeEntries();
         const observedAt = Date.now();
@@ -95,9 +102,16 @@ export function createMcpToolJobQueueLifecycle() {
           getBlockerForQueueEntry(entry, index, queue, activeEntries),
           observedAt,
         ));
-        const index = selectNextRunnableQueueIndex(queue, activeEntries);
+        const index = selectNextRunnableQueueIndex(queue, activeEntries, observedAt, reservationBlockedJobIds);
         if (index < 0) break;
-        const [entry] = queue.splice(index, 1);
+        const entry = queue[index];
+        const admissionBlocker = incrementScheduledResource(entry);
+        if (admissionBlocker) {
+          callbacks.advanceWaitTelemetry(entry, admissionBlocker, observedAt);
+          reservationBlockedJobIds.add(entry.jobId);
+          continue;
+        }
+        queue.splice(index, 1);
         callbacks.finalizeWaitTelemetry(entry, observedAt);
         callbacks.startJob(entry);
       }

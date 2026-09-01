@@ -24,6 +24,7 @@ import {
   setVerificationResourceBudgetForTests,  setResidualVerificationSnapshotProviderForTests,
   type SchedulerQueueEntry,
 } from '../../src/server/services/mcpToolJobScheduler.js';
+import { createMcpToolJobQueueLifecycle } from '../../src/server/services/mcpToolJobQueueLifecycleService.js';
 
 function entry(overrides: Partial<SchedulerQueueEntry> = {}): SchedulerQueueEntry {
   return {
@@ -138,6 +139,85 @@ test('global verify capacity blocks a third workspace separately from correctnes
   decrementScheduledResource(activeA);
   assert.equal(getBlockerForQueueEntry(queued, 0, [queued], [activeB]), null);
   decrementScheduledResource(activeB);
+});
+
+test('scheduled verification admission returns a blocker instead of throwing when capacity changes after eligibility', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  const queued = entry({ jobId: 'verify-race', resourceKey: 'workspace:race', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command', verificationClass: 'fast' });
+  assert.equal(selectNextRunnableQueueIndex([queued], []), 0, 'observational eligibility should initially allow the verification');
+
+  const holder = tryAcquireVerificationProcessPermit({ jobId: 'verify-holder', verificationClass: 'fast' });
+  assert.ok(holder.permit, 'capacity changes after selection but before authoritative scheduling');
+
+  let blocker: ReturnType<typeof getBlockerForQueueEntry> = null;
+  assert.doesNotThrow(() => {
+    blocker = incrementScheduledResource(queued);
+  });
+  assert.equal(blocker?.blockReason, 'capacity_saturated');
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1, 'failed scheduling must not create a second verification permit');
+
+  assert.equal(releaseVerificationProcessPermit(holder.permit), true);
+  assert.equal(incrementScheduledResource(queued), null);
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1, 'successful scheduled reservation should own exactly one permit');
+  assert.equal(incrementScheduledResource(queued), null, 'repeated scheduling of the same entry must be idempotent');
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1);
+  assert.equal(decrementScheduledResource(queued), true);
+  assert.equal(decrementScheduledResource(queued), false, 'scheduler lease release must be exact-once');
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 0);
+  resetSchedulerResourceStateForTests();
+});
+
+test('queue lifecycle leaves verification queued when final reservation changes and still admits unrelated reads', () => {
+  resetSchedulerResourceStateForTests();
+  setGlobalVerifyCapacityForTests(1);
+  const lifecycle = createMcpToolJobQueueLifecycle();
+  const verify = entry({ jobId: 'verify-race-queue', resourceKey: 'workspace:verify-race', accessMode: 'verify', costClass: 'verify', kind: 'repo-command', toolName: 'run_project_command' });
+  const read = entry({ jobId: 'read-during-race', resourceKey: 'workspace:read-race', accessMode: 'read', costClass: 'light-read', kind: 'repo-read' });
+  let verificationClassReads = 0;
+  let holderPermit: NonNullable<ReturnType<typeof tryAcquireVerificationProcessPermit>['permit']> | null = null;
+  Object.defineProperty(verify, 'verificationClass', {
+    configurable: true,
+    get() {
+      verificationClassReads += 1;
+      if (verificationClassReads === 3) {
+        const holder = tryAcquireVerificationProcessPermit({ jobId: 'late-capacity-holder', verificationClass: 'fast' });
+        holderPermit = holder.permit;
+        assert.ok(holderPermit, 'test fixture must consume capacity only after observational selection succeeds');
+      }
+      return 'fast';
+    },
+  });
+
+  const queue = [verify, read];
+  const started: string[] = [];
+  const observedBlockers: Array<{ jobId: string; reason?: string }> = [];
+  const callbacks = {
+    activeEntries: () => [] as SchedulerQueueEntry[],
+    advanceWaitTelemetry: (queuedEntry: SchedulerQueueEntry, blocker: ReturnType<typeof getBlockerForQueueEntry>) => {
+      if (blocker) observedBlockers.push({ jobId: queuedEntry.jobId, reason: blocker.blockReason });
+    },
+    finalizeWaitTelemetry: () => {},
+    startJob: (scheduledEntry: SchedulerQueueEntry) => {
+      started.push(scheduledEntry.jobId);
+      lifecycle.abandonScheduled(scheduledEntry);
+    },
+  };
+
+  lifecycle.processQueue(queue, callbacks);
+  assert.deepEqual(started, ['read-during-race']);
+  assert.deepEqual(queue.map((queuedEntry) => queuedEntry.jobId), ['verify-race-queue']);
+  assert.ok(observedBlockers.some((item) => item.jobId === 'verify-race-queue' && item.reason === 'capacity_saturated'));
+  assert.equal(verify.schedulerLeaseReserved, undefined, 'failed reservation must not create scheduler ownership');
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 1, 'only the late holder owns capacity while verification waits');
+
+  assert.ok(holderPermit);
+  assert.equal(releaseVerificationProcessPermit(holderPermit), true);
+  lifecycle.processQueue(queue, callbacks);
+  assert.deepEqual(started, ['read-during-race', 'verify-race-queue']);
+  assert.equal(queue.length, 0);
+  assert.equal(getSchedulerCapacitySnapshot().verify.active, 0);
+  resetSchedulerResourceStateForTests();
 });
 
 test('verify saturation does not block interactive reads or independent workspace writes', () => {

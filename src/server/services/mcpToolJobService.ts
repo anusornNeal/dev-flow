@@ -2052,6 +2052,7 @@ async function prepareVerificationCandidateForActiveJob(entry: QueueEntry, lease
 async function startJob(entry: QueueEntry) {
   const claimed = claimJob(entry.jobId, JOB_WORKER_ID, JOB_LEASE_MS);
   if (!claimed) {
+    queueLifecycle.abandonScheduled(entry);
     const persisted = getJob(entry.jobId);
     if (persisted && isTerminalStatus(persisted.status)) {
       safelyReconcileTerminalDurableExecution(persisted);
@@ -2076,12 +2077,12 @@ async function startJob(entry: QueueEntry) {
       appendJobLog(entry.jobId, 'stderr', `\n[Execution Fenced Before Start] ${summarizeError(error)}\n`);
       safelyReconcileTerminalDurableExecution(failed);
     }
+    queueLifecycle.abandonScheduled(entry);
     finalizeSingleFlight(entry);
     setImmediate(processQueue);
     return;
   }
   const bufferedLogger = createBufferedJobLogger(entry.jobId, leaseGuard);
-  queueLifecycle.markScheduled(entry);
   activeJobs.set(entry.jobId, { entry, leaseGeneration, closeLogs: bufferedLogger.close });
   const heartbeat = setInterval(() => {
     const active = activeJobs.get(entry.jobId);

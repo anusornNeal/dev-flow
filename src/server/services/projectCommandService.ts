@@ -38,10 +38,15 @@ import {
 } from './verificationCandidateService';
 import {
   classifyCommandResultCacheMiss,
+  classifyCommandResultIdentityMismatch,
   getCachedCommandResult,
   rememberCommandResult,
   type CommandResultReuseIdentity,
 } from './commandResultCacheService';
+import {
+  getDurableFullGreenEvidence,
+  listDurableFullGreenEvidenceIdentities,
+} from '../repositories/mcpToolJobRepository';
 import { readWorkspaceMetadataFile } from './workspaceMetadataCacheService';
 import { getRepoCacheLineage, recordRepoCacheDecision, registerRepoCacheInvalidator } from './repoCacheInvalidationService';
 import {
@@ -286,6 +291,8 @@ export interface RunProjectCommandResult {
   };
   cache?: {
     hit: boolean;
+    source?: 'process' | 'memory' | 'durable';
+    sourceJobId?: string;
     key: string;
     repoRevision: string;
     lineageToken?: string;
@@ -1701,6 +1708,7 @@ export function getProjectCommandExecutionIdentity(state: AppState, args: Record
 export type ProjectCommandAdmissionPreflight = {
   executionIdentity: ProjectCommandExecutionIdentity | null;
   cachedResult: RunProjectCommandResult | null;
+  durableReuse?: { key: string; identity: CommandResultReuseIdentity };
 };
 
 export type ProjectCommandVerificationExecutionIdentity = Omit<ProjectCommandExecutionIdentity, 'lineageToken'> & {
@@ -2029,17 +2037,52 @@ function cachedCommandResult(
 ) {
   if (!cacheContext) return null;
   const consumerId = typeof args.evidenceConsumerId === 'string' ? args.evidenceConsumerId : undefined;
-  const cached = getCachedCommandResult<RunProjectCommandResult>(cacheContext.key, consumerId);
-  if (!cached) {
+  const memory = getCachedCommandResult<RunProjectCommandResult>(cacheContext.key, consumerId);
+  const durableEligible = cacheContext.reuseIdentity.reusePolicy === 'exact-revision'
+    && cacheContext.reuseIdentity.coverageScope === 'full';
+  const durable = !memory && durableEligible
+    ? getDurableFullGreenEvidence<RunProjectCommandResult>(cacheContext.key)
+    : null;
+  if (!memory && !durable) {
+    const memoryReason = classifyCommandResultCacheMiss(cacheContext.reuseIdentity);
+    const durableReason = durableEligible
+      ? classifyCommandResultIdentityMismatch(
+          listDurableFullGreenEvidenceIdentities(cacheContext.reuseIdentity.repositoryScope),
+          cacheContext.reuseIdentity,
+        )
+      : 'NO_REUSABLE_ENTRY';
     recordRepoCacheDecision('verification-results', {
       outcome: 'miss',
-      reason: classifyCommandResultCacheMiss(cacheContext.reuseIdentity),
+      reason: memoryReason !== 'NO_REUSABLE_ENTRY' ? memoryReason : durableReason,
     });
     return null;
   }
+  const cached = memory || {
+    value: (() => {
+      const normalized = { ...(durable!.result as any) };
+      delete normalized.verificationCandidate;
+      delete normalized.verificationBinding;
+      delete normalized.executionVerificationFresh;
+      delete normalized.authoritative;
+      delete normalized.verificationFreshness;
+      delete normalized.stale;
+      delete normalized.superseded;
+      if (String(normalized.code || '').startsWith('EXECUTION_VERIFICATION_')) delete normalized.code;
+      return normalized as RunProjectCommandResult;
+    })(),
+    createdAt: durable!.createdAt,
+    evidence: undefined,
+  };
+  if (!memory && durable) {
+    rememberCommandResult(cacheContext.key, cached.value, undefined, {
+      reusable: true,
+      retention: 'bounded',
+      reuseIdentity: cacheContext.reuseIdentity,
+    });
+  }
   recordRepoCacheDecision('verification-results', {
     outcome: 'hit',
-    reason: 'REUSED_GREEN',
+    reason: durable ? 'REUSED_DURABLE_FULL_GREEN' : 'REUSED_GREEN',
     avoidedProcessExecutions: 1,
     avoidedWallClockMs: cached.value.durationMs,
   });
@@ -2055,6 +2098,8 @@ function cachedCommandResult(
     },
     cache: {
       hit: true,
+      source: durable ? 'durable' : 'memory',
+      ...(durable ? { sourceJobId: durable.sourceJobId } : {}),
       key: cacheContext.key,
       repoRevision: cacheContext.repoRevision,
       lineageToken: cacheContext.lineageToken,
@@ -2093,6 +2138,9 @@ export function getProjectCommandAdmissionPreflight(
   const cacheLookupMs = Date.now() - cacheLookupStartedAt;
   return {
     executionIdentity,
+    ...(cacheContext?.reusePolicy === 'exact-revision' && cacheContext.reuseIdentity.coverageScope === 'full'
+      ? { durableReuse: { key: cacheContext.key, identity: cacheContext.reuseIdentity } }
+      : {}),
     cachedResult: cached ? withPerformancePhases(cached, {
       resolutionMs,
       cacheLookupMs,
@@ -2123,6 +2171,7 @@ function rememberSuccessfulCommandResult(
     ...result,
     cache: {
       hit: false,
+      source: 'process',
       key: cacheContext.key,
       repoRevision: cacheContext.repoRevision,
       lineageToken: cacheContext.lineageToken,

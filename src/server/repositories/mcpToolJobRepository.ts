@@ -5,6 +5,7 @@ import db from '../../db/index.js';
 import { getDevFlowAppRoot } from '../../lib/devFlowPaths';
 import { publishServerEvent } from '../services/serverEventService.js';
 import { redactCredentialText } from '../services/credentialVaultService.js';
+import type { CommandResultReuseIdentity } from '../services/commandResultCacheService.js';
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
 export type JobRecoveryClassification = 'resumable' | 'retryable' | 'interrupted' | 'terminal';
@@ -78,6 +79,7 @@ const MAX_LOG_READ_BYTES = 200_000;
 const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const TERMINAL_STATUSES: JobStatus[] = ['succeeded', 'failed', 'timed_out', 'cancelled'];
+const MAX_DURABLE_FULL_GREEN_EVIDENCE = 128;
 let recentJobsCache: McpToolJob[] | null = null;
 let recentJobsDiskScanCount = 0;
 
@@ -691,6 +693,146 @@ export function getLatestAcceptedGreenGeneration(seriesKey: string): number | un
   return row?.generation == null ? undefined : Number(row.generation);
 }
 
+export type DurableFullGreenEvidence<T = any> = {
+  reuseKey: string;
+  identity: CommandResultReuseIdentity;
+  result: T;
+  sourceJobId: string;
+  createdAt: number;
+  lastUsedAt: number;
+  hitCount: number;
+};
+
+function parseDurableIdentity(value: unknown): CommandResultReuseIdentity | null {
+  try {
+    const parsed = JSON.parse(String(value || '{}')) as CommandResultReuseIdentity;
+    return parsed && typeof parsed.repositoryScope === 'string' && typeof parsed.semanticKey === 'string'
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isReusableFullGreenIdentity(identity: CommandResultReuseIdentity) {
+  return identity.reusePolicy === 'exact-revision'
+    && identity.coverageScope === 'full'
+    && typeof identity.repoRevision === 'string'
+    && identity.repoRevision.trim().length > 0;
+}
+
+function isReusableFullGreenResult(result: any, reuseKey?: string) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  if (result.ok !== true || result.status !== 'succeeded' || result.timedOut === true) return false;
+  if (result.stale === true || result.superseded === true) return false;
+  if (['stale', 'superseded', 'rejected'].includes(String(result.verificationFreshness || ''))) return false;
+  if (reuseKey && result.cache?.key !== reuseKey) return false;
+  return true;
+}
+
+function removeDurableFullGreenEvidence(reuseKey: string) {
+  db.prepare('DELETE FROM durable_full_green_evidence WHERE reuse_key = ?').run(reuseKey);
+}
+
+export function rememberDurableFullGreenEvidence(
+  reuseKey: string,
+  identity: CommandResultReuseIdentity,
+  sourceJobId: string,
+): DurableFullGreenEvidence | null {
+  if (!reuseKey || !sourceJobId || !isReusableFullGreenIdentity(identity)) return null;
+  const sourceJob = getDbJob(sourceJobId);
+  if (!sourceJob || sourceJob.status !== 'succeeded' || sourceJob.supersededAt || !sourceJob.resultSha256) return null;
+  const sourceResult = readJobResult(sourceJobId)?.result;
+  if (!isReusableFullGreenResult(sourceResult, reuseKey)) return null;
+  if (sourceResult.cache?.hit === true || Number(sourceResult.processSpawns || 0) < 1) return null;
+  const now = Date.now();
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO durable_full_green_evidence (
+        reuse_key, repository_scope, identity_json, source_job_id, result_sha256,
+        created_at, last_used_at, hit_count
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+      ON CONFLICT(reuse_key) DO UPDATE SET
+        repository_scope = excluded.repository_scope,
+        identity_json = excluded.identity_json,
+        source_job_id = excluded.source_job_id,
+        result_sha256 = excluded.result_sha256,
+        created_at = excluded.created_at,
+        last_used_at = excluded.last_used_at,
+        hit_count = 0
+    `).run(reuseKey, identity.repositoryScope, JSON.stringify(identity), sourceJobId, sourceJob.resultSha256, now, now);
+    db.prepare(`
+      DELETE FROM durable_full_green_evidence
+      WHERE reuse_key IN (
+        SELECT reuse_key FROM durable_full_green_evidence
+        ORDER BY last_used_at DESC, created_at DESC
+        LIMIT -1 OFFSET ?
+      )
+    `).run(MAX_DURABLE_FULL_GREEN_EVIDENCE);
+  })();
+  return { reuseKey, identity: { ...identity }, result: sourceResult, sourceJobId, createdAt: now, lastUsedAt: now, hitCount: 0 };
+}
+
+export function getDurableFullGreenEvidence<T>(reuseKey: string): DurableFullGreenEvidence<T> | null {
+  const row = db.prepare(`
+    SELECT reuse_key, identity_json, source_job_id, result_sha256, created_at, last_used_at, hit_count
+    FROM durable_full_green_evidence
+    WHERE reuse_key = ?
+  `).get(reuseKey) as any;
+  if (!row) return null;
+  const identity = parseDurableIdentity(row.identity_json);
+  const sourceJob = getDbJob(String(row.source_job_id || ''));
+  const resultPath = sourceJob ? path.join(sourceJob.artifactDir, 'result.json') : '';
+  const resultMeta = resultPath ? fileMetadata(resultPath) : { bytes: 0, sha256: undefined as string | undefined };
+  const payload = sourceJob ? readJobResult(sourceJob.jobId)?.result : null;
+  if (
+    !identity || !isReusableFullGreenIdentity(identity)
+    || !sourceJob || sourceJob.status !== 'succeeded' || sourceJob.supersededAt
+    || !sourceJob.resultSha256 || sourceJob.resultSha256 !== row.result_sha256
+    || !resultMeta.sha256 || resultMeta.sha256 !== row.result_sha256
+    || !isReusableFullGreenResult(payload, reuseKey)
+  ) {
+    removeDurableFullGreenEvidence(reuseKey);
+    return null;
+  }
+  const lastUsedAt = Date.now();
+  db.prepare(`
+    UPDATE durable_full_green_evidence
+    SET last_used_at = ?, hit_count = hit_count + 1
+    WHERE reuse_key = ?
+  `).run(lastUsedAt, reuseKey);
+  return {
+    reuseKey,
+    identity,
+    result: payload as T,
+    sourceJobId: sourceJob.jobId,
+    createdAt: Number(row.created_at || lastUsedAt),
+    lastUsedAt,
+    hitCount: Number(row.hit_count || 0) + 1,
+  };
+}
+
+export function listDurableFullGreenEvidenceIdentities(repositoryScope: string, limit = 32): CommandResultReuseIdentity[] {
+  const rows = db.prepare(`
+    SELECT identity_json
+    FROM durable_full_green_evidence
+    WHERE repository_scope = ?
+    ORDER BY last_used_at DESC
+    LIMIT ?
+  `).all(repositoryScope, Math.max(1, Math.min(128, Math.floor(limit || 32)))) as any[];
+  return rows.map((row) => parseDurableIdentity(row.identity_json)).filter((identity): identity is CommandResultReuseIdentity => Boolean(identity));
+}
+
+export function clearDurableFullGreenEvidenceForTests() {
+  const result = db.prepare('DELETE FROM durable_full_green_evidence').run();
+  return Number(result.changes || 0);
+}
+
+export function getDurableFullGreenEvidenceStats() {
+  const row = db.prepare('SELECT COUNT(*) AS count FROM durable_full_green_evidence').get() as any;
+  return { entries: Number(row?.count || 0), maxEntries: MAX_DURABLE_FULL_GREEN_EVIDENCE };
+}
+
 export function appendJobLog(jobId: string, stream: 'stdout' | 'stderr', data: string, guard?: JobLeaseGuard) {
   return db.transaction(() => {
     const lease = fencedLeaseWrite(jobId, guard);
@@ -815,6 +957,7 @@ export function cleanupOldJobs() {
       } catch {
         // Artifact cleanup is best effort; lifecycle deletion remains deterministic.
       }
+      db.prepare('DELETE FROM durable_full_green_evidence WHERE source_job_id = ?').run(row.job_id);
       removeRow.run(row.job_id);
       removeRecentJobCache(row.job_id);
     }

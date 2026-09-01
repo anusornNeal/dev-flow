@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const cacheService = await import('../../src/server/services/commandResultCacheService.js');
-const { classifyCommandResultCacheMiss, clearCommandResultCache, getCachedCommandResult, rememberCommandResult } = cacheService;
+const { classifyCommandResultCacheMiss, classifyCommandResultIdentityMismatch, clearCommandResultCache, getCachedCommandResult, rememberCommandResult } = cacheService;
 
 test('bounded reusable evidence is not invalidated by wall-clock TTL', () => {
   clearCommandResultCache();
@@ -53,6 +53,31 @@ test('cache miss diagnostics classify semantic evidence drift without exposing r
   assert.equal(classifyCommandResultCacheMiss({ ...baseIdentity, dependencyFingerprint: 'dependency-b' }), 'DEPENDENCY_CHANGED');
   assert.equal(classifyCommandResultCacheMiss({ ...baseIdentity, environmentFingerprint: 'environment-b' }), 'ENVIRONMENT_CHANGED');
   clearCommandResultCache();
+});
+
+test('shared identity mismatch classifier fails closed for exact-revision FULL evidence', () => {
+  const baseIdentity = {
+    repositoryScope: 'project:durable-diagnostics',
+    reusePolicy: 'exact-revision' as const,
+    repoRevision: 'rev-a',
+    semanticKey: 'verify',
+    coverageScope: 'full' as const,
+    targets: [],
+    commandConfigFingerprint: 'config-a',
+    affectedInputFingerprint: 'input-a',
+    dependencyFingerprint: 'dependency-a',
+    environmentFingerprint: 'environment-a',
+    cwd: '.',
+    timeoutMs: 120_000,
+    maxOutputBytes: 12_000,
+    responseMode: 'standard' as const,
+    evidenceLineageToken: 'project-rules:0',
+  };
+
+  assert.equal(classifyCommandResultIdentityMismatch([baseIdentity], { ...baseIdentity, repoRevision: 'rev-b' }), 'CANDIDATE_AUTHORITY_CHANGED');
+  assert.equal(classifyCommandResultIdentityMismatch([baseIdentity], { ...baseIdentity, coverageScope: 'broad' }), 'COVERAGE_SCOPE_CHANGED');
+  assert.equal(classifyCommandResultIdentityMismatch([baseIdentity], { ...baseIdentity, commandConfigFingerprint: 'config-b' }), 'COMMAND_CONFIG_CHANGED');
+  assert.equal(classifyCommandResultIdentityMismatch([baseIdentity], { ...baseIdentity, evidenceLineageToken: 'project-rules:1' }), 'PROJECT_RULES_CHANGED');
 });
 
 test('ordinary command results retain TTL expiry semantics', () => {

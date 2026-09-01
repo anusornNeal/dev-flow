@@ -102,15 +102,16 @@ export function rememberCommandResult<T>(
   return { createdAt: now, expiresAt, ...(evidence ? { evidence: { ...evidence, consumers: [...evidence.consumers] } } : {}) };
 }
 
-export function classifyCommandResultCacheMiss(identity: CommandResultReuseIdentity) {
-  const candidates = Array.from(cache.values())
-    .map((entry) => entry.evidence?.reuseIdentity)
-    .filter((entry): entry is CommandResultReuseIdentity => Boolean(
-      entry
-      && entry.repositoryScope === identity.repositoryScope
-      && entry.reusePolicy === identity.reusePolicy,
-    ));
-  if (candidates.length === 0) return 'NO_REUSABLE_ENTRY';
+export function classifyCommandResultIdentityMismatch(
+  candidates: CommandResultReuseIdentity[],
+  identity: CommandResultReuseIdentity,
+  fallbackReason = 'NO_REUSABLE_ENTRY',
+) {
+  const compatible = candidates.filter((entry) => (
+    entry.repositoryScope === identity.repositoryScope
+    && entry.reusePolicy === identity.reusePolicy
+  ));
+  if (compatible.length === 0) return fallbackReason;
   const dimensions: Array<[keyof CommandResultReuseIdentity, string]> = [
     ['semanticKey', 'SEMANTIC_KEY_CHANGED'],
     ['coverageScope', 'COVERAGE_SCOPE_CHANGED'],
@@ -130,9 +131,9 @@ export function classifyCommandResultCacheMiss(identity: CommandResultReuseIdent
     if (key === 'targets') return JSON.stringify(candidate.targets) === JSON.stringify(identity.targets);
     return candidate[key] === identity[key];
   };
-  let best = candidates[0];
+  let best = compatible[0];
   let bestMismatchCount = Number.POSITIVE_INFINITY;
-  for (const candidate of candidates) {
+  for (const candidate of compatible) {
     const mismatchCount = dimensions.reduce((count, [key]) => count + (dimensionMatches(candidate, key) ? 0 : 1), 0);
     if (mismatchCount < bestMismatchCount) {
       best = candidate;
@@ -142,7 +143,18 @@ export function classifyCommandResultCacheMiss(identity: CommandResultReuseIdent
   for (const [key, reason] of dimensions) {
     if (!dimensionMatches(best, key)) return reason;
   }
-  return evictionCount > 0 ? 'ENTRY_EVICTED' : 'NO_REUSABLE_ENTRY';
+  return fallbackReason;
+}
+
+export function classifyCommandResultCacheMiss(identity: CommandResultReuseIdentity) {
+  const candidates = Array.from(cache.values())
+    .map((entry) => entry.evidence?.reuseIdentity)
+    .filter((entry): entry is CommandResultReuseIdentity => Boolean(entry));
+  return classifyCommandResultIdentityMismatch(
+    candidates,
+    identity,
+    evictionCount > 0 ? 'ENTRY_EVICTED' : 'NO_REUSABLE_ENTRY',
+  );
 }
 
 export function clearCommandResultCache() {

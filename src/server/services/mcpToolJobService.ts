@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import type { AppState } from '../types';
-import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listRecentJobs, startBackgroundJobCleanup, claimJob, heartbeatJob, requestJobCancellation, transitionJobStatus, getDurableJobMetrics, markJobConsumerAttached, markJobConsumerDetached, markJobSuperseded, getLatestAcceptedGreenGeneration, type McpToolJob, type JobLeaseGuard } from '../repositories/mcpToolJobRepository';
+import { createJob, updateJobStatus, appendJobLog, writeJobResult, getJob, readJobLog, readJobResult, listRecentJobs, startBackgroundJobCleanup, claimJob, heartbeatJob, requestJobCancellation, transitionJobStatus, getDurableJobMetrics, markJobConsumerAttached, markJobConsumerDetached, markJobSuperseded, getLatestAcceptedGreenGeneration, rememberDurableFullGreenEvidence, type McpToolJob, type JobLeaseGuard } from '../repositories/mcpToolJobRepository';
 import { createApiError, normalizeUnknownError } from './api';
 import { resolveProjectResourceIdentity, resolveProjectRoot } from './localFileService';
 import { isDevFlowRestartPending, readDevFlowRestartState } from '../../lib/devFlowRestart';
@@ -1641,9 +1641,14 @@ export function enqueueToolJob(state: AppState, toolName: string, args: any, kin
   if (toolName === 'run_project_command' && kind === 'repo-command' && !testRunners.has(toolName) && !verificationCandidateIdForArgs(args)) {
     const cleanArgs = { ...args };
     delete cleanArgs.__projectCommandAdmissionIdentity;
+    delete cleanArgs.__projectCommandDurableReuse;
     admissionPreflight = getProjectCommandAdmissionPreflight(state, cleanArgs);
     jobArgs = admissionPreflight.executionIdentity
-      ? { ...cleanArgs, __projectCommandAdmissionIdentity: admissionPreflight.executionIdentity }
+      ? {
+          ...cleanArgs,
+          __projectCommandAdmissionIdentity: admissionPreflight.executionIdentity,
+          ...(admissionPreflight.durableReuse ? { __projectCommandDurableReuse: admissionPreflight.durableReuse } : {}),
+        }
       : cleanArgs;
   }
 
@@ -2188,7 +2193,20 @@ async function startJob(entry: QueueEntry) {
       const acceptedResult = currentGreenJobResult(result, entry.verification, entry.args);
       completedResult = acceptedResult;
       const wrote = writeJobResult(entry.jobId, acceptedResult, leaseGuard);
-      if (wrote) transitionJobStatus(entry.jobId, ['running'], { status: 'succeeded' }, leaseGuard);
+      const transitioned = wrote ? transitionJobStatus(entry.jobId, ['running'], { status: 'succeeded' }, leaseGuard) : null;
+      const durableReuse = entry.args?.__projectCommandDurableReuse;
+      if (
+        transitioned
+        && acceptedResult?.ok === true
+        && acceptedResult?.status === 'succeeded'
+        && acceptedResult?.cache?.hit === false
+        && Number(acceptedResult?.processSpawns || 0) > 0
+        && durableReuse?.key
+        && durableReuse?.identity?.reusePolicy === 'exact-revision'
+        && durableReuse?.identity?.coverageScope === 'full'
+      ) {
+        rememberDurableFullGreenEvidence(durableReuse.key, durableReuse.identity, entry.jobId);
+      }
     }
   } catch (error: any) {
     if (!entry.phaseTelemetry.executionCompletedAt) entry.phaseTelemetry.executionCompletedAt = Date.now();

@@ -21,6 +21,7 @@ import { taskFinalizationOperationsMigration } from './019-task-finalization-ope
 import { lifecycleEmergencyOperationsMigration } from './020-lifecycle-emergency-operations.js';
 import { taskPrerequisitesMigration } from './021-task-prerequisites.js';
 import { verificationResourceProfilesMigration } from './022-verification-resource-profiles.js';
+import { durableFullGreenEvidenceMigration } from './023-durable-full-green-evidence.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -46,6 +47,7 @@ export const DEVFLOW_MIGRATIONS = [
   lifecycleEmergencyOperationsMigration,
   taskPrerequisitesMigration,
   verificationResourceProfilesMigration,
+  durableFullGreenEvidenceMigration,
 ] as const;
 
 export function executeAllMigrations() {

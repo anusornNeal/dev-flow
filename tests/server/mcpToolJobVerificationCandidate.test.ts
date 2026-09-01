@@ -22,6 +22,12 @@ const {
   createJob,
   getJob,
   readJobResult,
+  writeJobResult,
+  transitionJobStatus,
+  rememberDurableFullGreenEvidence,
+  getDurableFullGreenEvidence,
+  clearDurableFullGreenEvidenceForTests,
+  getDurableFullGreenEvidenceStats,
 } = await import('../../src/server/repositories/mcpToolJobRepository.js');
 const {
   __setToolJobTestRunner,
@@ -34,6 +40,7 @@ const {
   prepareProjectCommandVerificationCandidate,
   runProjectCommand,
 } = await import('../../src/server/services/projectCommandService.js');
+const { clearCommandResultCache } = await import('../../src/server/services/commandResultCacheService.js');
 const {
   resolveVerificationCandidate,
   releaseVerificationCandidate,
@@ -175,6 +182,135 @@ function assertCandidateReleased(candidateId: string) {
     `expected candidate ${candidateId} to be released`,
   );
 }
+
+test('exact-revision FULL GREEN durable job evidence survives memory reset and invalidates on revision change', async () => {
+  clearCommandResultCache();
+  clearDurableFullGreenEvidenceForTests();
+  const { root, projectId } = makeVerificationRepo('durable-full-job');
+  const packageJsonPath = path.join(root, 'package.json');
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  packageJson.scripts.verify = 'node scripts/read.mjs';
+  fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2), 'utf8');
+  git(root, ['add', 'package.json']);
+  git(root, ['commit', '-m', 'add full verify']);
+  const state = makeState(root, projectId);
+  const baseArgs = {
+    localPath: root,
+    command: 'verify',
+    cacheResult: true,
+    singleFlight: false,
+  };
+
+  const source = enqueueToolJob(state, 'run_project_command', { ...baseArgs, forceFresh: true }, 'repo-command');
+  await waitForStatus(source.jobId, 'succeeded', 20_000);
+  const sourceResult = readJobResult(source.jobId) as any;
+  assert.equal(sourceResult?.result?.cache?.hit, false);
+  assert.equal(sourceResult?.result?.cache?.source, 'process');
+  assert.equal(sourceResult?.result?.processSpawns, 1);
+  assert.equal(getDurableFullGreenEvidenceStats().entries, 1);
+
+  clearCommandResultCache();
+  const reused = enqueueToolJob(state, 'run_project_command', baseArgs, 'repo-command');
+  assert.equal(reused.status, 'succeeded', 'durable FULL hit should complete during admission');
+  const reusedResult = readJobResult(reused.jobId) as any;
+  assert.equal(reusedResult?.result?.cache?.hit, true);
+  assert.equal(reusedResult?.result?.cache?.source, 'durable');
+  assert.equal(reusedResult?.result?.cache?.sourceJobId, source.jobId);
+  assert.equal(reusedResult?.result?.processSpawns, 0);
+
+  fs.writeFileSync(path.join(root, 'src', 'value.txt'), 'candidate-b\n', 'utf8');
+  git(root, ['add', 'src/value.txt']);
+  git(root, ['commit', '-m', 'candidate b']);
+  clearCommandResultCache();
+  const changed = enqueueToolJob(state, 'run_project_command', baseArgs, 'repo-command');
+  if (changed.status !== 'succeeded') await waitForStatus(changed.jobId, 'succeeded', 20_000);
+  const changedResult = readJobResult(changed.jobId) as any;
+  assert.equal(changedResult?.result?.cache?.hit, false);
+  assert.equal(changedResult?.result?.cache?.source, 'process');
+  assert.equal(changedResult?.result?.processSpawns, 1);
+
+  clearCommandResultCache();
+  clearDurableFullGreenEvidenceForTests();
+});
+
+test('durable FULL GREEN evidence rejects non-GREEN or missing artifacts and evicts beyond its bounded cap', () => {
+  clearDurableFullGreenEvidenceForTests();
+  const identityFor = (index: number) => ({
+    repositoryScope: 'project:durable-retention',
+    reusePolicy: 'exact-revision' as const,
+    repoRevision: `rev-${index}`,
+    semanticKey: 'verify',
+    coverageScope: 'full' as const,
+    targets: [],
+    commandConfigFingerprint: 'config-a',
+    affectedInputFingerprint: `input-${index}`,
+    dependencyFingerprint: 'dependency-a',
+    environmentFingerprint: 'environment-a',
+    cwd: '.',
+    timeoutMs: 120_000,
+    maxOutputBytes: 12_000,
+    responseMode: 'standard' as const,
+    evidenceLineageToken: 'project-rules:0',
+  });
+  const persistSource = (reuseKey: string, index: number, result: any, terminalStatus: 'succeeded' | 'failed' | 'timed_out' = 'succeeded') => {
+    const job = createJob(`job-durable-fixture-${index}-${randomUUID()}`, 'run_project_command', {}, 'repo:test');
+    assert.equal(writeJobResult(job.jobId, result), true);
+    assert.ok(transitionJobStatus(job.jobId, ['queued'], { status: terminalStatus }));
+    return job;
+  };
+
+  const failedKey = 'durable-failed';
+  const failed = persistSource(failedKey, -1, {
+    ok: false,
+    status: 'failed',
+    timedOut: false,
+    processSpawns: 1,
+    cache: { hit: false, key: failedKey },
+  }, 'failed');
+  assert.equal(rememberDurableFullGreenEvidence(failedKey, identityFor(-1), failed.jobId), null);
+
+  const staleKey = 'durable-stale';
+  const stale = persistSource(staleKey, -2, {
+    ok: true,
+    status: 'succeeded',
+    timedOut: false,
+    stale: true,
+    verificationFreshness: 'stale',
+    processSpawns: 1,
+    cache: { hit: false, key: staleKey },
+  });
+  assert.equal(rememberDurableFullGreenEvidence(staleKey, identityFor(-2), stale.jobId), null);
+
+  const missingKey = 'durable-missing-artifact';
+  const missing = persistSource(missingKey, -3, {
+    ok: true,
+    status: 'succeeded',
+    timedOut: false,
+    processSpawns: 1,
+    cache: { hit: false, key: missingKey },
+  });
+  assert.ok(rememberDurableFullGreenEvidence(missingKey, identityFor(-3), missing.jobId));
+  const missingJob = getJob(missing.jobId);
+  assert.ok(missingJob);
+  fs.rmSync(path.join(missingJob!.artifactDir, 'result.json'), { force: true });
+  assert.equal(getDurableFullGreenEvidence(missingKey), null, 'missing artifact must fail closed and remove the durable index entry');
+
+  for (let index = 0; index < 129; index += 1) {
+    const reuseKey = `durable-bounded-${index}`;
+    const source = persistSource(reuseKey, index, {
+      ok: true,
+      status: 'succeeded',
+      timedOut: false,
+      processSpawns: 1,
+      cache: { hit: false, key: reuseKey },
+    });
+    assert.ok(rememberDurableFullGreenEvidence(reuseKey, identityFor(index), source.jobId));
+  }
+  assert.equal(getDurableFullGreenEvidenceStats().entries, 128);
+  assert.equal(getDurableFullGreenEvidence('durable-bounded-0'), null, 'oldest durable evidence should be evicted');
+  assert.ok(getDurableFullGreenEvidence('durable-bounded-128'));
+  clearDurableFullGreenEvidenceForTests();
+});
 
 test('fresh cached run_project_command completes durable job before candidate creation or process execution', async () => {
   const { root, projectId } = makeVerificationRepo('cache-first');

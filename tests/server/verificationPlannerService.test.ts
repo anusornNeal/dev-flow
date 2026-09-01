@@ -28,7 +28,10 @@ test('build/config changes automatically escalate to SAFE and broad verification
   assert.equal(plan.lane, 'safe');
   assert.equal(plan.risk, 'high');
   assert.equal(plan.requiresBroadVerify, true);
-  assert.ok(plan.commands.includes('verify'));
+  assert.equal(plan.requiresFullRegression, false);
+  assert.equal(plan.coverageRequirement, 'broad');
+  assert.deepEqual(plan.commands, ['typecheck', 'test']);
+  assert.deepEqual(plan.fullRegression.reasonCodes, ['FULL_NOT_AUTHORIZED']);
   assert.ok(plan.reasons.length > 0);
 });
 
@@ -81,8 +84,62 @@ test('explicit FULL lane selects one FULL descriptor and marks broad verificatio
   assert.equal(plan.lane, 'full');
   assert.deepEqual(plan.commands, ['verify']);
   assert.equal(plan.requiresBroadVerify, true);
+  assert.equal(plan.requiresFullRegression, true);
+  assert.equal(plan.coverageRequirement, 'full');
+  assert.equal(plan.fullRegression.authority, 'requested-lane');
+  assert.deepEqual(plan.fullRegression.reasonCodes, ['FULL_EXPLICIT_REQUEST']);
   assert.equal(plan.steps[0]?.verificationClass, 'heavy');
   assert.deepEqual(plan.steps[0]?.sharedResources, ['repo']);
+});
+
+test('missing impact rules and generic high risk do not authorize FULL descriptors', () => {
+  const plan = planVerification({
+    changedFiles: ['src/server/contracts/devflowContract.ts'],
+    resolvedCommands: [
+      { command: 'typecheck', semanticKey: 'tsc', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+      { command: 'verify', semanticKey: 'full-verify', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+  });
+
+  assert.equal(plan.lane, 'safe');
+  assert.equal(plan.coverageRequirement, 'broad');
+  assert.equal(plan.requiresFullRegression, false);
+  assert.deepEqual(plan.commands, ['typecheck']);
+  assert.deepEqual(plan.fullRegression.reasonCodes, ['FULL_NOT_AUTHORIZED']);
+  assert.match(plan.impact.omittedCommands.find((entry: any) => entry.command === 'verify')?.reason || '', /authority was not established/i);
+});
+
+test('legacy impact-rule FULL lane remains explicit project authority', () => {
+  const plan = planVerification({
+    changedFiles: ['src/service.ts'],
+    resolvedCommands: [
+      { command: 'typecheck', semanticKey: 'tsc', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+      { command: 'verify', semanticKey: 'full-verify', scope: 'full', cost: 'high', resourceKey: 'repo' },
+    ],
+    impactRules: [{ id: 'global-service-regression', patterns: ['src/service.ts'], commands: ['verify'], lane: 'full' }],
+  });
+
+  assert.equal(plan.lane, 'full');
+  assert.equal(plan.requiresFullRegression, true);
+  assert.equal(plan.coverageRequirement, 'full');
+  assert.equal(plan.fullRegression.authority, 'impact-rule');
+  assert.deepEqual(plan.fullRegression.reasonCodes, ['FULL_IMPACT_RULE']);
+  assert.deepEqual(plan.commands, ['verify']);
+});
+
+test('FULL requirement reports deterministic unavailable-descriptor evidence', () => {
+  const plan = planVerification({
+    changedFiles: ['src/service.ts'],
+    requestedLane: 'full',
+    resolvedCommands: [
+      { command: 'typecheck', semanticKey: 'tsc', scope: 'broad', cost: 'medium', resourceKey: 'typescript' },
+    ],
+  });
+
+  assert.equal(plan.requiresFullRegression, true);
+  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.fullRegression.reasonCodes, ['FULL_EXPLICIT_REQUEST', 'FULL_DESCRIPTOR_UNAVAILABLE']);
+  assert.match(plan.fullRegression.reasons.at(-1) || '', /no runnable FULL descriptor/i);
 });
 
 test('planner propagates fast verification resource metadata without changing selection', () => {
@@ -249,7 +306,9 @@ test('high-risk mapping without broad or full evidence still falls back conserva
   });
 
   assert.equal(plan.impact.mode, 'fallback');
-  assert.deepEqual(plan.commands, ['test']);
+  assert.deepEqual(plan.commands, []);
+  assert.equal(plan.requiresFullRegression, false);
+  assert.match(plan.impact.omittedCommands.find((entry: any) => entry.command === 'test')?.reason || '', /authority was not established/i);
 });
 
 test('high-risk fallback preserves mapped targets for target-required presets instead of emitting a bare command', () => {
@@ -312,8 +371,10 @@ test('mapped coverage fails closed when a required command or target capability 
   });
   assert.equal(invalidTarget.impact.mode, 'fallback');
   assert.equal(invalidTarget.lane, 'safe');
-  assert.deepEqual(invalidTarget.commands, ['verify']);
+  assert.deepEqual(invalidTarget.commands, []);
+  assert.equal(invalidTarget.requiresFullRegression, false);
   assert.match(invalidTarget.impact.unavailableChecks[0]?.reason || '', /accepts targets/i);
+  assert.match(invalidTarget.impact.omittedCommands.find((entry: any) => entry.command === 'verify')?.reason || '', /authority was not established/i);
 });
 
 test('overlapping impact rules union required commands and focused targets deterministically', () => {
@@ -346,8 +407,10 @@ test('SAFE impact escalation remains authoritative and cannot narrow to a target
 
   assert.equal(plan.impact.mode, 'configured');
   assert.equal(plan.lane, 'safe');
-  assert.deepEqual(plan.commands, ['verify']);
+  assert.deepEqual(plan.commands, []);
   assert.equal(plan.requiresBroadVerify, true);
+  assert.equal(plan.requiresFullRegression, false);
+  assert.match(plan.impact.omittedCommands.find((entry: any) => entry.command === 'verify')?.reason || '', /authority was not established/i);
 });
 
 test('verification control-plane changes are high risk and cannot self-narrow', () => {
@@ -373,7 +436,9 @@ test('verification control-plane changes are high risk and cannot self-narrow', 
   assert.equal(plan.risk, 'high');
   assert.equal(plan.impact.mode, 'fallback');
   assert.equal(plan.lane, 'safe');
-  assert.deepEqual(plan.commands, ['verify']);
+  assert.deepEqual(plan.commands, ['test-command-service', 'typecheck']);
+  assert.equal(plan.requiresFullRegression, false);
+  assert.equal(plan.commands.includes('verify'), false);
 });
 
 test('impact config rejects duplicate rule ids and loads exact target-aware checks', () => {

@@ -1,5 +1,19 @@
 export type VerificationRisk = 'low' | 'medium' | 'high';
 export type ExecutionLane = 'fast' | 'safe' | 'full';
+export type VerificationCoverageRequirement = 'targeted' | 'broad' | 'full';
+export type VerificationFullReasonCode =
+  | 'FULL_EXPLICIT_REQUEST'
+  | 'FULL_IMPACT_RULE'
+  | 'FULL_NOT_AUTHORIZED'
+  | 'FULL_DESCRIPTOR_UNAVAILABLE';
+export type VerificationFullAuthority = 'none' | 'requested-lane' | 'impact-rule';
+
+export type VerificationFullDecision = {
+  required: boolean;
+  authority: VerificationFullAuthority;
+  reasonCodes: VerificationFullReasonCode[];
+  reasons: string[];
+};
 export type VerificationCommandScope = 'targeted' | 'broad' | 'full';
 export type VerificationCommandCost = 'low' | 'medium' | 'high';
 export type VerificationExecutionClass = 'fast' | 'heavy';
@@ -97,6 +111,9 @@ export type VerificationPlan = {
   commands: string[];
   steps: VerificationPlanStep[];
   requiresBroadVerify: boolean;
+  requiresFullRegression: boolean;
+  coverageRequirement: VerificationCoverageRequirement;
+  fullRegression: VerificationFullDecision;
   reasons: string[];
   impact: VerificationImpactDecision;
   tdd: VerificationTddPolicy;
@@ -151,19 +168,19 @@ function classifyRisk(files: string[]) {
   return { risk: 'medium' as const, reason: 'Application/source logic changed without a high-risk path signal.' };
 }
 
-function selectCommands(risk: VerificationRisk, requested: string[]) {
+function selectCommands(risk: VerificationRisk, requested: string[], requiresFullRegression: boolean) {
   const available = unique(requested);
   if (available.length === 0) return [];
-  if (risk === 'high') {
-    if (available.includes('verify')) return unique([...available.filter((command) => command !== 'build'), 'verify']);
-    return available;
-  }
+  if (requiresFullRegression) return available.includes('verify') ? ['verify'] : [];
+
+  const nonFull = available.filter((command) => command !== 'verify');
+  if (risk === 'high') return nonFull.filter((command) => command !== 'build');
   if (risk === 'low') {
-    const preferred = ['typecheck', 'lint'].filter((command) => available.includes(command));
-    return preferred.length > 0 ? preferred : available.slice(0, 1);
+    const preferred = ['typecheck', 'lint'].filter((command) => nonFull.includes(command));
+    return preferred.length > 0 ? preferred : nonFull.slice(0, 1);
   }
-  const preferred = ['typecheck', 'test', 'lint'].filter((command) => available.includes(command));
-  return preferred.length > 0 ? preferred : available.filter((command) => command !== 'build' && command !== 'verify');
+  const preferred = ['typecheck', 'test', 'lint'].filter((command) => nonFull.includes(command));
+  return preferred.length > 0 ? preferred : nonFull.filter((command) => command !== 'build');
 }
 
 const COST_RANK: Record<VerificationCommandCost, number> = { low: 0, medium: 1, high: 2 };
@@ -181,7 +198,11 @@ function dedupeResolvedCommands(commands: VerificationCommandDescriptor[]) {
   return deduped;
 }
 
-function selectResolvedCommands(risk: VerificationRisk, lane: ExecutionLane, commands: VerificationCommandDescriptor[]) {
+function selectResolvedCommands(
+  lane: ExecutionLane,
+  commands: VerificationCommandDescriptor[],
+  requiresFullRegression: boolean,
+) {
   const available = dedupeResolvedCommands(commands)
     .map((command, index) => ({ command, index }))
     .sort((left, right) => COST_RANK[left.command.cost] - COST_RANK[right.command.cost] || left.index - right.index)
@@ -189,12 +210,16 @@ function selectResolvedCommands(risk: VerificationRisk, lane: ExecutionLane, com
   if (available.length === 0) return [];
 
   const full = available.filter((command) => command.scope === 'full');
-  if (lane === 'full') return full.length > 0 ? full.slice(0, 1) : available;
-  if (lane === 'safe' || risk === 'high') return full.length > 0 ? full.slice(0, 1) : available;
+  if (requiresFullRegression) return full.slice(0, 1);
 
-  const fastCandidates = available.filter((command) => command.scope !== 'full');
-  const targeted = fastCandidates.filter((command) => command.scope === 'targeted');
-  return targeted.length > 0 ? targeted : fastCandidates.slice(0, 1);
+  const nonFull = available.filter((command) => command.scope !== 'full');
+  if (lane === 'safe') {
+    const broad = nonFull.filter((command) => command.scope === 'broad');
+    return broad.length > 0 ? nonFull : [];
+  }
+
+  const targeted = nonFull.filter((command) => command.scope === 'targeted');
+  return targeted.length > 0 ? targeted : nonFull.slice(0, 1);
 }
 
 function globMatches(file: string, pattern: string) {
@@ -414,6 +439,27 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   const impactEvaluation = evaluateImpact(files, normalizeImpactRules(input.impactRules), availableCommands, resolvedCommands, classification.risk);
   const tdd = planTddPolicy(classification.risk, input.tdd);
   let lane: ExecutionLane = classification.risk === 'high' ? 'safe' : 'fast';
+  const impactRuleRequiresFull = impactEvaluation.lane === 'full' && impactEvaluation.matchedRuleIds.length > 0;
+  const requiresFullRegression = input.requestedLane === 'full' || impactRuleRequiresFull;
+  const fullReasonCodes: VerificationFullReasonCode[] = [];
+  const fullReasons: string[] = [];
+  let fullAuthority: VerificationFullAuthority = 'none';
+
+  if (input.requestedLane === 'full') {
+    fullAuthority = 'requested-lane';
+    fullReasonCodes.push('FULL_EXPLICIT_REQUEST');
+    fullReasons.push('FULL repository regression was explicitly requested.');
+  }
+  if (impactRuleRequiresFull) {
+    if (fullAuthority === 'none') fullAuthority = 'impact-rule';
+    fullReasonCodes.push('FULL_IMPACT_RULE');
+    fullReasons.push(`Matched project impact rule requires FULL repository regression: ${impactEvaluation.matchedRuleIds.join(', ')}.`);
+  }
+  if (!requiresFullRegression) {
+    fullReasonCodes.push('FULL_NOT_AUTHORIZED');
+    fullReasons.push('FULL repository regression is not authorized; SAFE/high-risk planning remains bounded to non-FULL verification.');
+  }
+  reasons.push(...fullReasons);
 
   if (impactEvaluation.mode === 'configured') {
     reasons.push(`Configured verification impact mapping covered ${impactEvaluation.coveredFiles.length} changed file(s).`);
@@ -435,9 +481,8 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
     reasons.push('Mapped verification requirements are unavailable, so FAST narrowing is disabled until broader evidence is available.');
   }
 
-  if (input.requestedLane === 'full') {
+  if (requiresFullRegression) {
     lane = 'full';
-    reasons.push('FULL lane was explicitly requested.');
   } else if (input.requestedLane === 'safe') {
     lane = 'safe';
     reasons.push('SAFE lane was explicitly requested.');
@@ -453,7 +498,7 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   let selectedResolved: VerificationCommandDescriptor[] = [];
   let commands: string[] = [];
   const mappingMaySelectConfigured = impactEvaluation.mode === 'configured'
-    && input.requestedLane !== 'full'
+    && !requiresFullRegression
     && ((lane === 'fast' && input.requestedLane !== 'safe' && classification.risk !== 'high')
       || (lane === 'safe' && classification.risk === 'high'));
 
@@ -471,11 +516,11 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
       ? resolvedCommands.filter((entry) => entry.scope !== 'targeted')
       : resolvedCommands;
     selectedResolved = fallbackResolvedCommands.length > 0
-      ? selectResolvedCommands(classification.risk, lane, fallbackResolvedCommands)
+      ? selectResolvedCommands(lane, fallbackResolvedCommands, requiresFullRegression)
       : [];
     commands = selectedResolved.length > 0
       ? selectedResolved.map((command) => command.command)
-      : selectCommands(classification.risk, requestedCommands);
+      : selectCommands(classification.risk, requestedCommands, requiresFullRegression);
     if (selectedResolved.length === 0 && lane === 'safe' && classification.risk !== 'high') {
       commands = requestedCommands.length > 0 ? requestedCommands : commands;
     }
@@ -486,7 +531,9 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
 
   if (impactEvaluation.unavailableChecks.length > 0) {
     if (resolvedCommands.length > 0) {
-      selectedResolved = selectedResolved.filter((entry) => entry.scope !== 'targeted');
+      selectedResolved = selectedResolved.filter((entry) => requiresFullRegression
+        ? entry.scope === 'full'
+        : entry.scope === 'broad');
       commands = selectedResolved.map((entry) => entry.command);
     } else if (!commands.includes('verify')) {
       commands = [];
@@ -497,6 +544,17 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   }
 
   commands = unique(commands);
+  const selectedHasFullDescriptor = selectedResolved.some((entry) => entry.scope === 'full')
+    || (requiresFullRegression && selectedResolved.length === 0 && commands.includes('verify'));
+  if (requiresFullRegression && !selectedHasFullDescriptor) {
+    fullReasonCodes.push('FULL_DESCRIPTOR_UNAVAILABLE');
+    const reason = 'FULL repository regression is required, but no runnable FULL descriptor is available.';
+    fullReasons.push(reason);
+    reasons.push(reason);
+  }
+  const coverageRequirement: VerificationCoverageRequirement = requiresFullRegression
+    ? 'full'
+    : (lane === 'safe' || classification.risk === 'high' ? 'broad' : 'targeted');
   const isolated = new Set(input.resourceIsolatedCommands || []);
   const selectedByCommand = new Map(selectedResolved.map((command) => [command.command, command]));
   const configuredTargetsByCommand = new Map(impactEvaluation.configuredChecks.map((check) => [check.command, check.targets || []]));
@@ -529,21 +587,37 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
     };
   });
 
+  const resolvedByCommand = new Map(resolvedCommands.map((entry) => [entry.command, entry]));
   const omittedCommands = availableCommands
     .filter((command) => !commands.includes(command))
-    .map((command) => ({
-      command,
-      reason: impactEvaluation.mode === 'configured'
-        ? 'Command was not selected by the configured impact rules for the changed files.'
-        : 'Command was not selected by the conservative fallback plan for this lane and risk.',
-    }));
+    .map((command) => {
+      const descriptor = resolvedByCommand.get(command);
+      return {
+        command,
+        reason: descriptor?.scope === 'full' && !requiresFullRegression
+          ? 'FULL-scoped command was omitted because FULL repository-regression authority was not established.'
+          : descriptor?.scope === 'full' && requiresFullRegression
+            ? 'Another FULL-scoped command was selected for the required repository regression.'
+            : impactEvaluation.mode === 'configured'
+              ? 'Command was not selected by the configured impact rules for the changed files.'
+              : 'Command was not selected by the conservative fallback plan for this lane and risk.',
+      };
+    });
 
   return {
     risk: classification.risk,
     lane,
     commands,
     steps,
-    requiresBroadVerify: lane !== 'fast' || classification.risk === 'high',
+    requiresBroadVerify: coverageRequirement !== 'targeted',
+    requiresFullRegression,
+    coverageRequirement,
+    fullRegression: {
+      required: requiresFullRegression,
+      authority: fullAuthority,
+      reasonCodes: unique(fullReasonCodes) as VerificationFullReasonCode[],
+      reasons: unique(fullReasons),
+    },
     reasons,
     impact: {
       mode: impactEvaluation.mode,

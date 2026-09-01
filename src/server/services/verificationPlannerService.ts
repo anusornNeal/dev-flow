@@ -4,9 +4,16 @@ export type VerificationCoverageRequirement = 'targeted' | 'broad' | 'full';
 export type VerificationFullReasonCode =
   | 'FULL_EXPLICIT_REQUEST'
   | 'FULL_IMPACT_RULE'
+  | 'FULL_INFERRED_REPOSITORY_WIDE'
+  | 'FULL_ONLY_SAFE_RUNNABLE_COVERAGE'
   | 'FULL_NOT_AUTHORIZED'
   | 'FULL_DESCRIPTOR_UNAVAILABLE';
-export type VerificationFullAuthority = 'none' | 'requested-lane' | 'impact-rule';
+export type VerificationFullAuthority =
+  | 'none'
+  | 'requested-lane'
+  | 'impact-rule'
+  | 'inferred-repository-wide'
+  | 'safe-runnable-coverage';
 
 export type VerificationFullDecision = {
   required: boolean;
@@ -59,6 +66,9 @@ export type VerificationImpactCheck = {
   targets?: string[];
 };
 
+export type VerificationImpactRuleSource = 'configured' | 'inferred';
+export type VerificationInferredFullReasonCode = 'FULL_INFERRED_REPOSITORY_WIDE' | 'FULL_ONLY_SAFE_RUNNABLE_COVERAGE';
+
 export type VerificationImpactRule = {
   id?: string;
   patterns: string[];
@@ -67,13 +77,19 @@ export type VerificationImpactRule = {
   checks?: VerificationImpactCheck[];
   lane?: ExecutionLane;
   reason?: string;
+  source?: VerificationImpactRuleSource;
+  inferredFullReasonCode?: VerificationInferredFullReasonCode;
 };
 
 export type VerificationImpactDecision = {
-  mode: 'configured' | 'fallback';
+  mode: 'configured' | 'inferred' | 'hybrid' | 'fallback';
   coveredFiles: string[];
+  configuredCoveredFiles: string[];
+  inferredCoveredFiles: string[];
   unknownFiles: string[];
   matchedRuleIds: string[];
+  matchedConfiguredRuleIds: string[];
+  matchedInferredRuleIds: string[];
   selectedCommands: string[];
   selectedChecks: VerificationImpactCheck[];
   unavailableChecks: Array<{ command: string; reason: string }>;
@@ -87,6 +103,7 @@ export type VerificationPlanInput = {
   resolvedCommands?: VerificationCommandDescriptor[];
   resourceIsolatedCommands?: string[];
   impactRules?: VerificationImpactRule[];
+  inferredFullReasonCode?: VerificationInferredFullReasonCode;
   tdd?: VerificationTddInput;
 };
 
@@ -190,7 +207,7 @@ function dedupeResolvedCommands(commands: VerificationCommandDescriptor[]) {
   const seen = new Set<string>();
   const deduped: VerificationCommandDescriptor[] = [];
   for (const command of commands) {
-    const key = command.semanticKey || command.command;
+    const key = (command.semanticKey || command.command) + ':' + command.scope;
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(command);
@@ -255,12 +272,19 @@ function normalizeImpactRules(rules: VerificationImpactRule[] | undefined) {
     });
     if (patterns.length === 0 || checks.length === 0) return [];
     const lane = rule.lane === 'safe' || rule.lane === 'full' || rule.lane === 'fast' ? rule.lane : undefined;
+    const source: VerificationImpactRuleSource = rule.source === 'inferred' ? 'inferred' : 'configured';
+    const inferredFullReasonCode = source === 'inferred'
+      && (rule.inferredFullReasonCode === 'FULL_INFERRED_REPOSITORY_WIDE' || rule.inferredFullReasonCode === 'FULL_ONLY_SAFE_RUNNABLE_COVERAGE')
+      ? rule.inferredFullReasonCode
+      : undefined;
     return [{
       id: String(rule.id || `rule-${index + 1}`),
       patterns,
       commands: unique(checks.map((check) => check.command)),
       checks,
       lane,
+      source,
+      ...(inferredFullReasonCode ? { inferredFullReasonCode } : {}),
       reason: typeof rule.reason === 'string' ? rule.reason.trim() : '',
     }];
   });
@@ -274,17 +298,24 @@ function evaluateImpact(
   risk: VerificationRisk,
 ) {
   const coveredFiles: string[] = [];
+  const configuredCoveredFiles: string[] = [];
+  const inferredCoveredFiles: string[] = [];
   const unknownFiles: string[] = [];
   const matchedRules: typeof rules = [];
   for (const file of files) {
     const matching = rules.filter((rule) => rule.patterns.some((pattern) => globMatches(file, pattern)));
-    if (matching.length === 0) unknownFiles.push(file);
-    else {
-      coveredFiles.push(file);
-      matchedRules.push(...matching);
+    if (matching.length === 0) {
+      unknownFiles.push(file);
+      continue;
     }
+    coveredFiles.push(file);
+    if (matching.some((rule) => rule.source === 'configured')) configuredCoveredFiles.push(file);
+    if (matching.some((rule) => rule.source === 'inferred')) inferredCoveredFiles.push(file);
+    matchedRules.push(...matching);
   }
   const uniqueMatchedRules = matchedRules.filter((rule, index, array) => array.findIndex((candidate) => candidate.id === rule.id) === index);
+  const matchedConfiguredRules = uniqueMatchedRules.filter((rule) => rule.source === 'configured');
+  const matchedInferredRules = uniqueMatchedRules.filter((rule) => rule.source === 'inferred');
   const groupedChecks = new Map<string, { command: string; targets: Set<string>; untargeted: boolean }>();
   for (const check of uniqueMatchedRules.flatMap((rule) => rule.checks)) {
     const current = groupedChecks.get(check.command) || { command: check.command, targets: new Set<string>(), untargeted: false };
@@ -329,7 +360,7 @@ function evaluateImpact(
     if (!current || LANE_RANK[rule.lane] > LANE_RANK[current]) return rule.lane;
     return current;
   }, undefined);
-  const configuredScopes = configuredCommands.flatMap((command) => {
+  const selectedScopes = configuredCommands.flatMap((command) => {
     const scope = resolvedByCommand.get(command)?.scope;
     return scope ? [scope] : [];
   });
@@ -337,18 +368,30 @@ function evaluateImpact(
   const highRiskSafeMappingEligible = highRiskFiles.length > 0
     && highRiskFiles.every((file) => SAFE_MAPPABLE_HIGH_RISK_PATHS.some((pattern) => pattern.test(normalizePath(file))));
   const highRiskMappedEvidenceSatisfied = risk !== 'high'
-    || (highRiskSafeMappingEligible && lane === 'safe' && configuredScopes.some((scope) => scope === 'broad' || scope === 'full'))
-    || (highRiskSafeMappingEligible && lane === 'full' && configuredScopes.some((scope) => scope === 'full'));
-  const mode: 'configured' | 'fallback' = completeCoverage && highRiskMappedEvidenceSatisfied ? 'configured' : 'fallback';
+    || (lane === 'full' && selectedScopes.some((scope) => scope === 'full'))
+    || (highRiskSafeMappingEligible && lane === 'safe' && selectedScopes.some((scope) => scope === 'broad' || scope === 'full'));
+  let mode: VerificationImpactDecision['mode'] = 'fallback';
+  if (completeCoverage && highRiskMappedEvidenceSatisfied) {
+    mode = matchedConfiguredRules.length > 0 && matchedInferredRules.length > 0
+      ? 'hybrid'
+      : matchedInferredRules.length > 0
+        ? 'inferred'
+        : 'configured';
+  }
   return {
     mode,
     coveredFiles,
+    configuredCoveredFiles,
+    inferredCoveredFiles,
     unknownFiles,
     matchedRuleIds: uniqueMatchedRules.map((rule) => rule.id),
+    matchedConfiguredRuleIds: matchedConfiguredRules.map((rule) => rule.id),
+    matchedInferredRuleIds: matchedInferredRules.map((rule) => rule.id),
     configuredCommands,
     configuredChecks,
     unavailableChecks,
     lane,
+    inferredFullReasonCodes: unique(matchedInferredRules.flatMap((rule) => rule.inferredFullReasonCode ? [rule.inferredFullReasonCode] : [])),
     reasons: unique(uniqueMatchedRules.map((rule) => rule.reason).filter(Boolean)),
   };
 }
@@ -439,8 +482,12 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   const impactEvaluation = evaluateImpact(files, normalizeImpactRules(input.impactRules), availableCommands, resolvedCommands, classification.risk);
   const tdd = planTddPolicy(classification.risk, input.tdd);
   let lane: ExecutionLane = classification.risk === 'high' ? 'safe' : 'fast';
-  const impactRuleRequiresFull = impactEvaluation.lane === 'full' && impactEvaluation.matchedRuleIds.length > 0;
-  const requiresFullRegression = input.requestedLane === 'full' || impactRuleRequiresFull;
+  const configuredImpactRequiresFull = impactEvaluation.lane === 'full' && impactEvaluation.matchedConfiguredRuleIds.length > 0;
+  const inferredFullReasonCodes = unique([
+    ...impactEvaluation.inferredFullReasonCodes,
+    ...(input.inferredFullReasonCode ? [input.inferredFullReasonCode] : []),
+  ]) as VerificationInferredFullReasonCode[];
+  const requiresFullRegression = input.requestedLane === 'full' || configuredImpactRequiresFull || inferredFullReasonCodes.length > 0;
   const fullReasonCodes: VerificationFullReasonCode[] = [];
   const fullReasons: string[] = [];
   let fullAuthority: VerificationFullAuthority = 'none';
@@ -450,10 +497,21 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
     fullReasonCodes.push('FULL_EXPLICIT_REQUEST');
     fullReasons.push('FULL repository regression was explicitly requested.');
   }
-  if (impactRuleRequiresFull) {
+  if (configuredImpactRequiresFull) {
     if (fullAuthority === 'none') fullAuthority = 'impact-rule';
     fullReasonCodes.push('FULL_IMPACT_RULE');
-    fullReasons.push(`Matched project impact rule requires FULL repository regression: ${impactEvaluation.matchedRuleIds.join(', ')}.`);
+    fullReasons.push(`Matched configured project impact rule requires FULL repository regression: ${impactEvaluation.matchedConfiguredRuleIds.join(', ')}.`);
+  }
+  for (const reasonCode of inferredFullReasonCodes) {
+    if (fullAuthority === 'none') {
+      fullAuthority = reasonCode === 'FULL_INFERRED_REPOSITORY_WIDE'
+        ? 'inferred-repository-wide'
+        : 'safe-runnable-coverage';
+    }
+    fullReasonCodes.push(reasonCode);
+    fullReasons.push(reasonCode === 'FULL_INFERRED_REPOSITORY_WIDE'
+      ? 'Observed repository/build structure makes the affected closure repository-wide.'
+      : 'No adequate narrower runnable verification descriptor remains for the affected change.');
   }
   if (!requiresFullRegression) {
     fullReasonCodes.push('FULL_NOT_AUTHORIZED');
@@ -461,8 +519,13 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
   }
   reasons.push(...fullReasons);
 
-  if (impactEvaluation.mode === 'configured') {
-    reasons.push(`Configured verification impact mapping covered ${impactEvaluation.coveredFiles.length} changed file(s).`);
+  if (impactEvaluation.mode !== 'fallback') {
+    const provenance = impactEvaluation.mode === 'configured'
+      ? 'Configured'
+      : impactEvaluation.mode === 'inferred'
+        ? 'Inferred'
+        : 'Configured plus inferred';
+    reasons.push(`${provenance} verification impact coverage resolved ${impactEvaluation.coveredFiles.length} changed file(s).`);
     reasons.push(...impactEvaluation.reasons);
     if (impactEvaluation.lane && LANE_RANK[impactEvaluation.lane] > LANE_RANK[lane]) lane = impactEvaluation.lane;
   } else if (Array.isArray(input.impactRules) && input.impactRules.length > 0) {
@@ -497,10 +560,12 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
 
   let selectedResolved: VerificationCommandDescriptor[] = [];
   let commands: string[] = [];
-  const mappingMaySelectConfigured = impactEvaluation.mode === 'configured'
+  const mappedCoverageIncludesBroad = impactEvaluation.configuredCommands.some((command) =>
+    resolvedCommands.some((descriptor) => descriptor.command === command && descriptor.scope === 'broad'));
+  const mappingMaySelectConfigured = impactEvaluation.mode !== 'fallback'
     && !requiresFullRegression
     && ((lane === 'fast' && input.requestedLane !== 'safe' && classification.risk !== 'high')
-      || (lane === 'safe' && classification.risk === 'high'));
+      || (lane === 'safe' && (classification.risk === 'high' || mappedCoverageIncludesBroad)));
 
   if (mappingMaySelectConfigured) {
     commands = impactEvaluation.configuredCommands;
@@ -562,8 +627,12 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
     const descriptor = selectedByCommand.get(command);
     const mappedTargets = configuredTargetsByCommand.get(command) || [];
     const targets = mappingMaySelectConfigured || descriptor?.acceptsTargets === true ? mappedTargets : [];
-    const mappingReason = impactEvaluation.mode === 'configured' && impactEvaluation.configuredCommands.includes(command)
-      ? 'Selected by configured change-impact mapping.'
+    const mappingReason = impactEvaluation.mode !== 'fallback' && impactEvaluation.configuredCommands.includes(command)
+      ? impactEvaluation.mode === 'configured'
+        ? 'Selected by configured change-impact mapping.'
+        : impactEvaluation.mode === 'inferred'
+          ? 'Selected by inferred affected-scope evidence.'
+          : 'Selected by combined configured and inferred affected-scope evidence.'
       : undefined;
     return {
       checkId: `green:${descriptor?.semanticKey || command}${targets.length > 0 ? `:${targets.join(',')}` : ''}`,
@@ -598,8 +667,8 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
           ? 'FULL-scoped command was omitted because FULL repository-regression authority was not established.'
           : descriptor?.scope === 'full' && requiresFullRegression
             ? 'Another FULL-scoped command was selected for the required repository regression.'
-            : impactEvaluation.mode === 'configured'
-              ? 'Command was not selected by the configured impact rules for the changed files.'
+            : impactEvaluation.mode !== 'fallback'
+              ? 'Command was not selected by the resolved configured/inferred impact coverage for the changed files.'
               : 'Command was not selected by the conservative fallback plan for this lane and risk.',
       };
     });
@@ -622,8 +691,12 @@ export function planVerification(input: VerificationPlanInput): VerificationPlan
     impact: {
       mode: impactEvaluation.mode,
       coveredFiles: impactEvaluation.coveredFiles,
+      configuredCoveredFiles: impactEvaluation.configuredCoveredFiles,
+      inferredCoveredFiles: impactEvaluation.inferredCoveredFiles,
       unknownFiles: impactEvaluation.unknownFiles,
       matchedRuleIds: impactEvaluation.matchedRuleIds,
+      matchedConfiguredRuleIds: impactEvaluation.matchedConfiguredRuleIds,
+      matchedInferredRuleIds: impactEvaluation.matchedInferredRuleIds,
       selectedCommands: commands,
       selectedChecks: steps.map((step) => ({ command: step.command, ...(step.targets?.length ? { targets: [...step.targets] } : {}) })),
       unavailableChecks: impactEvaluation.unavailableChecks,

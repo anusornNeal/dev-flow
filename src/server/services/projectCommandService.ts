@@ -51,7 +51,14 @@ import {
   type VerificationResourcePrediction,
   type VerificationResourceProfileDescriptor,
 } from './verificationResourceProfileService';
-import { planVerification, type ExecutionLane } from './verificationPlannerService';
+import {
+  planVerification,
+  type ExecutionLane,
+  type VerificationImpactRule,
+  type VerificationInferredFullReasonCode,
+} from './verificationPlannerService';
+import { buildAtlasDiffImpact } from './projectAtlasImpactService';
+import { isAtlasStale, readAtlasCache } from './projectAtlasCacheService';
 import { registerResidualVerificationProcess, type ResidualVerificationTrigger } from './residualVerificationProcessService';
 
 const ALLOWED_COMMANDS = ['typecheck', 'test', 'lint', 'build', 'verify'] as const;
@@ -918,6 +925,201 @@ function detectVerificationBuildEvidence(root: string, packageJsonFound: boolean
   return evidence;
 }
 
+const ROOT_WIDE_VERIFICATION_PATHS = new Set([
+  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock',
+  'gradle.properties', 'settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts',
+]);
+
+function regularDirectoryPath(root: string, relativePath: string) {
+  try {
+    const stat = fs.lstatSync(path.resolve(root, relativePath));
+    return !stat.isSymbolicLink() && stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function normalizeInspectionPath(value: string) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+}
+
+function detectGradleModuleBoundaries(root: string) {
+  const modules = new Set<string>();
+  for (const relativePath of ['settings.gradle.kts', 'settings.gradle']) {
+    if (!regularBuildEvidencePath(root, relativePath)) continue;
+    const metadata = readWorkspaceMetadataFile(path.resolve(root, relativePath), MAX_INSPECTION_BUILD_METADATA_BYTES);
+    if (!metadata) continue;
+    for (const match of metadata.content.matchAll(/['"](:[A-Za-z0-9_.:-]+)['"]/g)) {
+      const modulePath = normalizeInspectionPath(String(match[1] || '').replace(/^:/, '').replace(/:/g, '/'));
+      if (modulePath && regularDirectoryPath(root, modulePath)) modules.add(modulePath);
+    }
+  }
+  return [...modules].sort();
+}
+
+function chooseInferencePreset(presets: ProjectCommandDescriptor[], scope?: ProjectCommandScope) {
+  const scopeRank: Record<ProjectCommandScope, number> = { targeted: 0, broad: 1, full: 2 };
+  const costRank: Record<ProjectCommandCost, number> = { low: 0, medium: 1, high: 2 };
+  return presets
+    .filter((preset) => !scope || preset.scope === scope)
+    .slice()
+    .sort((left, right) => scopeRank[left.scope] - scopeRank[right.scope]
+      || costRank[left.cost] - costRank[right.cost]
+      || left.command.localeCompare(right.command))[0];
+}
+
+function inferVerificationImpact(
+  root: string,
+  projectId: string,
+  changedFiles: string[],
+  configuredRules: VerificationImpactRule[],
+  presets: ProjectCommandDescriptor[],
+) {
+  const plannerDescriptors = presets.map((preset) => ({
+    command: preset.command,
+    semanticKey: preset.semanticKey,
+    scope: preset.scope,
+    cost: preset.cost,
+    resourceKey: preset.resourceKey,
+    verificationClass: preset.verificationClass,
+    sharedResources: [...preset.sharedResources],
+    acceptsTargets: preset.acceptsTargets === true,
+  }));
+  const configuredPlan = planVerification({ changedFiles, resolvedCommands: plannerDescriptors, impactRules: configuredRules });
+  const inputFiles = [...configuredPlan.impact.unknownFiles];
+  const moduleBoundaries = Array.from(new Set([
+    ...detectGradleModuleBoundaries(root),
+    ...presets.map((preset) => normalizeInspectionPath(preset.cwd)).filter((cwd) => cwd && cwd !== '.' && regularDirectoryPath(root, cwd)),
+  ])).sort();
+  const rules: VerificationImpactRule[] = [];
+  let remaining = [...inputFiles];
+  let closure: 'bounded' | 'broad' | 'repository-wide' | 'unbounded' | 'unknown' = inputFiles.length > 0 ? 'unknown' : 'bounded';
+  let inferredFullReasonCode: VerificationInferredFullReasonCode | undefined;
+  const fullPreset = chooseInferencePreset(presets, 'full');
+
+  const rootWideFiles = remaining.filter((file) => ROOT_WIDE_VERIFICATION_PATHS.has(normalizeInspectionPath(file)));
+  if (rootWideFiles.length > 0) {
+    closure = 'repository-wide';
+    inferredFullReasonCode = 'FULL_INFERRED_REPOSITORY_WIDE';
+    if (fullPreset) {
+      rules.push({
+        id: 'inferred-repository-wide-build',
+        patterns: rootWideFiles,
+        checks: [{ command: fullPreset.command }],
+        lane: 'full',
+        source: 'inferred',
+        inferredFullReasonCode,
+        reason: 'Observed root build/dependency metadata has repository-wide reach.',
+      });
+      const rootWideSet = new Set(rootWideFiles);
+      remaining = remaining.filter((file) => !rootWideSet.has(file));
+    }
+  }
+
+  for (const modulePath of moduleBoundaries.sort((left, right) => right.length - left.length)) {
+    const moduleFiles = remaining.filter((file) => normalizeInspectionPath(file).startsWith(`${modulePath}/`));
+    if (moduleFiles.length === 0) continue;
+    const modulePreset = chooseInferencePreset(presets.filter((preset) => normalizeInspectionPath(preset.cwd) === modulePath && preset.scope !== 'full'));
+    if (!modulePreset) continue;
+    rules.push({
+      id: `inferred-module-${modulePath.replace(/[^A-Za-z0-9_-]+/g, '-')}`,
+      patterns: moduleFiles,
+      checks: [{ command: modulePreset.command }],
+      lane: modulePreset.scope === 'targeted' ? 'fast' : 'safe',
+      source: 'inferred',
+      reason: `Observed command cwd and repository module boundary constrain impact to ${modulePath}.`,
+    });
+    const moduleSet = new Set(moduleFiles);
+    remaining = remaining.filter((file) => !moduleSet.has(file));
+    if (closure === 'unknown') closure = 'bounded';
+  }
+
+  let repoFingerprint: string | undefined;
+  try {
+    repoFingerprint = getRepoRevisionForRoot(root).token;
+  } catch {
+    repoFingerprint = undefined;
+  }
+  const cachedAtlas = readAtlasCache({ projectId });
+  const atlasStale = cachedAtlas.status !== 'ok'
+    || !repoFingerprint
+    || isAtlasStale(cachedAtlas.atlas.freshness, { repoFingerprint });
+  const atlasEvidence = {
+    status: cachedAtlas.status === 'ok' ? (atlasStale ? 'stale' : 'fresh') : cachedAtlas.status,
+    repoFingerprint: cachedAtlas.atlas.freshness?.repoFingerprint,
+    revisionBound: Boolean(repoFingerprint),
+  };
+  if (remaining.length > 0 && !atlasStale) {
+    const atlasImpact = buildAtlasDiffImpact(cachedAtlas.atlas, { changedFiles: remaining });
+    const targetFiles = Array.from(new Set(atlasImpact.relatedTests
+      .map((node) => normalizeInspectionPath(node.path || ''))
+      .filter((relativePath) => relativePath && regularBuildEvidencePath(root, relativePath))))
+      .sort()
+      .slice(0, MAX_COMMAND_TARGETS);
+    const targetedPreset = chooseInferencePreset(presets.filter((preset) => preset.scope === 'targeted' && preset.acceptsTargets === true));
+    if (targetedPreset && targetFiles.length > 0) {
+      rules.push({
+        id: 'inferred-fresh-atlas-tests',
+        patterns: remaining,
+        checks: [{ command: targetedPreset.command, targets: targetFiles }],
+        lane: 'fast',
+        source: 'inferred',
+        reason: 'Fresh revision-bound Atlas evidence identifies related runnable test targets.',
+      });
+      remaining = [];
+      if (closure === 'unknown') closure = 'bounded';
+    }
+  }
+
+  if (remaining.length > 0) {
+    const broadPreset = chooseInferencePreset(presets, 'broad');
+    if (broadPreset) {
+      rules.push({
+        id: 'inferred-conservative-broad',
+        patterns: remaining,
+        checks: [{ command: broadPreset.command }],
+        lane: 'safe',
+        source: 'inferred',
+        reason: 'Affected scope is uncertain, so the narrowest observed broad runnable descriptor is used before FULL.',
+      });
+      remaining = [];
+      if (closure !== 'repository-wide') closure = 'broad';
+    } else if (fullPreset) {
+      inferredFullReasonCode = inferredFullReasonCode ?? 'FULL_ONLY_SAFE_RUNNABLE_COVERAGE';
+      rules.push({
+        id: 'inferred-full-only-safe-runnable',
+        patterns: remaining,
+        checks: [{ command: fullPreset.command }],
+        lane: 'full',
+        source: 'inferred',
+        inferredFullReasonCode,
+        reason: 'No narrower runnable verification descriptor can cover the unresolved affected files.',
+      });
+      remaining = [];
+      if (closure !== 'repository-wide') closure = 'unbounded';
+    }
+  }
+
+  const buildEvidence = detectVerificationBuildEvidence(root, regularBuildEvidencePath(root, 'package.json'));
+  const build = buildEvidence.find((entry) => entry.kind === 'gradle')
+    ?? buildEvidence.find((entry) => entry.kind === 'package-json')
+    ?? { kind: 'none' as const, paths: [] as string[] };
+  return {
+    rules,
+    inputFiles,
+    moduleBoundaries,
+    unresolvedFiles: remaining,
+    closure,
+    inferredFullReasonCode,
+    evidence: {
+      build,
+      atlas: atlasEvidence,
+      dependencyFingerprint: getRepoDependencyFingerprint(root),
+      dependencyAuthority: 'fingerprint-only' as const,
+    },
+  };
+}
+
 function buildPresetQualitySignal(descriptor: ProjectCommandDescriptor, prediction: VerificationResourcePrediction) {
   const failedSampleCount = Math.max(0, prediction.sampleCount - prediction.successfulSampleCount);
   const failureRate = prediction.sampleCount > 0 ? failedSampleCount / prediction.sampleCount : 0;
@@ -988,28 +1190,47 @@ export function inspectProjectVerificationPresets(state: AppState, args: Record<
     }];
   });
 
+  const plannerDescriptors = presets.map((preset) => ({
+    command: preset.command,
+    semanticKey: preset.semanticKey,
+    scope: preset.scope,
+    cost: preset.cost,
+    resourceKey: preset.resourceKey,
+    verificationClass: preset.verificationClass,
+    sharedResources: [...preset.sharedResources],
+    acceptsTargets: preset.acceptsTargets === true,
+  }));
+  const inferenceResult = changedFiles.length > 0
+    ? inferVerificationImpact(root, String(args.projectId || ''), changedFiles, impactRules, presets)
+    : {
+        rules: [] as VerificationImpactRule[],
+        inputFiles: [] as string[],
+        moduleBoundaries: [] as string[],
+        unresolvedFiles: [] as string[],
+        closure: 'bounded' as const,
+        inferredFullReasonCode: undefined as VerificationInferredFullReasonCode | undefined,
+        evidence: {
+          build: { kind: 'none' as const, paths: [] as string[] },
+          atlas: { status: 'missing' as const, repoFingerprint: undefined as string | undefined },
+          dependencyFingerprint: getRepoDependencyFingerprint(root),
+          dependencyAuthority: 'fingerprint-only' as const,
+        },
+      };
+  const { rules: inferredRules, ...inference } = inferenceResult;
   const plan = changedFiles.length > 0
     ? planVerification({
         changedFiles,
         requestedLane,
-        resolvedCommands: presets.map((preset) => ({
-          command: preset.command,
-          semanticKey: preset.semanticKey,
-          scope: preset.scope,
-          cost: preset.cost,
-          resourceKey: preset.resourceKey,
-          verificationClass: preset.verificationClass,
-          sharedResources: [...preset.sharedResources],
-          acceptsTargets: preset.acceptsTargets === true,
-        })),
-        impactRules,
+        resolvedCommands: plannerDescriptors,
+        impactRules: [...impactRules, ...inferredRules],
+        inferredFullReasonCode: inferenceResult.inferredFullReasonCode,
       })
     : null;
   const commandConfigPath = snapshot.relativePaths.find((relativePath) => PROJECT_COMMAND_CONFIG_RELATIVE_PATHS.some((candidate) => candidate === relativePath));
   const impactMapPresent = snapshot.relativePaths.includes(PROJECT_VERIFICATION_IMPACT_RELATIVE_PATH);
   const hasLowCostTargetedPreset = presets.some((preset) => preset.scope === 'targeted' && preset.cost === 'low');
   const shouldSuggestPresetGeneration = presets.length === 0
-    || (changedFiles.length > 0 && plan?.lane === 'fast' && (plan.steps.length === 0 || !hasLowCostTargetedPreset));
+    || (changedFiles.length > 0 && !hasLowCostTargetedPreset);
   return {
     ok: true,
     readOnly: true,
@@ -1027,6 +1248,7 @@ export function inspectProjectVerificationPresets(state: AppState, args: Record<
       lineageToken: getRepoCacheLineage(root, [...PROJECT_COMMAND_CACHE_DEPENDENCIES]).token,
     },
     buildEvidence: detectVerificationBuildEvidence(root, packageConfig.exists),
+    inference,
     changedFiles,
     presets,
     plan,

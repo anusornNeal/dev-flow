@@ -37,6 +37,8 @@ const { createProject: upsertProject } = await import('../../src/server/reposito
 const { getRepoCacheDiagnostics, invalidateRepoCacheDependencies } = await import('../../src/server/services/repoCacheInvalidationService.js');
 const verificationResourceProfileService = await import('../../src/server/services/verificationResourceProfileService.js');
 const { clearVerificationResourceProfilesForTests, getVerificationResourceProfileDiagnostics, recordVerificationResourceSample } = verificationResourceProfileService;
+const { writeAtlasCache } = await import('../../src/server/services/projectAtlasCacheService.js');
+const { getRepoRevisionForRoot } = await import('../../src/server/services/repoRevisionService.js');
 
 function createProject(name: string, scripts: Record<string, string>) {
   const root = path.join(tempRoot, name);
@@ -1910,6 +1912,220 @@ test('verification inspection reuses repository impact rules and the existing pl
   assert.deepEqual(inspection.plan?.impact.matchedRuleIds, ['service-tests']);
   assert.deepEqual(inspection.plan?.commands, ['test']);
   assert.ok(inspection.plan?.impact.omittedCommands.some((entry: any) => entry.command === 'verify'));
+});
+
+test('verification inspection infers a bounded Gradle module command without a manual impact map', () => {
+  const root = createConfigProject('inspect-inferred-gradle-module', JSON.stringify({
+    commands: {
+      desktopCheck: { executable: 'node', args: ['--version'], cwd: 'desktop-app', category: 'test' },
+      pdfCheck: { executable: 'node', args: ['--version'], cwd: 'pdf', category: 'test' },
+      excelCheck: { executable: 'node', args: ['--version'], cwd: 'excel', category: 'test' },
+      verify: { executable: 'node', args: ['--version'], category: 'verification' },
+    },
+  }, null, 2), 'json');
+  for (const moduleName of ['desktop-app', 'pdf', 'excel']) {
+    fs.mkdirSync(path.join(root, moduleName, 'src', 'main', 'kotlin'), { recursive: true });
+  }
+  fs.writeFileSync(path.join(root, 'settings.gradle.kts'), 'include(\":desktop-app\", \":pdf\", \":excel\")\n');
+  fs.writeFileSync(path.join(root, 'desktop-app', 'src', 'main', 'kotlin', 'Updater.kt'), 'class Updater\n');
+
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command',
+    changedFiles: ['desktop-app/src/main/kotlin/Updater.kt'],
+  });
+
+  assert.equal(inspection.config.impactMapPresent, false);
+  assert.deepEqual(inspection.plan?.commands, ['desktopCheck']);
+  assert.equal(inspection.plan?.requiresFullRegression, false);
+  assert.equal(inspection.plan?.impact.mode, 'inferred');
+  assert.deepEqual(inspection.plan?.impact.inferredCoveredFiles, ['desktop-app/src/main/kotlin/Updater.kt']);
+  assert.deepEqual(inspection.plan?.impact.unknownFiles, []);
+  assert.ok(inspection.inference.moduleBoundaries.includes('desktop-app'));
+  assert.equal(inspection.inference.evidence.build.kind, 'gradle');
+});
+
+test('verification inspection keeps configured coverage authoritative and infers only unmatched modules', () => {
+  const root = createConfigProject('inspect-hybrid-impact', JSON.stringify({
+    commands: {
+      desktopCheck: { executable: 'node', args: ['--version'], cwd: 'desktop-app', category: 'test' },
+      pdfCheck: { executable: 'node', args: ['--version'], cwd: 'pdf', category: 'test' },
+      verify: { executable: 'node', args: ['--version'], category: 'verification' },
+    },
+  }, null, 2), 'json');
+  for (const moduleName of ['desktop-app', 'pdf']) fs.mkdirSync(path.join(root, moduleName), { recursive: true });
+  fs.writeFileSync(path.join(root, 'settings.gradle.kts'), 'include(\":desktop-app\", \":pdf\")\n');
+  fs.mkdirSync(path.join(root, '.devflow'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.devflow', 'verification-impact.json'), JSON.stringify({ rules: [{
+    id: 'desktop-explicit', patterns: ['desktop-app/**'], commands: ['desktopCheck'], lane: 'fast',
+  }] }));
+
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command',
+    changedFiles: ['desktop-app/src/A.kt', 'pdf/src/B.kt'],
+  });
+
+  assert.equal(inspection.plan?.impact.mode, 'hybrid');
+  assert.deepEqual(inspection.plan?.impact.configuredCoveredFiles, ['desktop-app/src/A.kt']);
+  assert.deepEqual(inspection.plan?.impact.inferredCoveredFiles, ['pdf/src/B.kt']);
+  assert.deepEqual(inspection.plan?.impact.unknownFiles, []);
+  assert.deepEqual(new Set(inspection.plan?.commands), new Set(['desktopCheck', 'pdfCheck']));
+  assert.deepEqual(inspection.inference.inputFiles, ['pdf/src/B.kt']);
+});
+
+test('one unknown file uses conservative broad runnable evidence instead of FULL when available', () => {
+  const root = createConfigProject('inspect-inferred-broad-fallback', JSON.stringify({
+    commands: {
+      safeCheck: { executable: 'node', args: ['--version'], category: 'verification' },
+      verify: { executable: 'node', args: ['--version'], category: 'verification' },
+    },
+  }, null, 2), 'json');
+  fs.mkdirSync(path.join(root, 'misc'), { recursive: true });
+
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command',
+    changedFiles: ['misc/Unknown.kt'],
+  });
+
+  assert.deepEqual(inspection.plan?.commands, ['safeCheck']);
+  assert.equal(inspection.plan?.lane, 'safe');
+  assert.equal(inspection.plan?.requiresFullRegression, false);
+  assert.deepEqual(inspection.plan?.fullRegression.reasonCodes, ['FULL_NOT_AUTHORIZED']);
+  assert.equal(inspection.plan?.impact.mode, 'inferred');
+  assert.deepEqual(inspection.plan?.impact.unknownFiles, []);
+});
+
+test('repository-wide root build evidence establishes explicit inferred FULL authority', () => {
+  const root = createConfigProject('inspect-inferred-root-full', JSON.stringify({
+    commands: {
+      safeCheck: { executable: 'node', args: ['--version'], category: 'verification' },
+      verify: { executable: 'node', args: ['--version'], category: 'verification' },
+    },
+  }, null, 2), 'json');
+  fs.mkdirSync(path.join(root, 'desktop-app'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'settings.gradle.kts'), 'include(\":desktop-app\")\n');
+
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command',
+    changedFiles: ['settings.gradle.kts'],
+  });
+
+  assert.equal(inspection.plan?.lane, 'full');
+  assert.deepEqual(inspection.plan?.commands, ['verify']);
+  assert.equal(inspection.plan?.requiresFullRegression, true);
+  assert.equal(inspection.plan?.fullRegression.authority, 'inferred-repository-wide');
+  assert.deepEqual(inspection.plan?.fullRegression.reasonCodes, ['FULL_INFERRED_REPOSITORY_WIDE']);
+  assert.equal(inspection.inference.closure, 'repository-wide');
+});
+
+test('FULL is selected with a distinct reason when it is the only safe runnable coverage', () => {
+  const root = createConfigProject('inspect-inferred-full-only', JSON.stringify({
+    commands: {
+      verify: { executable: 'node', args: ['--version'], category: 'verification' },
+    },
+  }, null, 2), 'json');
+  fs.mkdirSync(path.join(root, 'feature'), { recursive: true });
+
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command',
+    changedFiles: ['feature/Only.kt'],
+  });
+
+  assert.equal(inspection.plan?.lane, 'full');
+  assert.deepEqual(inspection.plan?.commands, ['verify']);
+  assert.equal(inspection.plan?.fullRegression.authority, 'safe-runnable-coverage');
+  assert.deepEqual(inspection.plan?.fullRegression.reasonCodes, ['FULL_ONLY_SAFE_RUNNABLE_COVERAGE']);
+  assert.equal(inspection.inference.closure, 'unbounded');
+});
+
+test('verification inference uses fresh revision-bound Atlas dependents only when targets are runnable', () => {
+  const root = createConfigProject('inspect-fresh-atlas', JSON.stringify({
+    commands: {
+      focused: { executable: 'node', args: ['--version'], category: 'test', acceptsTargets: true },
+      safeCheck: { executable: 'node', args: ['--version'], category: 'verification' },
+    },
+  }, null, 2), 'json');
+  fs.mkdirSync(path.join(root, 'feature'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'feature', 'Feature.kt'), 'class Feature\n');
+  fs.writeFileSync(path.join(root, 'tests', 'Feature.test.ts'), 'test\n');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'atlas fixture']);
+  const revision = getRepoRevisionForRoot(root);
+  writeAtlasCache({ atlas: {
+    schemaVersion: 1,
+    projectId: 'project-command',
+    nodes: [
+      { id: 'feature', label: 'Feature', kind: 'file', path: 'feature/Feature.kt' },
+      { id: 'feature-test', label: 'Feature test', kind: 'test', path: 'tests/Feature.test.ts' },
+    ],
+    edges: [{
+      id: 'feature-tested-by', source: 'feature', target: 'feature-test', kind: 'tests',
+      fact: { source: 'verified', description: 'Fixture test edge.' },
+    }],
+    domains: [], flows: [], summary: {},
+    freshness: { generatedAt: new Date().toISOString(), repoFingerprint: revision.token, status: 'fresh', scanMode: 'automatic' },
+  } as any });
+
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command', changedFiles: ['feature/Feature.kt'],
+  });
+
+  assert.equal(inspection.inference.evidence.atlas.status, 'fresh');
+  assert.deepEqual(inspection.plan?.commands, ['focused']);
+  assert.deepEqual(inspection.plan?.impact.selectedChecks, [{ command: 'focused', targets: ['tests/Feature.test.ts'] }]);
+  assert.equal(inspection.plan?.requiresFullRegression, false);
+});
+
+test('stale Atlas evidence cannot narrow verification and falls back to observed broad coverage', () => {
+  const root = createConfigProject('inspect-stale-atlas', JSON.stringify({
+    commands: {
+      focused: { executable: 'node', args: ['--version'], category: 'test', acceptsTargets: true },
+      safeCheck: { executable: 'node', args: ['--version'], category: 'verification' },
+    },
+  }, null, 2), 'json');
+  fs.mkdirSync(path.join(root, 'feature'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'feature', 'Feature.kt'), 'class Feature\n');
+  fs.writeFileSync(path.join(root, 'tests', 'Feature.test.ts'), 'test\n');
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', shell: false });
+    assert.equal(result.status, 0, result.stderr || result.stdout || `git ${args.join(' ')} failed`);
+  };
+  git(['init']);
+  git(['config', 'user.name', 'DevFlow Test']);
+  git(['config', 'user.email', 'devflow@example.com']);
+  git(['add', '.']);
+  git(['commit', '-m', 'stale atlas fixture']);
+  writeAtlasCache({ atlas: {
+    schemaVersion: 1,
+    projectId: 'project-command',
+    nodes: [
+      { id: 'feature', label: 'Feature', kind: 'file', path: 'feature/Feature.kt' },
+      { id: 'feature-test', label: 'Feature test', kind: 'test', path: 'tests/Feature.test.ts' },
+    ],
+    edges: [{
+      id: 'feature-tested-by', source: 'feature', target: 'feature-test', kind: 'tests',
+      fact: { source: 'verified', description: 'Stale fixture test edge.' },
+    }],
+    domains: [], flows: [], summary: {},
+    freshness: { generatedAt: new Date().toISOString(), repoFingerprint: 'stale-revision', status: 'fresh', scanMode: 'automatic' },
+  } as any });
+
+  const inspection = inspectProjectVerificationPresets(stateFor(root), {
+    projectId: 'project-command', changedFiles: ['feature/Feature.kt'],
+  });
+
+  assert.equal(inspection.inference.evidence.atlas.status, 'stale');
+  assert.deepEqual(inspection.plan?.commands, ['safeCheck']);
+  assert.equal(inspection.plan?.impact.selectedChecks.some((check: any) => check.command === 'focused'), false);
+  assert.equal(inspection.plan?.requiresFullRegression, false);
 });
 
 test('verification inspection suggests reusable config for npm without a targeted preset and performs no write', () => {

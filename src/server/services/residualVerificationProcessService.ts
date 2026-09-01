@@ -10,12 +10,22 @@ import {
 } from '../../lib/platformRuntime';
 
 export type ResidualVerificationTrigger = 'timeout' | 'cancel';
-export type ResidualVerificationState = 'quarantined' | 'identity-unconfirmed' | 'termination-unconfirmed';
+export type ResidualVerificationState = 'quarantined' | 'identity-unconfirmed' | 'termination-unconfirmed' | 'observation-only';
 
 export type ResidualVerificationResourceEstimate = {
   cpuRatio: number;
   memoryBytes: number;
   processCount: number;
+};
+
+export type ResidualVerificationResourceSnapshot = {
+  count: number;
+  oldestAgeMs: number;
+  attempts: number;
+  remediationActiveCount?: number;
+  observationOnlyCount?: number;
+  states: Record<string, number>;
+  resourceEstimate: ResidualVerificationResourceEstimate;
 };
 
 export type ResidualVerificationProcessRecord = {
@@ -47,6 +57,7 @@ type ReaperOptions = {
 const STATE_VERSION = 1 as const;
 const REAPER_BACKOFF_MS = [1_000, 5_000, 15_000, 30_000, 60_000, 120_000] as const;
 const MAX_REAPER_ATTEMPTS = 12;
+const OBSERVATION_BACKOFF_MS = 15 * 60_000;
 let records: ResidualVerificationProcessRecord[] | null = null;
 let reaperTimer: NodeJS.Timeout | undefined;
 
@@ -96,8 +107,7 @@ function recordId(pid: number, identityHash?: string) {
 function scheduleReaper() {
   if (reaperTimer) clearTimeout(reaperTimer);
   reaperTimer = undefined;
-  const current = records || [];
-  const runnable = current.filter((record) => record.attempts < MAX_REAPER_ATTEMPTS);
+  const runnable = records || [];
   if (!runnable.length) return;
   const delay = Math.max(0, Math.min(...runnable.map((record) => record.nextAttemptAt)) - Date.now());
   reaperTimer = setTimeout(() => {
@@ -161,8 +171,9 @@ export function reapResidualVerificationProcesses(options: ReaperOptions = {}) {
 
   for (let index = current.length - 1; index >= 0; index -= 1) {
     const record = current[index];
-    if (record.nextAttemptAt > now || record.attempts >= MAX_REAPER_ATTEMPTS) continue;
+    if (record.nextAttemptAt > now) continue;
 
+    const observationOnly = record.state === 'observation-only' || record.attempts >= MAX_REAPER_ATTEMPTS;
     const probe = captureIdentity(record.pid, { platform: record.platform });
     if (probe.supported && !probe.exists) {
       current.splice(index, 1);
@@ -170,20 +181,23 @@ export function reapResidualVerificationProcesses(options: ReaperOptions = {}) {
       continue;
     }
 
-    record.attempts += 1;
     record.updatedAt = now;
     if (!probe.supported || !probe.identityHash) {
-      record.state = 'identity-unconfirmed';
+      if (!observationOnly) record.attempts += 1;
+      const exhausted = observationOnly || record.attempts >= MAX_REAPER_ATTEMPTS;
+      record.state = exhausted ? 'observation-only' : 'identity-unconfirmed';
       record.lastReason = probe.reason || 'identity-unavailable';
-      record.nextAttemptAt = now + backoffMs(record.attempts);
+      record.nextAttemptAt = now + (exhausted ? OBSERVATION_BACKOFF_MS : backoffMs(record.attempts));
       changed = true;
       continue;
     }
 
     if (!record.identityHash) {
-      record.state = 'identity-unconfirmed';
+      if (!observationOnly) record.attempts += 1;
+      const exhausted = observationOnly || record.attempts >= MAX_REAPER_ATTEMPTS;
+      record.state = exhausted ? 'observation-only' : 'identity-unconfirmed';
       record.lastReason = 'missing-original-process-identity';
-      record.nextAttemptAt = now + backoffMs(record.attempts);
+      record.nextAttemptAt = now + (exhausted ? OBSERVATION_BACKOFF_MS : backoffMs(record.attempts));
       changed = true;
       continue;
     }
@@ -194,6 +208,14 @@ export function reapResidualVerificationProcesses(options: ReaperOptions = {}) {
       continue;
     }
 
+    if (observationOnly) {
+      record.state = 'observation-only';
+      record.nextAttemptAt = now + OBSERVATION_BACKOFF_MS;
+      changed = true;
+      continue;
+    }
+
+    record.attempts += 1;
     const termination = terminateTree(record.pid, {
       platform: record.platform,
       expectedIdentityHash: record.identityHash,
@@ -209,9 +231,10 @@ export function reapResidualVerificationProcesses(options: ReaperOptions = {}) {
       changed = true;
       continue;
     }
-    record.state = 'termination-unconfirmed';
+    const exhausted = record.attempts >= MAX_REAPER_ATTEMPTS;
+    record.state = exhausted ? 'observation-only' : 'termination-unconfirmed';
     record.lastReason = termination.reason || 'termination-unconfirmed';
-    record.nextAttemptAt = now + backoffMs(record.attempts);
+    record.nextAttemptAt = now + (exhausted ? OBSERVATION_BACKOFF_MS : backoffMs(record.attempts));
     changed = true;
   }
 
@@ -220,23 +243,35 @@ export function reapResidualVerificationProcesses(options: ReaperOptions = {}) {
   return getResidualVerificationResourceSnapshot(now);
 }
 
-export function getResidualVerificationResourceSnapshot(now = Date.now()) {
+export function getResidualVerificationResourceSnapshot(now = Date.now()): ResidualVerificationResourceSnapshot {
   const current = loadState();
   const resourceEstimate = current.reduce<ResidualVerificationResourceEstimate>((sum, record) => ({
     cpuRatio: Math.min(1, sum.cpuRatio + record.resourceEstimate.cpuRatio),
     memoryBytes: sum.memoryBytes + record.resourceEstimate.memoryBytes,
     processCount: sum.processCount + record.resourceEstimate.processCount,
   }), { cpuRatio: 0, memoryBytes: 0, processCount: 0 });
+  const observationOnlyCount = current.filter((record) =>
+    record.state === 'observation-only' || record.attempts >= MAX_REAPER_ATTEMPTS).length;
   return {
     count: current.length,
     oldestAgeMs: current.length ? Math.max(...current.map((record) => Math.max(0, now - record.createdAt))) : 0,
     attempts: current.reduce((sum, record) => sum + record.attempts, 0),
+    remediationActiveCount: current.length - observationOnlyCount,
+    observationOnlyCount,
     states: current.reduce<Record<string, number>>((summary, record) => {
-      summary[record.state] = (summary[record.state] || 0) + 1;
+      const state = record.attempts >= MAX_REAPER_ATTEMPTS ? 'observation-only' : record.state;
+      summary[state] = (summary[state] || 0) + 1;
       return summary;
     }, {}),
     resourceEstimate,
   };
+}
+
+export function reloadResidualVerificationProcessStateForTests() {
+  if (reaperTimer) clearTimeout(reaperTimer);
+  reaperTimer = undefined;
+  records = null;
+  return getResidualVerificationResourceSnapshot();
 }
 
 export function clearResidualVerificationProcessStateForTests() {

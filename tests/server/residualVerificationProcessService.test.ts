@@ -14,6 +14,7 @@ const {
   getResidualVerificationResourceSnapshot,
   reapResidualVerificationProcesses,
   registerResidualVerificationProcess,
+  reloadResidualVerificationProcessStateForTests,
 } = residuals;
 
 after(() => {
@@ -101,4 +102,187 @@ test('residual reaper clears debt without teardown when the tracked process is a
   });
   assert.equal(teardownAttempts, 0);
   assert.equal(snapshot.count, 0);
+});
+
+test('exhausted destructive retries still reconcile when the tracked process later disappears', () => {
+  clearResidualVerificationProcessStateForTests();
+  const base = Date.now() + 240_000;
+  registerResidualVerificationProcess({
+    pid: 999,
+    platform: 'win32',
+    identityHash: 'identity-999',
+    trigger: 'timeout',
+    now: base,
+  });
+
+  let destructiveAttempts = 0;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    reapResidualVerificationProcesses({
+      now: base + attempt * 180_000,
+      captureIdentity: () => ({ supported: true, exists: true, pid: 999, identityHash: 'identity-999' }),
+      terminateTree: () => {
+        destructiveAttempts += 1;
+        return {
+          attempted: true,
+          treeTermination: true,
+          terminated: false,
+          confirmed: false,
+          identityHash: 'identity-999',
+          reason: 'terminator-failed',
+        };
+      },
+    });
+  }
+  assert.equal(destructiveAttempts, 12);
+  assert.equal(getResidualVerificationResourceSnapshot(base + 12 * 180_000).count, 1);
+
+  let observationProbes = 0;
+  const cleared = reapResidualVerificationProcesses({
+    now: base + 20 * 180_000,
+    captureIdentity: () => {
+      observationProbes += 1;
+      return { supported: true, exists: false, pid: 999, reason: 'process-not-found' };
+    },
+    terminateTree: () => {
+      throw new Error('observation-only reconciliation must not perform destructive termination');
+    },
+  });
+
+  assert.equal(observationProbes, 1);
+  assert.equal(cleared.count, 0);
+});
+
+test('observation-only debt survives reload, backs off, and never retries destructive termination', () => {
+  clearResidualVerificationProcessStateForTests();
+  const base = Date.now() + 300_000;
+  registerResidualVerificationProcess({
+    pid: 1001,
+    platform: 'win32',
+    identityHash: 'identity-1001',
+    trigger: 'cancel',
+    now: base,
+  });
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    reapResidualVerificationProcesses({
+      now: base + attempt * 180_000,
+      captureIdentity: () => ({ supported: true, exists: true, pid: 1001, identityHash: 'identity-1001' }),
+      terminateTree: () => ({
+        attempted: true,
+        treeTermination: true,
+        terminated: false,
+        confirmed: false,
+        identityHash: 'identity-1001',
+        reason: 'terminator-failed',
+      }),
+    });
+  }
+
+  const exhausted = getResidualVerificationResourceSnapshot(base + 12 * 180_000);
+  assert.equal(exhausted.count, 1);
+  assert.equal(exhausted.attempts, 12);
+  assert.equal(exhausted.remediationActiveCount, 0);
+  assert.equal(exhausted.observationOnlyCount, 1);
+  assert.equal(exhausted.states['observation-only'], 1);
+
+  const stateFile = path.join(runtimeRoot, 'residual-verification-processes.json');
+  const persistedBeforeReload = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { records: Array<{ attempts: number; nextAttemptAt: number; state: string }> };
+  const dueAt = persistedBeforeReload.records[0].nextAttemptAt;
+  assert.equal(persistedBeforeReload.records[0].attempts, 12);
+  assert.equal(persistedBeforeReload.records[0].state, 'observation-only');
+
+  const reloaded = reloadResidualVerificationProcessStateForTests();
+  assert.equal(reloaded.observationOnlyCount, 1);
+  assert.equal(reloaded.attempts, 12);
+
+  let probes = 0;
+  let destructiveAttempts = 0;
+  reapResidualVerificationProcesses({
+    now: dueAt - 1,
+    captureIdentity: () => {
+      probes += 1;
+      return { supported: true, exists: true, pid: 1001, identityHash: 'identity-1001' };
+    },
+    terminateTree: () => {
+      destructiveAttempts += 1;
+      return { attempted: true, treeTermination: true, terminated: false, confirmed: false };
+    },
+  });
+  assert.equal(probes, 0, 'persisted observation cadence must survive reload');
+
+  const probeFailure = reapResidualVerificationProcesses({
+    now: dueAt,
+    captureIdentity: () => {
+      probes += 1;
+      return { supported: false, exists: false, pid: 1001, reason: 'probe-failed' };
+    },
+    terminateTree: () => {
+      destructiveAttempts += 1;
+      return { attempted: true, treeTermination: true, terminated: false, confirmed: false };
+    },
+  });
+  assert.equal(probes, 1);
+  assert.equal(destructiveAttempts, 0);
+  assert.equal(probeFailure.count, 1);
+  assert.equal(probeFailure.attempts, 12);
+  assert.equal(probeFailure.observationOnlyCount, 1);
+
+  const persistedAfterFailure = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { records: Array<{ nextAttemptAt: number }> };
+  const nextDueAt = persistedAfterFailure.records[0].nextAttemptAt;
+  assert.equal(nextDueAt > dueAt, true);
+
+  const stillAlive = reapResidualVerificationProcesses({
+    now: nextDueAt,
+    captureIdentity: () => ({ supported: true, exists: true, pid: 1001, identityHash: 'identity-1001' }),
+    terminateTree: () => {
+      destructiveAttempts += 1;
+      return { attempted: true, treeTermination: true, terminated: false, confirmed: false };
+    },
+  });
+  assert.equal(destructiveAttempts, 0);
+  assert.equal(stillAlive.count, 1);
+  assert.equal(stillAlive.attempts, 12);
+  assert.equal(stillAlive.observationOnlyCount, 1);
+});
+
+test('observation-only debt clears on PID reuse without killing the replacement process', () => {
+  clearResidualVerificationProcessStateForTests();
+  const base = Date.now() + 360_000;
+  registerResidualVerificationProcess({
+    pid: 1002,
+    platform: 'win32',
+    identityHash: 'original-1002',
+    trigger: 'timeout',
+    now: base,
+  });
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    reapResidualVerificationProcesses({
+      now: base + attempt * 180_000,
+      captureIdentity: () => ({ supported: true, exists: true, pid: 1002, identityHash: 'original-1002' }),
+      terminateTree: () => ({
+        attempted: true,
+        treeTermination: true,
+        terminated: false,
+        confirmed: false,
+        identityHash: 'original-1002',
+        reason: 'terminator-failed',
+      }),
+    });
+  }
+
+  const stateFile = path.join(runtimeRoot, 'residual-verification-processes.json');
+  const persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { records: Array<{ nextAttemptAt: number }> };
+  let destructiveAttempts = 0;
+  const cleared = reapResidualVerificationProcesses({
+    now: persisted.records[0].nextAttemptAt,
+    captureIdentity: () => ({ supported: true, exists: true, pid: 1002, identityHash: 'replacement-1002' }),
+    terminateTree: () => {
+      destructiveAttempts += 1;
+      return { attempted: true, treeTermination: true, terminated: true, confirmed: true };
+    },
+  });
+
+  assert.equal(destructiveAttempts, 0);
+  assert.equal(cleared.count, 0);
 });

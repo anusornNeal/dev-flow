@@ -27,6 +27,7 @@ const emergencyOps = await import('../../src/server/repositories/lifecycleEmerge
 const workflowHealthModule = await import('../../src/server/services/workflowHealthService.js');
 const { getWorkflowHealth, getChatGptHarnessHealthSnapshot } = workflowHealthModule;const {
   clearResidualVerificationProcessStateForTests,
+  reapResidualVerificationProcesses,
   registerResidualVerificationProcess,
 } = await import('../../src/server/services/residualVerificationProcessService.js');
 const { getToolDefinitionByName, getCapabilityCatalog } = await import('../../src/server/contracts/devflowContract.js');
@@ -1056,24 +1057,52 @@ test('compact workflow health warm p95 remains below the 750ms SLO with a popula
   assert.equal(p95 <= 750, true, `expected warm p95 <= 750ms, got ${p95.toFixed(1)}ms`);
 });
 
-test('workflow health exposes bounded residual verification process debt without raw process details', () => {
+test('workflow health exposes bounded active and observation-only residual verification debt without raw process details', () => {
   const repo = createRepo('residual-process-health');
   clearResidualVerificationProcessStateForTests();
   try {
+    const base = Date.now() + 60_000;
+    registerResidualVerificationProcess({
+      pid: 4322,
+      platform: 'win32',
+      identityHash: 'health-observation-identity',
+      trigger: 'cancel',
+      now: base,
+      resourceEstimate: { cpuRatio: 0.1, memoryBytes: 64 * 1024 ** 2, processCount: 1 },
+    });
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      reapResidualVerificationProcesses({
+        now: base + attempt * 180_000,
+        captureIdentity: () => ({ supported: true, exists: true, pid: 4322, identityHash: 'health-observation-identity' }),
+        terminateTree: () => ({
+          attempted: true,
+          treeTermination: true,
+          terminated: false,
+          confirmed: false,
+          identityHash: 'health-observation-identity',
+          reason: 'terminator-failed',
+        }),
+      });
+    }
     registerResidualVerificationProcess({
       pid: 4321,
       platform: 'win32',
       identityHash: 'health-residual-identity',
       trigger: 'timeout',
-      now: Date.now() + 60_000,
+      now: base + 12 * 180_000,
       resourceEstimate: { cpuRatio: 0.4, memoryBytes: 384 * 1024 ** 2, processCount: 2 },
     });
     const compact = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'compact' }) as any;
     const full = getWorkflowHealth(stateFor(repo), { projectId: 'project-health', responseMode: 'full' }) as any;
-    assert.equal(compact.queue.residualProcessDebt.count, 1);
-    assert.equal(compact.queue.residualProcessDebt.resourceEstimate.processCount, 2);
-    assert.equal(full.diagnostics.residualProcessDebt.count, 1);
+    assert.equal(compact.queue.residualProcessDebt.count, 2);
+    assert.equal(compact.queue.residualProcessDebt.remediationActiveCount, 1);
+    assert.equal(compact.queue.residualProcessDebt.observationOnlyCount, 1);
+    assert.equal(compact.queue.residualProcessDebt.states['observation-only'], 1);
+    assert.equal(compact.queue.residualProcessDebt.resourceEstimate.processCount, 3);
+    assert.equal(full.diagnostics.residualProcessDebt.count, 2);
+    assert.equal(full.diagnostics.residualProcessDebt.observationOnlyCount, 1);
     assert.equal(JSON.stringify(compact.queue.residualProcessDebt).includes('4321'), false, 'health output must stay bounded and omit raw PIDs');
+    assert.equal(JSON.stringify(compact.queue.residualProcessDebt).includes('4322'), false, 'health output must stay bounded and omit raw PIDs');
     assert.match(compact.recommendations.join('\n'), /Residual verification process debt/);
   } finally {
     clearResidualVerificationProcessStateForTests();

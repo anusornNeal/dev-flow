@@ -5,7 +5,7 @@ import { getLatestTaskFinalizationOperation } from '../repositories/taskFinaliza
 import { buildTaskCommitPlan, commitTaskOwnedChanges } from './taskCommitPlanService.js';
 import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { inspectWorkspaceRecovery } from './workspaceRecoveryService.js';
-import type { VerificationImpactCheck } from './verificationPlannerService.js';
+import type { VerificationCoverageRequirement } from './verificationPlannerService.js';
 import {
   normalizeVerificationTargets,
   verificationRequirementLabel,
@@ -17,7 +17,7 @@ export type TaskWorkspaceHappyPathTailVerificationRequest = {
   command: string;
   targets?: string[];
   repoRevision: string;
-  requiredScope: 'targeted' | 'broad-or-full';
+  requiredScope: VerificationCoverageRequirement;
 };
 
 export type TaskWorkspaceHappyPathTailInput = {
@@ -43,6 +43,37 @@ export type TaskWorkspaceFinalizer = (
     completedChecklistIds?: string[];
   },
 ) => any;
+
+function normalizeRequiredScope(value: unknown, fallback: VerificationCoverageRequirement): VerificationCoverageRequirement {
+  return value === 'targeted' || value === 'broad' || value === 'full' ? value : fallback;
+}
+
+export function __buildPostIntegrationVerificationRequestsForTests(input: {
+  projectId: string;
+  postIntegration: {
+    repoRevision?: unknown;
+    requiredScope?: unknown;
+    missingChecks?: unknown;
+    requiredChecks?: unknown;
+  };
+}): TaskWorkspaceHappyPathTailVerificationRequest[] {
+  const projectId = String(input.projectId || '').trim();
+  const repoRevision = String(input.postIntegration?.repoRevision || '').trim();
+  const defaultScope = normalizeRequiredScope(input.postIntegration?.requiredScope, 'targeted');
+  const missingChecks = Array.isArray(input.postIntegration?.missingChecks) ? input.postIntegration.missingChecks : [];
+  return missingChecks.flatMap((entry: any) => {
+    const command = String(entry?.command || '').trim();
+    if (!command) return [];
+    const targets = normalizeVerificationTargets(entry?.targets);
+    return [{
+      projectId,
+      command,
+      ...(targets.length > 0 ? { targets } : {}),
+      repoRevision,
+      requiredScope: normalizeRequiredScope(entry?.requiredScope, defaultScope),
+    }];
+  });
+}
 
 function autonomousTailAttention(
   stage: string,
@@ -237,25 +268,6 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
 
     const postIntegration = result?.postIntegration;
     if (result?.status === 'continuation' && postIntegration?.required === true) {
-      const normalizeChecks = (value: unknown): VerificationImpactCheck[] => Array.isArray(value)
-        ? value.flatMap((entry: any) => {
-            const command = String(entry?.command || '').trim();
-            if (!command) return [];
-            const targets = normalizeVerificationTargets(entry?.targets);
-            return [{ command, ...(targets.length ? { targets } : {}) }];
-          })
-        : [];
-      const missingChecks = normalizeChecks(postIntegration.missingChecks);
-      const requiredChecks = normalizeChecks(postIntegration.requiredChecks);
-      const checksToRun = missingChecks.length > 0 ? missingChecks : requiredChecks;
-      if (!runPostIntegrationVerification || checksToRun.length === 0) {
-        return autonomousTailAttention(
-          'post-integration-verification',
-          'POST_INTEGRATION_VERIFICATION_REQUIRED',
-          String(postIntegration.reason || 'Post-integration verification requires attention.'),
-          { transitions, operationId: operationId || null, postIntegration },
-        );
-      }
       const project = getProject(String(result?.operation?.projectId || '').trim());
       if (!project?.localPath) {
         return autonomousTailAttention(
@@ -263,6 +275,18 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
           'FINALIZATION_PROJECT_ROOT_REQUIRED',
           'Project root is unavailable for autonomous post-integration verification.',
           { transitions, operationId: operationId || null },
+        );
+      }
+      const verificationRequests = __buildPostIntegrationVerificationRequestsForTests({
+        projectId: project.id,
+        postIntegration,
+      });
+      if (!runPostIntegrationVerification || verificationRequests.length === 0) {
+        return autonomousTailAttention(
+          'post-integration-verification',
+          'POST_INTEGRATION_VERIFICATION_REQUIRED',
+          String(postIntegration.reason || 'Post-integration verification requires attention.'),
+          { transitions, operationId: operationId || null, postIntegration },
         );
       }
       const expectedHead = String(postIntegration.repoRevision || '').trim();
@@ -281,18 +305,10 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
         );
       }
 
-      const verificationResults = await Promise.all(checksToRun.map(async (requirement) => {
-        const command = requirement.command;
-        const targets = normalizeVerificationTargets(requirement.targets);
-        const verification = await runPostIntegrationVerification({
-          projectId: project.id,
-          command,
-          ...(targets.length ? { targets } : {}),
-          repoRevision: expectedHead,
-          requiredScope: postIntegration.requiredScope === 'broad-or-full' ? 'broad-or-full' : 'targeted',
-        });
-        return { requirement, command, targets, verification };
-      }));
+      const verificationResults = await Promise.all(verificationRequests.map(async (request) => ({
+        request,
+        verification: await runPostIntegrationVerification(request),
+      })));
       const after = getRepoRevisionForRoot(project.localPath);
       if (after.head !== expectedHead || after.changedFiles.length > 0) {
         return autonomousTailAttention(
@@ -311,7 +327,8 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
         !verification?.ok || verification?.status !== 'succeeded' || verification?.exitCode !== 0
       ));
       if (failedVerification) {
-        const { command, verification } = failedVerification;
+        const { request, verification } = failedVerification;
+        const command = request.command;
         return autonomousTailAttention(
           'post-integration-verification',
           'POST_INTEGRATION_VERIFICATION_FAILED',
@@ -328,16 +345,16 @@ export async function runTaskWorkspaceHappyPathTailWithFinalizer(
           },
         );
       }
-      const checks: TaskWorkspaceFinalizationCheck[] = verificationResults.map(({ requirement, command, targets }) => {
-        transitions.push({ stage: 'post-integration-verification', status: 'passed', detail: command });
+      const checks: TaskWorkspaceFinalizationCheck[] = verificationResults.map(({ request }) => {
+        transitions.push({ stage: 'post-integration-verification', status: 'passed', detail: request.command });
         return {
-          name: `autonomous post-integration: ${verificationRequirementLabel(requirement)}`,
-          command,
-          ...(targets.length ? { targets } : {}),
+          name: `autonomous post-integration: ${verificationRequirementLabel(request)}`,
+          command: request.command,
+          ...(request.targets?.length ? { targets: request.targets } : {}),
           status: 'passed' as const,
-          scope: postIntegration.requiredScope === 'broad-or-full' ? 'broad' as const : 'targeted' as const,
+          scope: request.requiredScope,
           repoRevision: expectedHead,
-          summary: 'Autonomous tail ran the finalizer-required post-integration verification against the exact integrated HEAD.',
+          summary: 'Autonomous tail ran only the finalizer-missing post-integration verification at the exact integrated HEAD and required coverage strength.',
         };
       });
       postIntegrationChecks = checks;

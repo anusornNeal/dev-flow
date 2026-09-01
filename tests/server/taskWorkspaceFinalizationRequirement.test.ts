@@ -5,30 +5,48 @@ import {
   __evaluatePostIntegrationRequirementForTests,
   __postIntegrationRequirementsAttemptedForTests,
   __verificationImpactRuleCommandsForTests,
-} from '../../src/server/services/taskWorkspaceFinalizationService.js';
+} from '../../src/server/services/taskWorkspaceFinalizationService.js';import { __buildPostIntegrationVerificationRequestsForTests } from '../../src/server/services/taskWorkspaceHappyPathTailService.js';
 
-function plan(checks: Array<{ command: string; targets?: string[] }>) {
+
+function plan(
+  checks: Array<{ command: string; targets?: string[] }>,
+  coverageRequirement: 'targeted' | 'broad' | 'full' = 'broad',
+  risk: 'low' | 'medium' | 'high' = 'high',
+) {
+  const requiresFullRegression = coverageRequirement === 'full';
   return {
-    risk: 'high',
-    lane: 'safe',
+    risk,
+    lane: requiresFullRegression ? 'full' : coverageRequirement === 'broad' ? 'safe' : 'fast',
     commands: checks.map((check) => check.command),
     steps: checks.map((check, index) => ({
       checkId: `check-${index}`,
       command: check.command,
       ...(check.targets ? { targets: check.targets } : {}),
-      scope: check.targets ? 'targeted' : 'full',
-      cost: check.targets ? 'low' : 'high',
+      scope: check.targets ? 'targeted' : coverageRequirement,
+      cost: check.targets ? 'low' : coverageRequirement === 'full' ? 'high' : 'medium',
       resourceKey: check.command,
       stage: index,
       reason: 'fixture',
     })),
-    requiresBroadVerify: true,
-    reasons: ['high-risk fixture'],
+    requiresBroadVerify: coverageRequirement !== 'targeted',
+    requiresFullRegression,
+    coverageRequirement,
+    fullRegression: {
+      required: requiresFullRegression,
+      authority: requiresFullRegression ? 'requested-lane' : 'none',
+      reasonCodes: requiresFullRegression ? ['FULL_EXPLICIT_REQUEST'] : ['FULL_NOT_AUTHORIZED'],
+      reasons: [],
+    },
+    reasons: [`${risk}-risk fixture`],
     impact: {
       mode: 'configured',
       coveredFiles: [],
+      configuredCoveredFiles: [],
+      inferredCoveredFiles: [],
       unknownFiles: [],
       matchedRuleIds: [],
+      matchedConfiguredRuleIds: [],
+      matchedInferredRuleIds: [],
       selectedCommands: checks.map((check) => check.command),
       selectedChecks: checks,
       unavailableChecks: [],
@@ -85,7 +103,7 @@ test('failed exact-revision verification remains an unsatisfied requirement with
   });
 
   assert.equal(requirement.required, true);
-  assert.deepEqual(requirement.missingChecks, checks);
+  assert.deepEqual(requirement.missingChecks, [{ command: 'test', requiredScope: 'broad' }]);
   assert.deepEqual(requirement.missingCommands, ['test']);
   assert.match(requirement.reason, /still non-passing: test/);
 });
@@ -129,7 +147,7 @@ test('target-aware requirement only clears after the exact command+targets ident
     combinedPlan: plan(focused),
   });
   assert.equal(wrongTargets.required, true);
-  assert.deepEqual(wrongTargets.missingChecks, focused);
+  assert.deepEqual(wrongTargets.missingChecks, [{ command: 'test-focused', targets: ['tests/server/example.test.ts'], requiredScope: 'targeted' }]);
 
   const failedExactTargets = __evaluatePostIntegrationRequirementForTests({
     integration,
@@ -145,7 +163,7 @@ test('target-aware requirement only clears after the exact command+targets ident
     combinedPlan: plan(focused),
   });
   assert.equal(failedExactTargets.required, true);
-  assert.deepEqual(failedExactTargets.missingChecks, focused);
+  assert.deepEqual(failedExactTargets.missingChecks, [{ command: 'test-focused', targets: ['tests/server/example.test.ts'], requiredScope: 'targeted' }]);
 
   const passedExactTargets = __evaluatePostIntegrationRequirementForTests({
     integration,
@@ -188,7 +206,126 @@ test('unrelated base advancement reuses authoritative command coverage with an e
   assert.ok(requirement.reasonCodes.includes('BASE_ADVANCED_OUTSIDE_VERIFIED_INPUTS'));
 });
 
-test('partial reusable coverage reruns only the missing command and explains the invalidation', () => {
+test('post-integration coverage strength keeps broad and full evidence distinct', () => {
+  const required = [{ command: 'test-command-service' }];
+  const broadPlan = plan(required, 'broad');
+  const fullPlan = plan(required, 'full');
+
+  const broadSatisfied = __evaluatePostIntegrationRequirementForTests({
+    integration,
+    checks: [{ command: 'test-command-service', status: 'passed', scope: 'broad', repoRevision: 'integrated-head' }],
+    sourcePlan: broadPlan,
+    combinedPlan: broadPlan,
+  });
+  assert.equal(broadSatisfied.required, false);
+  assert.equal(broadSatisfied.requiredScope, 'broad');
+
+  const broadDoesNotSatisfyFull = __evaluatePostIntegrationRequirementForTests({
+    integration,
+    checks: [{ command: 'test-command-service', status: 'passed', scope: 'broad', repoRevision: 'integrated-head' }],
+    sourcePlan: fullPlan,
+    combinedPlan: fullPlan,
+  });
+  assert.equal(broadDoesNotSatisfyFull.required, true);
+  assert.equal(broadDoesNotSatisfyFull.requiredScope, 'full');
+  assert.deepEqual(broadDoesNotSatisfyFull.missingChecks.map((check: any) => ({ command: check.command, requiredScope: check.requiredScope })), [
+    { command: 'test-command-service', requiredScope: 'full' },
+  ]);
+
+  const fullSatisfied = __evaluatePostIntegrationRequirementForTests({
+    integration,
+    checks: [{ command: 'test-command-service', status: 'passed', scope: 'full', repoRevision: 'integrated-head' }],
+    sourcePlan: fullPlan,
+    combinedPlan: fullPlan,
+  });
+  assert.equal(fullSatisfied.required, false);
+  assert.equal(fullSatisfied.requiredScope, 'full');
+});
+
+test('base advancement requests only the newly missing affected check at its exact scope', () => {
+  const sourcePlan = plan([{ command: 'test-desktop', targets: ['tests/desktop.test.ts'] }], 'targeted', 'medium');
+  const combinedPlan = plan([
+    { command: 'test-desktop', targets: ['tests/desktop.test.ts'] },
+    { command: 'test-pdf', targets: ['tests/pdf.test.ts'] },
+  ], 'targeted', 'medium');
+  const advancedIntegration = { ...integration, baseHeadBefore: 'advanced-base', baseRevision: 'workspace-base' } as any;
+  const requirement = __evaluatePostIntegrationRequirementForTests({
+    integration: advancedIntegration,
+    checks: [],
+    sourcePlan,
+    combinedPlan,
+    coverage: {
+      status: 'covered', policy: 'checks-passed', recordedAt: new Date().toISOString(), reusable: true,
+      coveredCommands: ['test-desktop'], staleCommands: [], staleDetails: [],
+    },
+  });
+
+  assert.equal(requirement.required, true);
+  assert.equal(requirement.requiredScope, 'targeted');
+  assert.deepEqual(requirement.missingChecks.map((check: any) => ({
+    command: check.command, targets: check.targets, requiredScope: check.requiredScope,
+  })), [{ command: 'test-pdf', targets: ['tests/pdf.test.ts'], requiredScope: 'targeted' }]);
+});
+
+test('unchanged integrated impact does not widen valid targeted source evidence during finalization', () => {
+  const targetedPlan = plan([{ command: 'test-focused', targets: ['tests/example.test.ts'] }], 'targeted', 'medium');
+  const requirement = __evaluatePostIntegrationRequirementForTests({
+    integration,
+    checks: [{
+      command: 'test-focused', targets: ['tests/example.test.ts'], status: 'passed', scope: 'targeted', repoRevision: 'source-head',
+    }],
+    sourcePlan: targetedPlan,
+    combinedPlan: targetedPlan,
+    coverage: {
+      status: 'covered', policy: 'checks-passed', recordedAt: new Date().toISOString(), reusable: true,
+      coveredCommands: ['test-focused'], staleCommands: [], staleDetails: [],
+    },
+  });
+
+  assert.equal(requirement.required, false);
+  assert.equal(requirement.requiredScope, 'targeted');
+  assert.equal(requirement.reasonCodes.includes('RERUN_BROAD_EVIDENCE_REQUIRED'), false);
+});
+
+test('partial reusable coverage reruns only the missing command and explains the invalidation', () => {test('happy-path tail sends only finalizer-missing checks with their exact coverage strength', () => {
+  const requests = __buildPostIntegrationVerificationRequestsForTests({
+    projectId: 'project-finalize',
+    postIntegration: {
+      repoRevision: 'integrated-head',
+      requiredScope: 'broad',
+      requiredChecks: [
+        { command: 'test-focused', targets: ['tests/focused.test.ts'], requiredScope: 'targeted' },
+        { command: 'typecheck', requiredScope: 'broad' },
+      ],
+      missingChecks: [{ command: 'typecheck', requiredScope: 'broad' }],
+    },
+  });
+
+  assert.deepEqual(requests, [{
+    projectId: 'project-finalize',
+    command: 'typecheck',
+    repoRevision: 'integrated-head',
+    requiredScope: 'broad',
+  }]);
+});
+
+test('happy-path tail preserves explicit FULL authority instead of collapsing it into broad', () => {
+  const requests = __buildPostIntegrationVerificationRequestsForTests({
+    projectId: 'project-finalize',
+    postIntegration: {
+      repoRevision: 'integrated-head',
+      requiredScope: 'full',
+      requiredChecks: [{ command: 'verify', requiredScope: 'full' }],
+      missingChecks: [{ command: 'verify', requiredScope: 'full' }],
+    },
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.requiredScope, 'full');
+  assert.equal(requests[0]?.command, 'verify');
+});
+
+
   const checks = [{ command: 'typecheck' }, { command: 'lint' }];
   const advancedIntegration = { ...integration, baseHeadBefore: 'advanced-base', baseRevision: 'workspace-base' } as any;
   const requirement = __evaluatePostIntegrationRequirementForTests({
@@ -203,7 +340,7 @@ test('partial reusable coverage reruns only the missing command and explains the
     },
   });
   assert.equal(requirement.required, true);
-  assert.deepEqual(requirement.missingChecks, [{ command: 'lint' }]);
+  assert.deepEqual(requirement.missingChecks, [{ command: 'lint', requiredScope: 'broad' }]);
   assert.deepEqual(requirement.missingCommands, ['lint']);
   assert.ok(requirement.reasonCodes.includes('RERUN_COVERAGE_IDENTITY_CHANGED'));
 });

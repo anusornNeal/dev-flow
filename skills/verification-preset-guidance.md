@@ -11,6 +11,13 @@ Use this guidance immediately before final repository verification. It helps cho
 5. Preset generation requires explicit user approval and normal guarded repository edits. Do not silently create or rewrite `.devflow/commands.yaml`, `.devflow/commands.json`, `.devflow/verification-impact.json`, build files, or package scripts.
 6. Do not create temporary `.cmd`, `.bat`, `.sh`, or other ad-hoc verification scripts as an automatic fallback.
 
+## FULL regression escalation
+- Treat FULL as a repository-wide regression escalation, not as routine final verification.
+- Require explicit authority before FULL: an explicit user/project request, repository-wide inferred impact, or proof that FULL is the only safe runnable coverage. Generic high risk, missing impact maps, base advancement, finalization, review/DONE, or a narrow-check failure do not authorize FULL by themselves.
+- Preserve the planner's concrete FULL authority and reason code in verification evidence (for example `FULL_EXPLICIT_REQUEST`, `FULL_INFERRED_REPOSITORY_WIDE`, or `FULL_ONLY_SAFE_RUNNABLE_COVERAGE`).
+- Run narrower affected coverage first when it can prove the changed closure. A real failing narrow check remains a product failure and must not be bypassed by launching FULL.
+- Reuse valid exact-revision FULL GREEN evidence instead of spawning an equivalent second FULL process. Failed or timed-out FULL evidence remains debt and must not trigger a blind automatic FULL retry loop.
+
 ## Quality signals
 - Preset quality is advisory. Use bounded sample count, confidence, learned duration, and failure pressure only as hints that an existing preset may deserve review.
 - `none` or `low` confidence means insufficient evidence, not a defect.

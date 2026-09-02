@@ -137,6 +137,38 @@ test('transport normalization preserves nested objects, arrays, enums, descripti
   });
 });
 
+test('transport trimming removes only approved redundant prose while preserving constraints and safety semantics', () => {
+  const safetyDescription = 'Legacy lock-override compatibility only; it does not grant lifecycle break-glass authority. Use break_glass_lifecycle for audited lifecycle recovery.';
+  const fixture = {
+    type: 'object',
+    properties: {
+      projectId: { type: 'string', description: 'Project internal id.' },
+      projectName: { type: 'string', description: 'Project name when it is unique and safe to resolve.' },
+      repoUrl: { type: 'string', description: 'Repository URL.' },
+      status: { type: 'string', enum: ['todo', 'done'], description: 'Task lane/status.' },
+      emergency: { type: 'boolean', description: safetyDescription },
+      limit: { type: 'number', minimum: 1, maximum: 100, description: 'Maximum matches returned.' },
+    },
+    required: ['status'],
+    additionalProperties: false,
+  };
+
+  const exposed = buildMcpTransportInputSchema(fixture);
+
+  assert.equal(exposed.properties.projectId.description, undefined);
+  assert.equal(exposed.properties.repoUrl.description, undefined);
+  assert.equal(exposed.properties.status.description, undefined);
+  assert.equal(exposed.properties.projectName.description, 'Unique project name.');
+  assert.equal(exposed.properties.emergency.description, safetyDescription);
+  assert.equal(exposed.properties.limit.description, 'Maximum matches returned.');
+  assert.deepEqual(exposed.properties.status.enum, ['todo', 'done']);
+  assert.equal(exposed.properties.limit.minimum, 1);
+  assert.equal(exposed.properties.limit.maximum, 100);
+  assert.deepEqual(exposed.required, ['status']);
+  assert.equal(exposed.additionalProperties, false);
+  assert.deepEqual(fixture.properties.projectId, { type: 'string', description: 'Project internal id.' });
+});
+
 test('transport generation does not mutate the canonical read_file_snippets_batch schema', () => {
   const canonical = getToolDefinitionByName('read_file_snippets_batch');
   assert.ok(canonical);

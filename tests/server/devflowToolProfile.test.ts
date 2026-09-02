@@ -396,6 +396,15 @@ test('tool profile summary reports serialized schema bytes', () => {
   assert.ok(summary.full.schemaBytes > summary.coding.schemaBytes);
 });
 
+test('TRIM reduces schema bytes below the frozen pre-change surface without changing full tool count', () => {
+  const summary = getToolProfileSummary();
+  assert.equal(summary.full.toolCount, 89);
+  assert.ok(
+    summary.full.schemaBytes < 176_303,
+    `expected trimmed full schema below 176303 bytes; full=${summary.full.schemaBytes}, coding=${summary.coding.schemaBytes}`,
+  );
+});
+
 test('MCP tool-surface identity is deterministic and changes when an advertised tool is removed', () => {
   assert.equal(typeof getMcpToolSurfaceIdentity, 'function');
   const full = getMcpToolList('full');

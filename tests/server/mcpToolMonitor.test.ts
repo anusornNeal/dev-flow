@@ -18,6 +18,7 @@ const {
   recordToolCall,
   flushPerformanceTelemetry,
   getPerformanceHistoryComparison,
+  getToolUsageReport,
 } = await import('../../src/server/services/mcpToolMonitor.js');
 const { clearVerificationResourceProfilesForTests, predictVerificationResourceCost, recordVerificationResourceSample } = await import('../../src/server/services/verificationResourceProfileService.js');
 
@@ -384,6 +385,62 @@ test('diagnostics opportunistically flush aggregate telemetry and expose history
   const early = getDevFlowDiagnostics({ now: now + 30_100, windowMs: 60_000 }) as any;
   assert.equal(early.telemetryPersistence.skipped, true);
   assert.equal((db.prepare('SELECT COUNT(*) AS count FROM performance_telemetry_snapshots').get() as any).count, 1);
+});
+
+test('tool usage report attributes retained calls to MCP profile and includes unused advertised tools', () => {
+  assert.equal(typeof getToolUsageReport, 'function');
+  clearToolCallRecords();
+  db.prepare('DELETE FROM performance_telemetry_snapshots').run();
+  const day = 24 * 60 * 60 * 1000;
+
+  for (let index = 1; index <= 3; index += 1) {
+    recordToolCall({
+      toolName: 'read_local_file',
+      mcpProfile: 'coding',
+      args: { projectId: 'project-usage' },
+      status: 200,
+      durationMs: 5,
+      timestamp: day * index,
+    });
+    if (index === 1) {
+      recordToolCall({
+        toolName: 'read_local_file',
+        mcpProfile: 'full',
+        args: { projectId: 'project-usage' },
+        status: 200,
+        durationMs: 6,
+        timestamp: day * index + 1,
+      });
+    }
+    flushPerformanceTelemetry({ now: day * index + 100, force: true });
+  }
+
+  const persisted = db.prepare(`
+    SELECT mcpProfile, SUM(count) AS calls
+    FROM performance_telemetry_snapshots
+    WHERE toolName = 'read_local_file'
+    GROUP BY mcpProfile
+    ORDER BY mcpProfile
+  `).all() as any[];
+  assert.deepEqual(persisted, [
+    { mcpProfile: 'coding', calls: 3 },
+    { mcpProfile: 'full', calls: 1 },
+  ]);
+
+  const report = getToolUsageReport({ mcpProfile: 'coding', now: day * 4, retentionMs: day * 30 });
+  const read = report.items.find((entry: any) => entry.toolName === 'read_local_file');
+  assert.equal(read?.totalCalls, 3);
+  assert.equal(read?.activeDays, 3);
+  assert.equal(read?.usageClass, 'warm');
+  assert.equal(read?.schemaBytes > 0, true);
+
+  const unused = report.items.find((entry: any) => entry.toolName === 'search_tasks');
+  assert.equal(unused?.totalCalls, 0);
+  assert.equal(unused?.activeDays, 0);
+  assert.equal(unused?.usageClass, 'never-used');
+  assert.equal(unused?.schemaBytes > 0, true);
+  assert.equal(report.profile, 'coding');
+  assert.equal(report.summary.toolCount, report.items.length);
 });
 
 test('diagnostics can skip historical comparison without disabling telemetry persistence', () => {

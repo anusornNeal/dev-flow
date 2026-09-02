@@ -11,6 +11,7 @@ process.env.DEVFLOW_DB_PATH = path.join(tempRoot, 'devflow.sqlite');
 const { executeAllMigrations } = await import('../../src/db/migrations/index.js');
 const { runMigrations } = await import('../../src/db/migrations/runner.js');
 const { performanceTelemetryHistoryMigration } = await import('../../src/db/migrations/008-performance-telemetry-history.js');
+const { mcpToolUsageProfileMigration } = await import('../../src/db/migrations/024-mcp-tool-usage-profile.js');
 const { default: db } = await import('../../src/db/index.js');
 
 executeAllMigrations();
@@ -21,7 +22,7 @@ test('performance telemetry migration creates aggregate-only history schema', ()
 
   const columns = (db.pragma('table_info(performance_telemetry_snapshots)') as Array<{ name: string }>).map((column) => column.name);
   for (const expected of [
-    'windowStart', 'windowEnd', 'toolName', 'projectScope', 'contractRevision', 'appRevision',
+    'windowStart', 'windowEnd', 'toolName', 'projectScope', 'mcpProfile', 'contractRevision', 'appRevision',
     'count', 'errorCount', 'p50DurationMs', 'p95DurationMs', 'inputBytes', 'responseBytes',
     'truncatedCount', 'truncationRate', 'cacheHitCount', 'processSpawns',
   ]) {
@@ -35,15 +36,18 @@ test('performance telemetry migration creates aggregate-only history schema', ()
 test('performance telemetry migration upgrades an existing migration history', () => {
   db.prepare('DROP TABLE IF EXISTS performance_telemetry_snapshots').run();
   db.prepare('DELETE FROM migrations WHERE id = ?').run(performanceTelemetryHistoryMigration.id);
+  db.prepare('DELETE FROM migrations WHERE id = ?').run(mcpToolUsageProfileMigration.id);
   const existing = db.prepare('SELECT COUNT(*) AS count FROM migrations').get() as { count: number };
   assert.equal(existing.count >= 7, true);
 
-  runMigrations(db, [performanceTelemetryHistoryMigration]);
+  runMigrations(db, [performanceTelemetryHistoryMigration, mcpToolUsageProfileMigration]);
 
   const table = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get('performance_telemetry_snapshots') as any;
   const applied = db.prepare('SELECT id FROM migrations WHERE id = ?').get(performanceTelemetryHistoryMigration.id) as any;
   assert.equal(table?.name, 'performance_telemetry_snapshots');
   assert.equal(applied?.id, performanceTelemetryHistoryMigration.id);
+  const profileApplied = db.prepare('SELECT id FROM migrations WHERE id = ?').get(mcpToolUsageProfileMigration.id) as any;
+  assert.equal(profileApplied?.id, mcpToolUsageProfileMigration.id);
 });
 
 async function loadRepository() {
@@ -154,4 +158,25 @@ test('persisted performance history is readable from a fresh process', async () 
   assert.equal(baseline.status, 'ready');
   assert.equal(baseline.sampleCount, 5);
   assert.equal(baseline.truncationRate, 0.2);
+});
+
+test('repository aggregates retained MCP tool usage by profile and active day', async () => {
+  const repository = await loadRepository();
+  assert.equal(typeof repository?.getToolUsageHistory, 'function');
+  db.prepare('DELETE FROM performance_telemetry_snapshots').run();
+  const day = 24 * 60 * 60 * 1000;
+
+  repository!.persistPerformanceSnapshots([
+    snapshot({ windowStart: day, windowEnd: day + 1_000, mcpProfile: 'coding', count: 3, errorCount: 1 }),
+    snapshot({ windowStart: day + 2_000, windowEnd: day + 3_000, mcpProfile: 'full', count: 8, errorCount: 0 }),
+    snapshot({ windowStart: day * 2, windowEnd: day * 2 + 1_000, mcpProfile: 'coding', count: 5, errorCount: 0 }),
+  ], { now: day * 3, retentionMs: day * 10, maxRows: 100 });
+
+  const usage = repository!.getToolUsageHistory({ mcpProfile: 'coding', since: 0, until: day * 3, maxTools: 20 });
+  const read = usage.items.find((entry: any) => entry.toolName === 'read_local_file');
+  assert.equal(read?.totalCalls, 8);
+  assert.equal(read?.errorCount, 1);
+  assert.equal(read?.activeDays, 2);
+  assert.equal(read?.lastUsedAt, day * 2 + 1_000);
+  assert.equal(usage.profile, 'coding');
 });

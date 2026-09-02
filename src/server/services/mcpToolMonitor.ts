@@ -4,7 +4,7 @@ import {
   readDevFlowSupervisorState,
   type DevFlowSupervisorState,
 } from '../../lib/devFlowSupervisor';
-import { getPerformanceBaseline, persistPerformanceSnapshots } from '../repositories/performanceTelemetryRepository.js';
+import { getPerformanceBaseline, getToolUsageHistory, persistPerformanceSnapshots } from '../repositories/performanceTelemetryRepository.js';
 import { getRepoRevisionForRoot } from './repoRevisionService.js';
 import { getJobMetrics } from './mcpToolJobService';
 import { getLocalSearchRuntimeStatus } from './localFileService';
@@ -14,7 +14,7 @@ import { getSessionWorkspaceMetrics } from './sessionWorkspaceService';
 import { getWorkspaceIntegrationMetrics } from './workspaceIntegrationService';
 import { getMcpTransportSummary } from './mcpTransportMonitor';
 import { getVerificationResourceProfileDiagnostics } from './verificationResourceProfileService';
-import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog } from '../contracts/devflowContract';
+import { DEVFLOW_CONTRACT_VERSION, getCapabilityCatalog, getMcpToolList } from '../contracts/devflowContract';
 import {
   classifyRuntimeIdentity,
   classifyRecoveryCapabilityParity,
@@ -36,6 +36,7 @@ type CompletionMode = 'inline-json' | 'request-stream' | 'durable-handoff';
 interface ToolCallInput {
   toolName: string;
   args: Record<string, any>;
+  mcpProfile?: string;
   status: number;
   durationMs: number;
   responseBytes?: number;
@@ -56,6 +57,7 @@ interface ToolCallInput {
 
 interface ToolCallRecord {
   toolName: string;
+  mcpProfile: string;
   status: number;
   durationMs: number;
   responseBytes?: number;
@@ -78,6 +80,7 @@ interface ToolCallRecord {
 
 type PendingPerformanceBucket = {
   toolName: string;
+  mcpProfile: string;
   projectScope: string;
   windowStart: number;
   windowEnd: number;
@@ -141,10 +144,11 @@ function getAppRevision() {
 }
 
 function updatePendingPerformance(record: ToolCallRecord) {
-  const key = `${record.toolName}\u0000${record.projectScope}`;
+  const key = `${record.mcpProfile}\u0000${record.toolName}\u0000${record.projectScope}`;
   const bucket = pendingPerformance.get(key) || {
     toolName: record.toolName,
     projectScope: record.projectScope,
+    mcpProfile: record.mcpProfile,
     windowStart: record.timestamp,
     windowEnd: record.timestamp,
     count: 0,
@@ -213,6 +217,7 @@ export function recordToolCall(input: ToolCallInput) {
   const record: ToolCallRecord = {
     toolName: input.toolName,
     status: input.status,
+    mcpProfile: String(input.mcpProfile || 'unknown').trim().slice(0, 64) || 'unknown',
     durationMs: input.durationMs,
     responseBytes: input.responseBytes,
     inputBytes: input.inputBytes ?? Buffer.byteLength(serializedArgs, 'utf8'),
@@ -438,6 +443,7 @@ export function flushPerformanceTelemetry(options: {
     windowEnd: bucket.windowEnd,
     toolName: bucket.toolName,
     projectScope: bucket.projectScope,
+    mcpProfile: bucket.mcpProfile,
     contractRevision: DEVFLOW_CONTRACT_VERSION,
     appRevision: getAppRevision(),
     count: bucket.count,
@@ -468,6 +474,61 @@ export function flushPerformanceTelemetry(options: {
   pendingPerformance.clear();
   lastPerformanceFlushAt = now;
   return { ...result, flushedBuckets: snapshots.length, skipped: false };
+}
+
+type ToolUsageClass = 'hot' | 'warm' | 'cold' | 'never-used';
+
+function classifyToolUsage(totalCalls: number, activeDays: number): ToolUsageClass {
+  if (totalCalls <= 0) return 'never-used';
+  if (activeDays >= 7) return 'hot';
+  if (activeDays >= 3) return 'warm';
+  return 'cold';
+}
+
+export function getToolUsageReport(options: {
+  mcpProfile?: string;
+  now?: number;
+  retentionMs?: number;
+} = {}) {
+  const now = Math.max(0, Number(options.now ?? Date.now()));
+  const retentionMs = Math.max(1, Number(options.retentionMs || 30 * 24 * 60 * 60 * 1000));
+  const profile = String(options.mcpProfile || getCapabilityCatalog().mcpProfile.active || 'unknown').trim() || 'unknown';
+  const history = getToolUsageHistory({
+    mcpProfile: profile,
+    since: Math.max(0, now - retentionMs),
+    until: now,
+    maxTools: 500,
+  });
+  const historyByTool = new Map(history.items.map((entry) => [entry.toolName, entry]));
+  const items = getMcpToolList(profile as any).map((tool: any) => {
+    const usage = historyByTool.get(String(tool.name || ''));
+    const totalCalls = Number(usage?.totalCalls || 0);
+    const activeDays = Number(usage?.activeDays || 0);
+    return {
+      toolName: String(tool.name || ''),
+      schemaBytes: Buffer.byteLength(JSON.stringify(tool), 'utf8'),
+      totalCalls,
+      errorCount: Number(usage?.errorCount || 0),
+      activeDays,
+      lastUsedAt: Number(usage?.lastUsedAt || 0),
+      usageClass: classifyToolUsage(totalCalls, activeDays),
+    };
+  }).sort((left, right) => right.totalCalls - left.totalCalls || right.schemaBytes - left.schemaBytes || left.toolName.localeCompare(right.toolName));
+
+  const classCounts = { hot: 0, warm: 0, cold: 0, 'never-used': 0 } as Record<ToolUsageClass, number>;
+  for (const item of items) classCounts[item.usageClass] += 1;
+  return {
+    profile,
+    windowStart: history.since,
+    windowEnd: history.until,
+    summary: {
+      toolCount: items.length,
+      totalCalls: items.reduce((sum, item) => sum + item.totalCalls, 0),
+      totalSchemaBytes: items.reduce((sum, item) => sum + item.schemaBytes, 0),
+      usageClasses: classCounts,
+    },
+    items,
+  };
 }
 
 export function getPerformanceHistoryComparison(options: {
@@ -699,6 +760,7 @@ export function getDevFlowDiagnostics(options?: {
   const runtimeDiagnosis = classifyRuntimeIdentity(runtime, options?.clientState);
   const recoveryParity = classifyRecoveryCapabilityParity(runtime, capabilityCatalog.recovery, options?.clientState);
   const telemetryPersistence = flushPerformanceTelemetry({ now });
+  const toolUsage = getToolUsageReport({ mcpProfile: capabilityCatalog.mcpProfile.active, now });
   const toolSummary = getToolCallSummary({ now, windowMs: options?.windowMs });
   const repoCaches = getRepoCacheDiagnostics({
     domains: [
@@ -768,6 +830,7 @@ export function getDevFlowDiagnostics(options?: {
     tools: toolSummary,
     mcpTransport,
     telemetryPersistence,
+    toolUsage,
     ...(performanceHistory ? { performanceHistory } : {}),
     verificationResources,
     recommendations,

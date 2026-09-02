@@ -407,6 +407,7 @@ export function createDevFlowMcpServer(baseUrl: string, profileOverride?: string
     recordToolCall({
       toolName,
       args,
+      mcpProfile: activeProfile,
       status: response.status,
       durationMs,
       responseBytes,

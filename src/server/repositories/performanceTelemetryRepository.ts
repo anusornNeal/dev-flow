@@ -10,6 +10,7 @@ export interface PerformanceTelemetrySnapshot {
   windowEnd: number;
   toolName: string;
   projectScope?: string;
+  mcpProfile?: string;
   contractRevision: string;
   appRevision: string;
   count: number;
@@ -70,6 +71,7 @@ function normalizeSnapshot(snapshot: PerformanceTelemetrySnapshot): PerformanceT
     windowEnd: nonNegativeInteger(snapshot.windowEnd),
     toolName: String(snapshot.toolName || '').trim(),
     projectScope: String(snapshot.projectScope || '').trim(),
+    mcpProfile: String(snapshot.mcpProfile || '').trim() || 'unknown',
     contractRevision: String(snapshot.contractRevision || '').trim() || 'unknown',
     appRevision: String(snapshot.appRevision || '').trim() || 'unknown',
     count,
@@ -122,12 +124,12 @@ export function compactPerformanceHistory(options: CompactionOptions = {}) {
 export function persistPerformanceSnapshots(snapshots: PerformanceTelemetrySnapshot[], options: CompactionOptions = {}) {
   const insert = db.prepare(`
     INSERT INTO performance_telemetry_snapshots (
-      windowStart, windowEnd, toolName, projectScope, contractRevision, appRevision,
+      windowStart, windowEnd, toolName, projectScope, mcpProfile, contractRevision, appRevision,
       count, errorCount, p50DurationMs, p95DurationMs, inputBytes, responseBytes,
       truncatedCount, truncationRate, cacheHitCount, processSpawns,
       executionP50Ms, executionP95Ms, logicalOperationP50Ms, logicalOperationP95Ms,
       handoffCount, pollCount, inlineJsonCount, requestStreamCount, durableHandoffCount
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const writeBatch = db.transaction((items: PerformanceTelemetrySnapshot[]) => {
@@ -140,6 +142,7 @@ export function persistPerformanceSnapshots(snapshots: PerformanceTelemetrySnaps
         snapshot.windowEnd,
         snapshot.toolName,
         snapshot.projectScope || '',
+        snapshot.mcpProfile || 'unknown',
         snapshot.contractRevision,
         snapshot.appRevision,
         snapshot.count,
@@ -246,5 +249,48 @@ export function getPerformanceBaseline(query: BaselineQuery) {
     durableHandoffCount: sum('durableHandoffCount'),
     windowStart: Math.min(...rows.map((row) => nonNegativeInteger(row.windowStart))),
     windowEnd: Math.max(...rows.map((row) => nonNegativeInteger(row.windowEnd))),
+  };
+}
+
+export function getToolUsageHistory(options: {
+  mcpProfile: string;
+  since?: number;
+  until?: number;
+  maxTools?: number;
+}) {
+  const profile = String(options.mcpProfile || '').trim() || 'unknown';
+  const until = nonNegativeInteger(options.until ?? Date.now());
+  const since = nonNegativeInteger(options.since ?? Math.max(0, until - DEFAULT_RETENTION_MS));
+  const maxTools = Math.max(1, Math.min(500, boundedPositiveInteger(options.maxTools, 200)));
+  const rows = db.prepare(`
+    SELECT toolName,
+           SUM(count) AS totalCalls,
+           SUM(errorCount) AS errorCount,
+           COUNT(DISTINCT CAST(windowEnd / 86400000 AS INTEGER)) AS activeDays,
+           MAX(windowEnd) AS lastUsedAt
+    FROM performance_telemetry_snapshots
+    WHERE mcpProfile = ? AND windowEnd >= ? AND windowEnd <= ?
+    GROUP BY toolName
+    ORDER BY totalCalls DESC, lastUsedAt DESC, toolName ASC
+    LIMIT ?
+  `).all(profile, since, until, maxTools) as Array<{
+    toolName: string;
+    totalCalls: number;
+    errorCount: number;
+    activeDays: number;
+    lastUsedAt: number;
+  }>;
+
+  return {
+    profile,
+    since,
+    until,
+    items: rows.map((row) => ({
+      toolName: String(row.toolName || ''),
+      totalCalls: nonNegativeInteger(row.totalCalls),
+      errorCount: nonNegativeInteger(row.errorCount),
+      activeDays: nonNegativeInteger(row.activeDays),
+      lastUsedAt: nonNegativeInteger(row.lastUsedAt),
+    })),
   };
 }

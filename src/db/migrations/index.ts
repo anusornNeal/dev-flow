@@ -22,6 +22,7 @@ import { lifecycleEmergencyOperationsMigration } from './020-lifecycle-emergency
 import { taskPrerequisitesMigration } from './021-task-prerequisites.js';
 import { verificationResourceProfilesMigration } from './022-verification-resource-profiles.js';
 import { durableFullGreenEvidenceMigration } from './023-durable-full-green-evidence.js';
+import { mcpToolUsageProfileMigration } from './024-mcp-tool-usage-profile.js';
 import db from '../index.js';
 
 export const DEVFLOW_MIGRATIONS = [
@@ -48,6 +49,7 @@ export const DEVFLOW_MIGRATIONS = [
   taskPrerequisitesMigration,
   verificationResourceProfilesMigration,
   durableFullGreenEvidenceMigration,
+  mcpToolUsageProfileMigration,
 ] as const;
 
 export function executeAllMigrations() {
